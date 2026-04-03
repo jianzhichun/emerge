@@ -98,12 +98,25 @@ class ReplState:
 
     def _restore_from_disk(self) -> None:
         if self._checkpoint_path.exists():
-            checkpoint = json.loads(self._checkpoint_path.read_text(encoding="utf-8"))
-            restored = checkpoint.get("globals", {})
-            if isinstance(restored, dict):
-                self._globals.update(restored)
-            self._wal_seq_applied = int(checkpoint.get("wal_seq_applied", 0))
-            self._seq = self._wal_seq_applied
+            try:
+                checkpoint = json.loads(self._checkpoint_path.read_text(encoding="utf-8"))
+                if not isinstance(checkpoint, dict):
+                    raise ValueError("checkpoint must be a JSON object")
+                restored = checkpoint.get("globals", {})
+                if isinstance(restored, dict):
+                    self._globals.update(restored)
+                self._wal_seq_applied = int(checkpoint.get("wal_seq_applied", 0))
+                self._seq = self._wal_seq_applied
+            except Exception as exc:
+                self._recovery_issues.append(
+                    {
+                        "seq": -1,
+                        "error": f"invalid_checkpoint: {exc}",
+                        "code_preview": "checkpoint.json",
+                    }
+                )
+                self._wal_seq_applied = 0
+                self._seq = 0
         self._replay_wal_after_checkpoint()
 
     def _replay_wal_after_checkpoint(self) -> None:
@@ -121,7 +134,17 @@ class ReplState:
                         {"seq": -1, "error": f"invalid_wal_json: {exc}", "code_preview": text[:200]}
                     )
                     continue
-                seq = int(item.get("seq", 0))
+                try:
+                    seq = int(item.get("seq", 0))
+                except Exception as exc:
+                    self._recovery_issues.append(
+                        {
+                            "seq": -1,
+                            "error": f"invalid_wal_seq: {exc}",
+                            "code_preview": text[:200],
+                        }
+                    )
+                    continue
                 self._seq = max(self._seq, seq)
                 if seq <= self._wal_seq_applied:
                     continue

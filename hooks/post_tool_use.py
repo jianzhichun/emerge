@@ -35,7 +35,8 @@ def main() -> None:
         payload = {}
 
     tool_name = payload.get("tool_name", "")
-    result = payload.get("tool_result", {})
+    raw_result = payload.get("tool_result", {})
+    result = raw_result if isinstance(raw_result, dict) else {}
     state_path = Path(
         os.environ.get("CLAUDE_PLUGIN_DATA", str(default_hook_state_root()))
     ) / "state.json"
@@ -44,7 +45,7 @@ def main() -> None:
     message = payload.get("delta_message") or f"Tool used: {tool_name or 'unknown'}"
     level = _classify_level(tool_name)
     provisional = bool(payload.get("provisional", False))
-    verification_state = result.get("verification_state", "verified")
+    verification_state = str(result.get("verification_state", "verified"))
     delta_id = tracker.add_delta(
         message=message,
         level=level,

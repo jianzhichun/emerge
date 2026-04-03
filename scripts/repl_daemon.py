@@ -33,7 +33,7 @@ from scripts.repl_state import ReplState  # noqa: E402
 class ReplDaemon:
     def __init__(self, root: Path | None = None) -> None:
         resolved_root = root or ROOT
-        state_root = Path(os.environ.get("REPL_STATE_ROOT", str(default_repl_root())))
+        state_root = Path(os.environ.get("REPL_STATE_ROOT", str(default_repl_root()))).expanduser().resolve()
         self._base_session_id = derive_session_id(
             os.environ.get("REPL_SESSION_ID"), resolved_root
         )
@@ -66,14 +66,17 @@ class ReplDaemon:
                     },
                     inject_vars={"__args": arguments.get("script_args", {})},
                 )
-                self._record_exec_event(
-                    arguments=arguments,
-                    result=result,
-                    target_profile=target_profile,
-                    mode=mode,
-                    sampled_in_policy=sampled_in_policy,
-                    candidate_key=candidate_key,
-                )
+                try:
+                    self._record_exec_event(
+                        arguments=arguments,
+                        result=result,
+                        target_profile=target_profile,
+                        mode=mode,
+                        sampled_in_policy=sampled_in_policy,
+                        candidate_key=candidate_key,
+                    )
+                except Exception as exc:
+                    self._append_warning_text(result, f"policy bookkeeping failed: {exc}")
                 return result
             except Exception as exc:
                 return {
@@ -83,7 +86,7 @@ class ReplDaemon:
         if name == "icc_read":
             try:
                 result = self.pipeline.run_read(arguments)
-                return {"content": [{"type": "text", "text": json.dumps(result)}]}
+                return {"isError": False, "content": [{"type": "text", "text": json.dumps(result)}]}
             except Exception as exc:
                 return {
                     "isError": True,
@@ -92,7 +95,7 @@ class ReplDaemon:
         if name == "icc_write":
             try:
                 result = self.pipeline.run_write(arguments)
-                return {"content": [{"type": "text", "text": json.dumps(result)}]}
+                return {"isError": False, "content": [{"type": "text", "text": json.dumps(result)}]}
             except Exception as exc:
                 return {
                     "isError": True,
@@ -196,10 +199,7 @@ class ReplDaemon:
             return
         key = candidate_key
         registry_path = session_dir / "candidates.json"
-        if registry_path.exists():
-            registry = json.loads(registry_path.read_text(encoding="utf-8"))
-        else:
-            registry = {"candidates": {}}
+        registry = self._load_json_object(registry_path, root_key="candidates")
         entry = registry["candidates"].get(
             key,
             {
@@ -253,11 +253,7 @@ class ReplDaemon:
         entry: dict[str, Any],
     ) -> None:
         registry_path = session_dir / "pipelines-registry.json"
-        registry = (
-            json.loads(registry_path.read_text(encoding="utf-8"))
-            if registry_path.exists()
-            else {"pipelines": {}}
-        )
+        registry = self._load_json_object(registry_path, root_key="pipelines")
         pipeline = registry["pipelines"].get(
             candidate_key,
             {
@@ -386,7 +382,7 @@ class ReplDaemon:
         path = session_dir / "pipelines-registry.json"
         if not path.exists():
             return True
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = self._load_json_object(path, root_key="pipelines")
         pipeline = data.get("pipelines", {}).get(candidate_key)
         if not isinstance(pipeline, dict):
             return True
@@ -400,12 +396,32 @@ class ReplDaemon:
         candidates_path = session_dir / "candidates.json"
         total_calls = 0
         if candidates_path.exists():
-            cand = json.loads(candidates_path.read_text(encoding="utf-8"))
+            cand = self._load_json_object(candidates_path, root_key="candidates")
             entry = cand.get("candidates", {}).get(candidate_key, {})
             if isinstance(entry, dict):
                 total_calls = int(entry.get("total_calls", 0))
         next_call = total_calls + 1
         return ((next_call - 1) % 100) < rollout_pct
+
+    @staticmethod
+    def _append_warning_text(result: dict[str, Any], warning: str) -> None:
+        content = result.get("content")
+        if isinstance(content, list) and content and isinstance(content[0], dict):
+            current = str(content[0].get("text", ""))
+            content[0]["text"] = f"{current}\n\nwarning:\n{warning}".strip()
+            return
+        result["content"] = [{"type": "text", "text": f"warning:\n{warning}"}]
+
+    @staticmethod
+    def _load_json_object(path: Path, *, root_key: str) -> dict[str, Any]:
+        if not path.exists():
+            return {root_key: {}}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"{path.name} must be a JSON object")
+        if root_key not in data or not isinstance(data[root_key], dict):
+            data[root_key] = {}
+        return data
 
 
 def run_stdio() -> None:

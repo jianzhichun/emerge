@@ -37,7 +37,10 @@ def stable_token(raw: str, *, max_prefix: int = 48) -> str:
 
 def derive_session_id(explicit: str | None, project_root: Path) -> str:
     if explicit:
-        if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", explicit):
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", explicit) and explicit not in {
+            ".",
+            "..",
+        }:
             return explicit
         return stable_token(explicit, max_prefix=56)
     project_name = project_root.name or "project"

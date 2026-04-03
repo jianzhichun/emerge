@@ -98,3 +98,18 @@ def test_hooks_tolerate_invalid_json_and_budget(tmp_path: Path):
     )
     parsed_budget = json.loads(weird_budget.stdout.strip())
     assert parsed_budget["hookEventName"] == "UserPromptSubmit"
+
+
+def test_post_tool_use_tolerates_non_object_tool_result(tmp_path: Path):
+    out = _run(
+        "post_tool_use.py",
+        {
+            "tool_name": "mcp__plugin_emerge__icc_write",
+            "tool_result": "not-a-dict",
+            "delta_message": "write attempted",
+        },
+        tmp_path,
+    )
+    parsed = json.loads(out)
+    assert parsed["hookEventName"] == "PostToolUse"
+    assert "additionalContext" in parsed["hookSpecificOutput"]

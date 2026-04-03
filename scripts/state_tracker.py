@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -105,12 +107,82 @@ class StateTracker:
         return self.state
 
 
+def _normalize_state(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {
+            "goal": "",
+            "open_risks": [],
+            "deltas": [],
+            "verification_state": "verified",
+            "consistency_window_ms": 0,
+        }
+    goal = str(raw.get("goal", ""))
+    verification_state = (
+        "degraded" if str(raw.get("verification_state", "verified")) == "degraded" else "verified"
+    )
+    try:
+        consistency_window_ms = max(0, int(raw.get("consistency_window_ms", 0)))
+    except Exception:
+        consistency_window_ms = 0
+
+    open_risks_raw = raw.get("open_risks", [])
+    open_risks = [str(item) for item in open_risks_raw] if isinstance(open_risks_raw, list) else []
+
+    deltas_raw = raw.get("deltas", [])
+    deltas: list[dict[str, Any]] = []
+    if isinstance(deltas_raw, list):
+        for item in deltas_raw:
+            if not isinstance(item, dict):
+                continue
+            delta_id = str(item.get("id", ""))
+            message = str(item.get("message", ""))
+            level = str(item.get("level", LEVEL_CORE_CRITICAL))
+            if level not in {LEVEL_CORE_CRITICAL, LEVEL_CORE_SECONDARY, LEVEL_PERIPHERAL}:
+                level = LEVEL_CORE_CRITICAL
+            delta_state = (
+                "degraded"
+                if str(item.get("verification_state", "verified")) == "degraded"
+                else "verified"
+            )
+            normalized = {
+                "id": delta_id or f"d-{int(time.time() * 1000)}-{len(deltas)}",
+                "message": message,
+                "level": level,
+                "verification_state": delta_state,
+                "provisional": bool(item.get("provisional", False)),
+            }
+            if "reconcile_outcome" in item:
+                normalized["reconcile_outcome"] = str(item["reconcile_outcome"])
+            deltas.append(normalized)
+
+    return {
+        "goal": goal,
+        "open_risks": open_risks,
+        "deltas": deltas,
+        "verification_state": verification_state,
+        "consistency_window_ms": consistency_window_ms,
+    }
+
+
 def load_tracker(path: Path) -> StateTracker:
     if path.exists():
-        return StateTracker(json.loads(path.read_text(encoding="utf-8")))
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return StateTracker()
+        return StateTracker(_normalize_state(raw))
     return StateTracker()
 
 
 def save_tracker(path: Path, tracker: StateTracker) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(tracker.to_dict(), ensure_ascii=True, indent=2), encoding="utf-8")
+    fd, tmp_path = tempfile.mkstemp(prefix="state-", suffix=".json", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+            json.dump(_normalize_state(tracker.to_dict()), tmp, ensure_ascii=True, indent=2)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
