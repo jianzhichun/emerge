@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 from typing import Any
+
+_USER_CONNECTOR_ROOT = Path("~/.emerge/connectors").expanduser()
 
 
 class PipelineEngine:
     def __init__(self, root: Path | None = None) -> None:
         self.root = root or Path(__file__).resolve().parents[1]
+        # Search order: env override → user connector root → plugin connector root (mock only)
+        env_root = os.environ.get("EMERGE_CONNECTOR_ROOT", "").strip()
+        if env_root:
+            self._connector_roots = [Path(env_root).expanduser(), self.root / "connectors"]
+        else:
+            self._connector_roots = [_USER_CONNECTOR_ROOT, self.root / "connectors"]
 
     def run_read(self, args: dict[str, Any]) -> dict[str, Any]:
         connector = args.get("connector", "mock")
@@ -83,17 +92,41 @@ class PipelineEngine:
     def _load_pipeline(
         self, connector: str, mode: str, pipeline: str
     ) -> tuple[dict[str, Any], Any]:
-        base = self.root / "connectors" / connector / "pipelines" / mode
-        meta_path = base / f"{pipeline}.yaml"
-        code_path = base / f"{pipeline}.py"
-        if not meta_path.exists():
-            raise FileNotFoundError(f"Missing pipeline metadata: {meta_path}")
-        if not code_path.exists():
-            raise FileNotFoundError(f"Missing pipeline action: {code_path}")
+        for connector_root in self._connector_roots:
+            base = connector_root / connector / "pipelines" / mode
+            meta_path = base / f"{pipeline}.yaml"
+            code_path = base / f"{pipeline}.py"
+            if meta_path.exists() and code_path.exists():
+                break
+        else:
+            searched = ", ".join(str(r / connector) for r in self._connector_roots)
+            raise FileNotFoundError(
+                f"Pipeline '{connector}/{mode}/{pipeline}' not found in: {searched}"
+            )
 
         metadata = self._load_metadata(meta_path)
         module = self._load_module(code_path, f"emerge_{connector}_{mode}_{pipeline}")
         return metadata, module
+
+    @staticmethod
+    def _validate_metadata(path: Path, data: dict[str, Any]) -> None:
+        errors: list[str] = []
+        if not str(data.get("intent_signature", "")).strip():
+            errors.append("intent_signature (required, non-empty string)")
+        policy = str(data.get("rollback_or_stop_policy", ""))
+        if policy not in ("stop", "rollback"):
+            errors.append("rollback_or_stop_policy (must be 'stop' or 'rollback')")
+        has_read = isinstance(data.get("read_steps"), list) and len(data["read_steps"]) > 0
+        has_write = isinstance(data.get("write_steps"), list) and len(data["write_steps"]) > 0
+        if not has_read and not has_write:
+            errors.append("read_steps or write_steps (at least one required, non-empty list)")
+        has_verify = isinstance(data.get("verify_steps"), list) and len(data["verify_steps"]) > 0
+        if not has_verify:
+            errors.append("verify_steps (required, non-empty list)")
+        if errors:
+            raise ValueError(
+                f"pipeline metadata invalid at {path}: missing/invalid fields: {', '.join(errors)}"
+            )
 
     @staticmethod
     def _load_metadata(path: Path) -> dict[str, Any]:
@@ -104,12 +137,12 @@ class PipelineEngine:
             loaded = yaml.safe_load(text)
             if not isinstance(loaded, dict):
                 raise ValueError("metadata must be an object")
-            return loaded
         except Exception:
             loaded = json.loads(text)
             if not isinstance(loaded, dict):
                 raise ValueError("metadata must be a JSON object")
-            return loaded
+        PipelineEngine._validate_metadata(path, loaded)
+        return loaded
 
     @staticmethod
     def _load_module(path: Path, module_name: str) -> Any:

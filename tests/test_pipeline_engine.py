@@ -94,3 +94,48 @@ def test_run_write_rollback_missing_handler_triggers_stop(tmp_path: Path):
     assert result["rollback_executed"] is False
     assert result["stop_triggered"] is True
     assert result["rollback_result"]["ok"] is False
+
+
+def test_load_metadata_rejects_missing_intent_signature(tmp_path):
+    from scripts.pipeline_engine import PipelineEngine
+    bad = tmp_path / "bad.yaml"
+    bad.write_text('{"rollback_or_stop_policy": "stop", "read_steps": ["x"], "verify_steps": ["y"]}')
+    engine = PipelineEngine()
+    with pytest.raises(ValueError, match="intent_signature"):
+        engine._load_metadata(bad)
+
+
+def test_load_metadata_rejects_invalid_policy(tmp_path):
+    from scripts.pipeline_engine import PipelineEngine
+    bad = tmp_path / "bad.yaml"
+    bad.write_text('{"intent_signature": "s", "rollback_or_stop_policy": "unknown", "read_steps": ["x"], "verify_steps": ["y"]}')
+    engine = PipelineEngine()
+    with pytest.raises(ValueError, match="rollback_or_stop_policy"):
+        engine._load_metadata(bad)
+
+
+def test_load_metadata_rejects_missing_steps(tmp_path):
+    from scripts.pipeline_engine import PipelineEngine
+    bad = tmp_path / "bad.yaml"
+    bad.write_text('{"intent_signature": "s", "rollback_or_stop_policy": "stop", "verify_steps": ["y"]}')
+    engine = PipelineEngine()
+    with pytest.raises(ValueError, match="read_steps.*write_steps"):
+        engine._load_metadata(bad)
+
+
+def test_load_metadata_rejects_missing_verify_steps(tmp_path):
+    from scripts.pipeline_engine import PipelineEngine
+    bad = tmp_path / "bad.yaml"
+    bad.write_text('{"intent_signature": "s", "rollback_or_stop_policy": "stop", "read_steps": ["x"]}')
+    engine = PipelineEngine()
+    with pytest.raises(ValueError, match="verify_steps"):
+        engine._load_metadata(bad)
+
+
+def test_load_metadata_accepts_valid_metadata(tmp_path):
+    from scripts.pipeline_engine import PipelineEngine
+    good = tmp_path / "good.yaml"
+    good.write_text('{"intent_signature": "read.mock.test", "rollback_or_stop_policy": "stop", "read_steps": ["x"], "verify_steps": ["y"]}')
+    engine = PipelineEngine()
+    data = engine._load_metadata(good)
+    assert data["intent_signature"] == "read.mock.test"
