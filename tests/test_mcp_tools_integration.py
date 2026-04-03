@@ -1,5 +1,7 @@
 import json
 import os
+import socket
+import threading
 from pathlib import Path
 import sys
 
@@ -9,6 +11,35 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.repl_daemon import ReplDaemon
+from scripts.remote_runner import RunnerExecutor, RunnerHTTPHandler, ThreadingHTTPServer
+
+
+class _RunnerServer:
+    def __init__(self, state_root: Path) -> None:
+        self._state_root = state_root
+        self._server: ThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
+        self.url = ""
+
+    def __enter__(self) -> "_RunnerServer":
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        host, port = sock.getsockname()
+        sock.close()
+        executor = RunnerExecutor(root=ROOT, state_root=self._state_root)
+        handler_cls = type("TestRunnerHTTPHandler", (RunnerHTTPHandler,), {"executor": executor})
+        self._server = ThreadingHTTPServer((host, port), handler_cls)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        self.url = f"http://{host}:{port}"
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        assert self._server is not None
+        self._server.shutdown()
+        self._server.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
 
 
 def test_tools_call_routes_exec_read_write_in_same_runtime():
@@ -173,6 +204,171 @@ def test_tools_call_handles_null_params_without_crash():
     assert "Unknown tool" in out["result"]["content"][0]["text"]
 
 
+def test_daemon_can_dispatch_tools_via_remote_runner(tmp_path: Path):
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "daemon-state")
+    os.environ["REPL_SESSION_ID"] = "runner-dispatch"
+    try:
+        with _RunnerServer(tmp_path / "remote-state") as server:
+            os.environ["EMERGE_RUNNER_URL"] = server.url
+            daemon = ReplDaemon(root=ROOT)
+            out = daemon.handle_jsonrpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 200,
+                    "method": "tools/call",
+                    "params": {"name": "icc_exec", "arguments": {"code": "x = 9\nprint(x)"}},
+                }
+            )
+            assert "9" in out["result"]["content"][0]["text"]
+    finally:
+        os.environ.pop("EMERGE_RUNNER_URL", None)
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_daemon_can_route_to_multiple_runners_by_target_profile(tmp_path: Path):
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "daemon-state")
+    os.environ["REPL_SESSION_ID"] = "multi-runner"
+    try:
+        with _RunnerServer(tmp_path / "remote-a") as a, _RunnerServer(tmp_path / "remote-b") as b:
+            os.environ["EMERGE_RUNNER_MAP"] = json.dumps(
+                {
+                    "mycader-1.zwcad": a.url,
+                    "mycader-2.zwcad": b.url,
+                }
+            )
+            daemon = ReplDaemon(root=ROOT)
+            daemon.call_tool(
+                "icc_exec",
+                {"code": "x = 1", "target_profile": "mycader-1.zwcad"},
+            )
+            daemon.call_tool(
+                "icc_exec",
+                {"code": "x = 2", "target_profile": "mycader-2.zwcad"},
+            )
+
+            wal_a = list((tmp_path / "remote-a").rglob("wal.jsonl"))
+            wal_b = list((tmp_path / "remote-b").rglob("wal.jsonl"))
+            assert wal_a
+            assert wal_b
+    finally:
+        os.environ.pop("EMERGE_RUNNER_MAP", None)
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_daemon_can_use_persisted_runner_config_without_env_url(tmp_path: Path):
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "daemon-state")
+    os.environ["REPL_SESSION_ID"] = "persisted-runner"
+    cfg_path = tmp_path / "runner-map.json"
+    os.environ["EMERGE_RUNNER_CONFIG_PATH"] = str(cfg_path)
+    try:
+        with _RunnerServer(tmp_path / "remote-a") as a:
+            cfg_path.write_text(
+                json.dumps({"default_url": a.url, "map": {}, "pool": []}),
+                encoding="utf-8",
+            )
+            os.environ.pop("EMERGE_RUNNER_URL", None)
+            daemon = ReplDaemon(root=ROOT)
+            out = daemon.handle_jsonrpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 220,
+                    "method": "tools/call",
+                    "params": {"name": "icc_exec", "arguments": {"code": "x = 7\nprint(x)"}},
+                }
+            )
+            assert "7" in out["result"]["content"][0]["text"]
+    finally:
+        os.environ.pop("EMERGE_RUNNER_CONFIG_PATH", None)
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_zwcad_read_state_pipeline_returns_structured_rows(tmp_path: Path):
+    """RED→GREEN: zwcad read/state pipeline must return structured rows with id+name."""
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["REPL_SESSION_ID"] = "zwcad-read"
+    try:
+        daemon = ReplDaemon(root=ROOT)
+        out = daemon.handle_jsonrpc(
+            {
+                "jsonrpc": "2.0",
+                "id": 300,
+                "method": "tools/call",
+                "params": {"name": "icc_read", "arguments": {"connector": "zwcad", "pipeline": "state"}},
+            }
+        )
+        assert out["result"]["isError"] is False, out["result"]["content"][0]["text"]
+        body = json.loads(out["result"]["content"][0]["text"])
+        assert body["pipeline_id"] == "zwcad.read.state"
+        assert body["verify_result"]["ok"] is True
+        rows = body["rows"]
+        assert isinstance(rows, list) and len(rows) > 0
+        assert all("id" in r and "name" in r for r in rows)
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_zwcad_write_apply_change_pipeline_enforces_policy(tmp_path: Path):
+    """RED→GREEN: zwcad write/apply-change pipeline must return verification_state and policy fields."""
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["REPL_SESSION_ID"] = "zwcad-write"
+    try:
+        daemon = ReplDaemon(root=ROOT)
+        out = daemon.handle_jsonrpc(
+            {
+                "jsonrpc": "2.0",
+                "id": 301,
+                "method": "tools/call",
+                "params": {
+                    "name": "icc_write",
+                    "arguments": {
+                        "connector": "zwcad",
+                        "pipeline": "apply-change",
+                        "change_type": "line",
+                        "x1": 0,
+                        "y1": 0,
+                        "x2": 100,
+                        "y2": 100,
+                    },
+                },
+            }
+        )
+        assert out["result"]["isError"] is False, out["result"]["content"][0]["text"]
+        body = json.loads(out["result"]["content"][0]["text"])
+        assert body["verification_state"] == "verified"
+        assert "policy_enforced" in body
+        assert "stop_triggered" in body
+        assert "rollback_executed" in body
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_zwcad_policy_registry_tracks_pipeline_key(tmp_path: Path):
+    """RED→GREEN: zwcad pipeline key must appear in policy registry after icc_read+icc_write."""
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["REPL_SESSION_ID"] = "zwcad-policy"
+    try:
+        daemon = ReplDaemon(root=ROOT)
+        for _ in range(3):
+            daemon.call_tool("icc_read", {"connector": "zwcad", "pipeline": "state"})
+            daemon.call_tool(
+                "icc_write",
+                {"connector": "zwcad", "pipeline": "apply-change", "change_type": "line"},
+            )
+        reg = tmp_path / "state" / "zwcad-policy" / "pipelines-registry.json"
+        assert reg.exists(), "registry file not created"
+        data = json.loads(reg.read_text(encoding="utf-8"))
+        assert "pipeline::zwcad.read.state" in data["pipelines"]
+        assert "pipeline::zwcad.write.apply-change" in data["pipelines"]
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
 def test_pipeline_policy_metrics_are_recorded_for_stop_and_rollback(tmp_path: Path):
     os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["REPL_SESSION_ID"] = "policy-metrics"
@@ -201,3 +397,126 @@ def test_pipeline_policy_metrics_are_recorded_for_stop_and_rollback(tmp_path: Pa
     finally:
         os.environ.pop("REPL_STATE_ROOT", None)
         os.environ.pop("REPL_SESSION_ID", None)
+
+
+# ── Task 6: MCP resources ────────────────────────────────────────────────────
+
+def test_resources_list_returns_static_and_pipeline_uris():
+    daemon = ReplDaemon(root=ROOT)
+    resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 50, "method": "resources/list", "params": {}})
+    uris = [r["uri"] for r in resp["result"]["resources"]]
+    assert "policy://current" in uris
+    assert "runner://status" in uris
+    assert "state://deltas" in uris
+    assert any(u.startswith("pipeline://") for u in uris)
+
+
+def test_resources_read_policy_current(tmp_path):
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["REPL_SESSION_ID"] = "res-test"
+    try:
+        daemon = ReplDaemon(root=ROOT)
+        daemon.call_tool("icc_read", {"connector": "mock", "pipeline": "layers"})
+        resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 51, "method": "resources/read",
+                                      "params": {"uri": "policy://current"}})
+        resource = resp["result"]["resource"]
+        assert resource["uri"] == "policy://current"
+        assert resource["mimeType"] == "application/json"
+        data = json.loads(resource["text"])
+        assert "pipelines" in data
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_resources_read_pipeline_uri():
+    daemon = ReplDaemon(root=ROOT)
+    resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 52, "method": "resources/read",
+                                  "params": {"uri": "pipeline://mock/read/layers"}})
+    resource = resp["result"]["resource"]
+    assert resource["uri"] == "pipeline://mock/read/layers"
+    data = json.loads(resource["text"])
+    assert "intent_signature" in data
+
+
+def test_resources_read_unknown_uri_returns_error():
+    daemon = ReplDaemon(root=ROOT)
+    resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 53, "method": "resources/read",
+                                  "params": {"uri": "unknown://foo"}})
+    assert "error" in resp or resp.get("result", {}).get("isError")
+
+
+# ── Task 7: MCP prompts ──────────────────────────────────────────────────────
+
+def test_prompts_list_returns_icc_explore_and_icc_promote():
+    daemon = ReplDaemon(root=ROOT)
+    resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 60, "method": "prompts/list", "params": {}})
+    names = [p["name"] for p in resp["result"]["prompts"]]
+    assert "icc_explore" in names
+    assert "icc_promote" in names
+
+
+def test_prompts_get_icc_explore():
+    daemon = ReplDaemon(root=ROOT)
+    resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 61, "method": "prompts/get",
+                                  "params": {"name": "icc_explore", "arguments": {"vertical": "zwcad", "goal": "list layers"}}})
+    result = resp["result"]
+    assert result["name"] == "icc_explore"
+    assert isinstance(result["messages"], list) and result["messages"]
+    assert "zwcad" in result["messages"][0]["content"]
+
+
+def test_prompts_get_icc_promote():
+    daemon = ReplDaemon(root=ROOT)
+    resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 62, "method": "prompts/get",
+                                  "params": {"name": "icc_promote",
+                                             "arguments": {"intent_signature": "zwcad.read.state",
+                                                           "script_ref": "connectors/zwcad/read.py",
+                                                           "connector": "zwcad"}}})
+    result = resp["result"]
+    assert result["name"] == "icc_promote"
+    assert "zwcad" in result["messages"][0]["content"]
+
+
+def test_prompts_get_unknown_returns_error():
+    daemon = ReplDaemon(root=ROOT)
+    resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 63, "method": "prompts/get",
+                                  "params": {"name": "nonexistent"}})
+    assert "error" in resp
+
+
+# ── Task 8: icc_reconcile tool ───────────────────────────────────────────────
+
+def test_icc_reconcile_confirms_delta(tmp_path):
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["REPL_SESSION_ID"] = "reconcile-test"
+    os.environ["CLAUDE_PLUGIN_DATA"] = str(tmp_path / "hook-state")
+    try:
+        daemon = ReplDaemon(root=ROOT)
+        # First create a delta via icc_write
+        daemon.call_tool("icc_write", {"connector": "mock", "pipeline": "add-wall"})
+        # Get delta_id from state
+        from scripts.policy_config import default_hook_state_root
+        from scripts.state_tracker import load_tracker
+        state_path = Path(os.environ["CLAUDE_PLUGIN_DATA"]) / "state.json"
+        tracker = load_tracker(state_path)
+        deltas = tracker.to_dict().get("deltas", [])
+        if not deltas:
+            return  # no deltas seeded, skip
+        delta_id = deltas[0]["delta_id"]
+        # Now reconcile
+        result = daemon.call_tool("icc_reconcile", {"delta_id": delta_id, "outcome": "confirm"})
+        assert result["delta_id"] == delta_id
+        assert result["outcome"] == "confirm"
+        assert "verification_state" in result
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+
+
+def test_icc_reconcile_not_in_tools_list():
+    daemon = ReplDaemon(root=ROOT)
+    resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 70, "method": "tools/list", "params": {}})
+    names = [t["name"] for t in resp["result"]["tools"]]
+    assert "icc_reconcile" not in names

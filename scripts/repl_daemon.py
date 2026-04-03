@@ -27,6 +27,7 @@ from scripts.policy_config import (  # noqa: E402
     derive_session_id,
     default_repl_root,
 )
+from scripts.runner_client import RunnerRouter  # noqa: E402
 from scripts.repl_state import ReplState  # noqa: E402
 
 
@@ -42,6 +43,7 @@ class ReplDaemon:
         self.pipeline = PipelineEngine(root=resolved_root)
         self._root = resolved_root
         self._script_roots = self._resolve_script_roots()
+        self._runner_router = RunnerRouter.from_env()
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if name == "icc_exec":
@@ -53,18 +55,22 @@ class ReplDaemon:
                     target_profile=target_profile,
                 )
                 sampled_in_policy = self._should_sample(candidate_key)
-                code = self._resolve_exec_code(mode=mode, arguments=arguments)
-                repl = self._get_repl(target_profile)
-                result = repl.exec_code(
-                    code,
-                    metadata={
-                        "mode": mode,
-                        "target_profile": target_profile,
-                        "intent_signature": arguments.get("intent_signature", ""),
-                        "script_ref": arguments.get("script_ref", ""),
-                    },
-                    inject_vars={"__args": arguments.get("script_args", {})},
-                )
+                _exec_client = self._runner_router.find_client(arguments) if self._runner_router else None
+                if _exec_client is not None:
+                    result = _exec_client.call_tool("icc_exec", arguments)
+                else:
+                    code = self._resolve_exec_code(mode=mode, arguments=arguments)
+                    repl = self._get_repl(target_profile)
+                    result = repl.exec_code(
+                        code,
+                        metadata={
+                            "mode": mode,
+                            "target_profile": target_profile,
+                            "intent_signature": arguments.get("intent_signature", ""),
+                            "script_ref": arguments.get("script_ref", ""),
+                        },
+                        inject_vars={"__args": arguments.get("script_args", {})},
+                    )
                 try:
                     self._record_exec_event(
                         arguments=arguments,
@@ -84,7 +90,16 @@ class ReplDaemon:
                 }
         if name == "icc_read":
             try:
-                result = self.pipeline.run_read(arguments)
+                _read_client = self._runner_router.find_client(arguments) if self._runner_router else None
+                if _read_client is not None:
+                    result = _read_client.call_tool("icc_read", arguments)
+                    text = str(result.get("content", [{}])[0].get("text", ""))
+                    payload = json.loads(text)
+                    if not isinstance(payload, dict):
+                        raise ValueError("runner icc_read payload must be an object")
+                    result = payload
+                else:
+                    result = self.pipeline.run_read(arguments)
                 response = {
                     "isError": False,
                     "content": [{"type": "text", "text": json.dumps(result)}],
@@ -116,7 +131,16 @@ class ReplDaemon:
                 }
         if name == "icc_write":
             try:
-                result = self.pipeline.run_write(arguments)
+                _write_client = self._runner_router.find_client(arguments) if self._runner_router else None
+                if _write_client is not None:
+                    result = _write_client.call_tool("icc_write", arguments)
+                    text = str(result.get("content", [{}])[0].get("text", ""))
+                    payload = json.loads(text)
+                    if not isinstance(payload, dict):
+                        raise ValueError("runner icc_write payload must be an object")
+                    result = payload
+                else:
+                    result = self.pipeline.run_write(arguments)
                 response = {
                     "isError": False,
                     "content": [{"type": "text", "text": json.dumps(result)}],
@@ -176,11 +200,127 @@ class ReplDaemon:
             result = self.call_tool(name, arguments)
             return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
+        if method == "resources/list":
+            return {"jsonrpc": "2.0", "id": req_id, "result": {"resources": self._list_resources()}}
+
+        if method == "resources/read":
+            uri = params.get("uri", "")
+            try:
+                resource = self._read_resource(uri)
+                return {"jsonrpc": "2.0", "id": req_id, "result": {"resource": resource}}
+            except KeyError as exc:
+                return {"jsonrpc": "2.0", "id": req_id,
+                        "error": {"code": -32602, "message": str(exc)}}
+
+        if method == "prompts/list":
+            return {"jsonrpc": "2.0", "id": req_id, "result": {"prompts": self._PROMPTS}}
+
+        if method == "prompts/get":
+            pname = params.get("name", "")
+            pargs = params.get("arguments") or {}
+            try:
+                prompt = self._get_prompt(pname, pargs)
+                return {"jsonrpc": "2.0", "id": req_id, "result": prompt}
+            except KeyError as exc:
+                return {"jsonrpc": "2.0", "id": req_id,
+                        "error": {"code": -32602, "message": str(exc)}}
+
         return {
             "jsonrpc": "2.0",
             "id": req_id,
             "error": {"code": -32601, "message": f"Method not found: {method}"},
         }
+
+    def _list_resources(self) -> list[dict[str, Any]]:
+        static = [
+            {"uri": "policy://current", "name": "Pipeline policy registry", "mimeType": "application/json"},
+            {"uri": "runner://status", "name": "Runner health summary", "mimeType": "application/json"},
+            {"uri": "state://deltas", "name": "State tracker deltas", "mimeType": "application/json"},
+        ]
+        for connector_root in self.pipeline._connector_roots:
+            if not connector_root.exists():
+                continue
+            for meta in connector_root.glob("*/pipelines/*/*.yaml"):
+                parts = meta.relative_to(connector_root).parts
+                if len(parts) == 4:
+                    connector, _, mode, name_yaml = parts
+                    name = name_yaml[:-5]
+                    uri = f"pipeline://{connector}/{mode}/{name}"
+                    static.append({"uri": uri, "name": f"{connector} {mode} pipeline: {name}", "mimeType": "application/json"})
+        return static
+
+    def _read_resource(self, uri: str) -> dict[str, Any]:
+        if uri == "policy://current":
+            session_dir = self._state_root / self._base_session_id
+            path = session_dir / "pipelines-registry.json"
+            data = self._load_json_object(path, root_key="pipelines")
+            return {"uri": uri, "mimeType": "application/json", "text": json.dumps(data)}
+        if uri == "runner://status":
+            router = RunnerRouter.from_env()
+            summary = router.health_summary() if router else {"configured": False, "any_reachable": False}
+            return {"uri": uri, "mimeType": "application/json", "text": json.dumps(summary)}
+        if uri == "state://deltas":
+            from scripts.policy_config import default_hook_state_root
+            from scripts.state_tracker import load_tracker
+            state_path = Path(os.environ.get("CLAUDE_PLUGIN_DATA", str(default_hook_state_root()))) / "state.json"
+            tracker = load_tracker(state_path)
+            return {"uri": uri, "mimeType": "application/json", "text": json.dumps(tracker.to_dict())}
+        if uri.startswith("pipeline://"):
+            rest = uri[len("pipeline://"):]
+            parts = rest.split("/", 2)
+            if len(parts) == 3:
+                connector, mode, name = parts
+                for connector_root in self.pipeline._connector_roots:
+                    meta = connector_root / connector / "pipelines" / mode / f"{name}.yaml"
+                    if meta.exists():
+                        data = PipelineEngine._load_metadata(meta)
+                        return {"uri": uri, "mimeType": "application/json", "text": json.dumps(data)}
+        raise KeyError(f"Resource not found: {uri}")
+
+    _PROMPTS = [
+        {
+            "name": "icc_explore",
+            "description": "Explore a new vertical using icc_exec with policy tracking",
+            "arguments": [
+                {"name": "vertical", "description": "Name of the vertical (e.g. zwcad)", "required": True},
+                {"name": "goal", "description": "What to explore", "required": False},
+            ],
+        },
+        {
+            "name": "icc_promote",
+            "description": "Promote an exec history into a formalized pipeline",
+            "arguments": [
+                {"name": "intent_signature", "description": "Intent signature of the exec", "required": True},
+                {"name": "script_ref", "description": "Path to the script that was executed", "required": True},
+                {"name": "connector", "description": "Target connector name", "required": True},
+            ],
+        },
+    ]
+
+    def _get_prompt(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if name == "icc_explore":
+            vertical = str(arguments.get("vertical", "<vertical>"))
+            goal = str(arguments.get("goal", "explore the vertical"))
+            content = (
+                f"Use icc_exec to explore the {vertical} vertical. Goal: {goal}.\n"
+                f"Include intent_signature='<intent>' and script_ref='~/.emerge/connectors/{vertical}/pipelines/read/state.py' "
+                f"in each icc_exec call so the policy flywheel can track progress.\n"
+                f"When the exec is stable and consistent, use icc_read with connector='{vertical}' to verify the pipeline works."
+            )
+            return {"name": name, "messages": [{"role": "user", "content": content}]}
+        if name == "icc_promote":
+            sig = str(arguments.get("intent_signature", ""))
+            ref = str(arguments.get("script_ref", ""))
+            connector = str(arguments.get("connector", ""))
+            content = (
+                f"Promote the exec pattern '{sig}' (script: {ref}) to a formal {connector} pipeline.\n"
+                f"1. Create ~/.emerge/connectors/{connector}/pipelines/read/<name>.yaml and <name>.py\n"
+                f"2. Implement run_read() and verify_read() in the .py file\n"
+                f"3. Call icc_read with connector='{connector}' to verify it works\n"
+                f"4. The intent_signature in the yaml must match '{sig}'"
+            )
+            return {"name": name, "messages": [{"role": "user", "content": content}]}
+        raise KeyError(f"Prompt not found: {name}")
 
     def _get_repl(self, target_profile: str) -> ReplState:
         normalized = (target_profile or "default").strip() or "default"
@@ -588,7 +728,11 @@ class ReplDaemon:
         status = str(pipeline.get("status", "explore"))
         if status != "canary":
             return True
-        rollout_pct = int(pipeline.get("rollout_pct", 0))
+        try:
+            rollout_pct = int(pipeline.get("rollout_pct", 0))
+        except Exception:
+            rollout_pct = 0
+        rollout_pct = max(0, min(100, rollout_pct))
         if rollout_pct <= 0:
             return False
 
