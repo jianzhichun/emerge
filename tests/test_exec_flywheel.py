@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 import sys
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -17,6 +19,7 @@ def test_icc_exec_script_ref_mode_runs_file_with_args(tmp_path: Path):
 
     os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["REPL_SESSION_ID"] = "flywheel"
+    os.environ["REPL_SCRIPT_ROOTS"] = str(tmp_path)
     try:
         daemon = ReplDaemon(root=ROOT)
         out = daemon.call_tool(
@@ -32,6 +35,26 @@ def test_icc_exec_script_ref_mode_runs_file_with_args(tmp_path: Path):
     finally:
         os.environ.pop("REPL_STATE_ROOT", None)
         os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("REPL_SCRIPT_ROOTS", None)
+
+
+def test_icc_exec_script_ref_rejects_path_outside_allowlist(tmp_path: Path):
+    outside = tmp_path / "outside.py"
+    outside.write_text("print('x')\n", encoding="utf-8")
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["REPL_SESSION_ID"] = "flywheel"
+    os.environ["REPL_SCRIPT_ROOTS"] = str(tmp_path / "allowed")
+    try:
+        daemon = ReplDaemon(root=ROOT)
+        with pytest.raises(PermissionError):
+            daemon.call_tool(
+                "icc_exec",
+                {"mode": "script_ref", "script_ref": str(outside)},
+            )
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("REPL_SCRIPT_ROOTS", None)
 
 
 def test_icc_exec_target_profiles_are_isolated(tmp_path: Path):

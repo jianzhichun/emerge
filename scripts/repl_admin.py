@@ -11,19 +11,21 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.repl_daemon import (
+from scripts.policy_config import (
     PROMOTE_MAX_HUMAN_FIX_RATE,
     PROMOTE_MIN_ATTEMPTS,
     PROMOTE_MIN_SUCCESS_RATE,
     PROMOTE_MIN_VERIFY_RATE,
+    ROLLBACK_CONSECUTIVE_FAILURES,
     STABLE_MIN_ATTEMPTS,
     STABLE_MIN_SUCCESS_RATE,
     STABLE_MIN_VERIFY_RATE,
+    default_repl_root,
 )
 
 
 def _resolve_state_root() -> Path:
-    return Path(os.environ.get("REPL_STATE_ROOT", str(Path.home() / ".emerge" / "repl")))
+    return Path(os.environ.get("REPL_STATE_ROOT", str(default_repl_root())))
 
 
 def _resolve_session_id() -> str:
@@ -93,7 +95,7 @@ def cmd_policy_status() -> dict:
             "stable_min_attempts": STABLE_MIN_ATTEMPTS,
             "stable_min_success_rate": STABLE_MIN_SUCCESS_RATE,
             "stable_min_verify_rate": STABLE_MIN_VERIFY_RATE,
-            "rollback_consecutive_failures": 2,
+            "rollback_consecutive_failures": ROLLBACK_CONSECUTIVE_FAILURES,
         },
         "pipelines": pipelines,
     }

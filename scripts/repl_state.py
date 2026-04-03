@@ -11,18 +11,22 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from scripts.policy_config import default_repl_root
+
 
 class ReplState:
     """Persistent Python execution state for icc_exec."""
 
     def __init__(self, state_root: Path | None = None, session_id: str = "default") -> None:
         self._globals: dict[str, Any] = {"__builtins__": __builtins__}
-        base = state_root or (Path.home() / ".emerge" / "repl")
+        base = state_root or default_repl_root()
         self._session_dir = base / session_id
         self._wal_path = self._session_dir / "wal.jsonl"
         self._checkpoint_path = self._session_dir / "checkpoint.json"
+        self._recovery_path = self._session_dir / "recovery.json"
         self._seq = 0
         self._wal_seq_applied = 0
+        self._recovery_issues: list[dict[str, Any]] = []
         self._ensure_paths()
         self._restore_from_disk()
 
@@ -117,11 +121,21 @@ class ReplState:
                     continue
                 if item.get("status") == "success":
                     code = str(item.get("code", ""))
-                    exec(code, self._globals, self._globals)
-                    self._wal_seq_applied = seq
+                    try:
+                        exec(code, self._globals, self._globals)
+                        self._wal_seq_applied = seq
+                    except Exception as exc:
+                        self._recovery_issues.append(
+                            {
+                                "seq": seq,
+                                "error": str(exc),
+                                "code_preview": code[:200],
+                            }
+                        )
         # Persist the new replay point so startup remains fast after crash recovery.
         if self._wal_seq_applied:
             self._write_checkpoint(self._wal_seq_applied)
+        self._write_recovery_status()
 
     def _append_wal(self, payload: dict[str, Any]) -> int:
         self._seq += 1
@@ -187,3 +201,22 @@ class ReplState:
                 out_dict[k] = encoded
             return out_dict
         return None
+
+    def _write_recovery_status(self) -> None:
+        body = {
+            "recovery_degraded": bool(self._recovery_issues),
+            "issues": self._recovery_issues[-20:],
+            "updated_at_ms": int(time.time() * 1000),
+        }
+        fd, tmp_path = tempfile.mkstemp(
+            prefix="recovery-", suffix=".json", dir=str(self._session_dir)
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+                json.dump(body, tmp, ensure_ascii=True, indent=2)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            os.replace(tmp_path, self._recovery_path)
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
