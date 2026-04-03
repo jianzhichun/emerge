@@ -44,9 +44,72 @@ class ReplDaemon:
         self._root = resolved_root
         self._script_roots = self._resolve_script_roots()
         self._runner_router = RunnerRouter.from_env()
+        from scripts.policy_config import load_settings, default_emerge_home
+        from scripts.metrics import get_sink
+        try:
+            _settings = load_settings()
+        except Exception:
+            _settings = {}
+        _default_metrics_path = default_emerge_home() / "metrics.jsonl"
+        self._sink = get_sink(_settings, default_path=_default_metrics_path)
+
+    def _try_l15_promote(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
+        intent_signature = str(arguments.get("intent_signature", "")).strip()
+        script_ref = str(arguments.get("script_ref", "")).strip()
+        base_pipeline_id = str(arguments.get("base_pipeline_id", "")).strip()
+        if not (intent_signature and script_ref and base_pipeline_id):
+            return None
+
+        key = f"l15::{base_pipeline_id}::{intent_signature}::{script_ref}"
+        session_dir = self._state_root / self._base_session_id
+        candidates_path = session_dir / "candidates.json"
+        candidates_data = self._load_json_object(candidates_path, root_key="candidates")
+        candidate = candidates_data.get("candidates", {}).get(key)
+        if not isinstance(candidate, dict):
+            return None
+        if str(candidate.get("status", "explore")) != "stable":
+            return None
+
+        pipelines_path = session_dir / "pipelines-registry.json"
+        pipelines_data = self._load_json_object(pipelines_path, root_key="pipelines")
+        pipeline_entry = pipelines_data.get("pipelines", {}).get(f"pipeline::{base_pipeline_id}")
+        if not isinstance(pipeline_entry, dict):
+            return None
+        if str(pipeline_entry.get("status", "explore")) not in ("canary", "stable"):
+            return None
+
+        parts = base_pipeline_id.split(".", 2)
+        if len(parts) != 3:
+            return None
+        connector, mode, name = parts
+        if mode == "write":
+            result = self.pipeline.run_write({**arguments, "connector": connector, "pipeline": name})
+        else:
+            result = self.pipeline.run_read({**arguments, "connector": connector, "pipeline": name})
+        result["l15_promoted"] = True
+        try:
+            self._sink.emit("l15.promoted", {"key": key, "pipeline_id": base_pipeline_id})
+        except Exception:
+            pass
+        return result
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if name == "icc_exec":
+            # L1.5 promotion: if candidate is stable and pipeline is ready, redirect
+            promoted = self._try_l15_promote(arguments)
+            if promoted is not None:
+                response = {"isError": False, "content": [{"type": "text", "text": json.dumps(promoted)}]}
+                try:
+                    tool_for_event = "icc_read" if promoted.get("pipeline_id", "").split(".")[1] == "read" else "icc_write"
+                    self._record_pipeline_event(
+                        tool_name=tool_for_event,
+                        arguments=arguments,
+                        result=promoted,
+                        is_error=False,
+                    )
+                except Exception:
+                    pass
+                return response
             try:
                 mode = str(arguments.get("mode", "inline_code"))
                 target_profile = str(arguments.get("target_profile", "default"))
@@ -82,6 +145,8 @@ class ReplDaemon:
                     )
                 except Exception as exc:
                     self._append_warning_text(result, f"policy bookkeeping failed: {exc}")
+                if "isError" not in result:
+                    result["isError"] = False
                 return result
             except Exception as exc:
                 return {

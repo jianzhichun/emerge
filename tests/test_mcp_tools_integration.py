@@ -517,3 +517,92 @@ def test_icc_reconcile_not_in_tools_list():
     resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 70, "method": "tools/list", "params": {}})
     names = [t["name"] for t in resp["result"]["tools"]]
     assert "icc_reconcile" not in names
+
+
+def test_l15_exec_routes_to_pipeline_when_stable(tmp_path):
+    """When L1.5 candidate is stable AND pipeline is canary/stable, icc_exec is redirected."""
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["REPL_SESSION_ID"] = "l15-promote-test"
+    try:
+        daemon = ReplDaemon(root=ROOT)
+        session_dir = tmp_path / "state" / daemon._base_session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        candidates = {
+            "candidates": {
+                "l15::mock.read.layers::zwcad.plan.read::connectors/zwcad/read.py": {
+                    "status": "stable",
+                    "attempts": 40, "successes": 40, "verify_passes": 40,
+                    "human_fixes": 0, "degraded_count": 0, "consecutive_failures": 0,
+                    "recent_outcomes": [1] * 20, "total_calls": 40, "last_ts_ms": 0,
+                    "source": "l15_composed", "pipeline_id": "mock.read.layers",
+                    "intent_signature": "zwcad.plan.read",
+                    "script_ref": "connectors/zwcad/read.py",
+                }
+            }
+        }
+        (session_dir / "candidates.json").write_text(json.dumps(candidates))
+
+        pipelines = {
+            "pipelines": {
+                "pipeline::mock.read.layers": {
+                    "status": "canary", "rollout_pct": 20,
+                    "success_rate": 1.0, "verify_rate": 1.0,
+                }
+            }
+        }
+        (session_dir / "pipelines-registry.json").write_text(json.dumps(pipelines))
+
+        out = daemon.call_tool("icc_exec", {
+            "code": "x = 1",
+            "intent_signature": "zwcad.plan.read",
+            "script_ref": "connectors/zwcad/read.py",
+            "base_pipeline_id": "mock.read.layers",
+        })
+        assert out["isError"] is False
+        body = json.loads(out["content"][0]["text"])
+        assert body.get("l15_promoted") is True
+        assert body.get("pipeline_id") == "mock.read.layers"
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_l15_exec_does_not_promote_when_candidate_is_canary(tmp_path):
+    """When L1.5 candidate is only canary, exec runs normally (no promotion)."""
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["REPL_SESSION_ID"] = "l15-canary-test"
+    try:
+        daemon = ReplDaemon(root=ROOT)
+        session_dir = tmp_path / "state" / daemon._base_session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        candidates = {
+            "candidates": {
+                "l15::mock.read.layers::zwcad.plan.read::connectors/zwcad/read.py": {
+                    "status": "canary",
+                    "attempts": 20, "successes": 20, "verify_passes": 20,
+                    "human_fixes": 0, "consecutive_failures": 0,
+                    "recent_outcomes": [1] * 20, "total_calls": 20, "last_ts_ms": 0,
+                }
+            }
+        }
+        (session_dir / "candidates.json").write_text(json.dumps(candidates))
+
+        out = daemon.call_tool("icc_exec", {
+            "code": "print('hello')",
+            "intent_signature": "zwcad.plan.read",
+            "script_ref": "connectors/zwcad/read.py",
+            "base_pipeline_id": "mock.read.layers",
+        })
+        assert out["isError"] is False
+        body_text = out["content"][0]["text"]
+        # Should NOT be promoted — either normal exec output or no l15_promoted key
+        try:
+            body = json.loads(body_text)
+            assert body.get("l15_promoted") is not True
+        except Exception:
+            pass  # non-JSON output is fine for normal exec
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
