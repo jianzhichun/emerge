@@ -488,30 +488,27 @@ def test_prompts_get_unknown_returns_error():
 # ── Task 8: icc_reconcile tool ───────────────────────────────────────────────
 
 def test_icc_reconcile_confirms_delta(tmp_path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "reconcile-test"
     os.environ["CLAUDE_PLUGIN_DATA"] = str(tmp_path / "hook-state")
     try:
-        daemon = ReplDaemon(root=ROOT)
-        # First create a delta via icc_write
-        daemon.call_tool("icc_write", {"connector": "mock", "pipeline": "add-wall"})
-        # Get delta_id from state
-        from scripts.policy_config import default_hook_state_root
-        from scripts.state_tracker import load_tracker
+        # Seed a delta directly via tracker API
+        from scripts.state_tracker import load_tracker, save_tracker, LEVEL_CORE_SECONDARY
         state_path = Path(os.environ["CLAUDE_PLUGIN_DATA"]) / "state.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
         tracker = load_tracker(state_path)
-        deltas = tracker.to_dict().get("deltas", [])
-        if not deltas:
-            return  # no deltas seeded, skip
-        delta_id = deltas[0]["delta_id"]
-        # Now reconcile
+        delta_id = tracker.add_delta(
+            message="Test write action",
+            level=LEVEL_CORE_SECONDARY,
+            verification_state="verified",
+        )
+        save_tracker(state_path, tracker)
+
+        # Now reconcile it
+        daemon = ReplDaemon(root=ROOT)
         result = daemon.call_tool("icc_reconcile", {"delta_id": delta_id, "outcome": "confirm"})
         assert result["delta_id"] == delta_id
         assert result["outcome"] == "confirm"
         assert "verification_state" in result
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
         os.environ.pop("CLAUDE_PLUGIN_DATA", None)
 
 

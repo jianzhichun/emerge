@@ -174,9 +174,9 @@ class ReplDaemon:
             delta_id = str(arguments.get("delta_id", "")).strip()
             outcome = str(arguments.get("outcome", "")).strip()
             if not delta_id:
-                raise ValueError("icc_reconcile: delta_id is required")
+                return {"isError": True, "content": [{"type": "text", "text": "icc_reconcile: delta_id is required"}]}
             if outcome not in ("confirm", "correct", "retract"):
-                raise ValueError(f"icc_reconcile: outcome must be confirm/correct/retract, got {outcome!r}")
+                return {"isError": True, "content": [{"type": "text", "text": f"icc_reconcile: outcome must be confirm/correct/retract, got {outcome!r}"}]}
             from scripts.policy_config import default_hook_state_root
             from scripts.state_tracker import load_tracker, save_tracker
             state_path = Path(os.environ.get("CLAUDE_PLUGIN_DATA", str(default_hook_state_root()))) / "state.json"
@@ -231,6 +231,9 @@ class ReplDaemon:
             except KeyError as exc:
                 return {"jsonrpc": "2.0", "id": req_id,
                         "error": {"code": -32602, "message": str(exc)}}
+            except Exception as exc:
+                return {"jsonrpc": "2.0", "id": req_id,
+                        "error": {"code": -32603, "message": f"Resource read error: {exc}"}}
 
         if method == "prompts/list":
             return {"jsonrpc": "2.0", "id": req_id, "result": {"prompts": self._PROMPTS}}
