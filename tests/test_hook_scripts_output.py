@@ -61,14 +61,16 @@ def test_post_tool_use_and_pre_compact_contract(tmp_path: Path):
     assert token["schema_version"] == "l15.v1"
     assert token["deltas"]
 
+    import os
+    env = os.environ.copy()
+    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
     proc = subprocess.run(
         ["python3", str(ROOT / "hooks" / "pre_compact.py")],
-        capture_output=True,
-        text=True,
-        check=True,
+        input="{}",
+        capture_output=True, text=True, env=env, check=True,
     )
-    text = proc.stdout.strip()
-    assert text.startswith("Keep only Goal")
+    out = json.loads(proc.stdout.strip())
+    assert out["hookSpecificOutput"]["hookEventName"] == "PreCompact"
 
 
 def test_hook_default_state_dir_uses_home_emerge(tmp_path: Path):
@@ -145,3 +147,33 @@ def test_goal_is_capped_and_source_marked(tmp_path: Path):
     token = _extract_l15_token(parsed["hookSpecificOutput"]["additionalContext"])
     assert len(token["goal"]) == 120
     assert token["goal_source"] == "hook_payload"
+
+
+def test_pre_compact_emits_recovery_token(tmp_path: Path):
+    # First seed some state via post_tool_use
+    env = os.environ.copy()
+    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+    subprocess.run(
+        ["python3", str(ROOT / "hooks" / "post_tool_use.py")],
+        input=json.dumps({
+            "tool_name": "mcp__plugin_emerge__icc_write",
+            "tool_result": {"verification_state": "verified"},
+            "delta_message": "Wrote layer to ZWCAD",
+        }),
+        capture_output=True, text=True, env=env, check=True,
+    )
+    # Now run pre_compact with the seeded state
+    proc = subprocess.run(
+        ["python3", str(ROOT / "hooks" / "pre_compact.py")],
+        input="{}",
+        capture_output=True, text=True, env=env, check=True,
+    )
+    out = json.loads(proc.stdout.strip())
+    assert out["hookSpecificOutput"]["hookEventName"] == "PreCompact"
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "L1_5_TOKEN" in ctx
+    token_text = ctx.rsplit("L1_5_TOKEN\n", 1)[1].strip()
+    token = json.loads(token_text)
+    assert token["schema_version"] == "l15.v1"
+    assert isinstance(token["deltas"], list)
+    assert len(ctx) <= 900  # budget enforced
