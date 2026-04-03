@@ -114,7 +114,13 @@ class ReplState:
                 text = line.strip()
                 if not text:
                     continue
-                item = json.loads(text)
+                try:
+                    item = json.loads(text)
+                except Exception as exc:
+                    self._recovery_issues.append(
+                        {"seq": -1, "error": f"invalid_wal_json: {exc}", "code_preview": text[:200]}
+                    )
+                    continue
                 seq = int(item.get("seq", 0))
                 self._seq = max(self._seq, seq)
                 if seq <= self._wal_seq_applied:

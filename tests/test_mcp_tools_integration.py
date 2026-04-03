@@ -65,3 +65,35 @@ def test_tools_list_does_not_expose_admin_state_operations():
     names = [t["name"] for t in listed["result"]["tools"]]
     assert "icc_state_status" not in names
     assert "icc_state_clear" not in names
+
+
+def test_tools_call_returns_error_payload_for_missing_pipeline_and_script(tmp_path: Path):
+    daemon = ReplDaemon(root=ROOT)
+
+    bad_read = daemon.handle_jsonrpc(
+        {
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {
+                "name": "icc_read",
+                "arguments": {"connector": "mock", "pipeline": "does-not-exist"},
+            },
+        }
+    )
+    assert bad_read["result"]["isError"] is True
+    assert "icc_read failed" in bad_read["result"]["content"][0]["text"]
+
+    bad_script = daemon.handle_jsonrpc(
+        {
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {
+                "name": "icc_exec",
+                "arguments": {"mode": "script_ref", "script_ref": str(tmp_path / "missing.py")},
+            },
+        }
+    )
+    assert bad_script["result"]["isError"] is True
+    assert "icc_exec failed" in bad_script["result"]["content"][0]["text"]

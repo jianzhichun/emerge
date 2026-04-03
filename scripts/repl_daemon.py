@@ -5,7 +5,6 @@ import os
 import sys
 import tempfile
 import time
-from hashlib import sha1
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +23,8 @@ from scripts.policy_config import (  # noqa: E402
     STABLE_MIN_SUCCESS_RATE,
     STABLE_MIN_VERIFY_RATE,
     WINDOW_SIZE,
+    derive_profile_token,
+    derive_session_id,
     default_repl_root,
 )
 from scripts.repl_state import ReplState  # noqa: E402
@@ -33,7 +34,9 @@ class ReplDaemon:
     def __init__(self, root: Path | None = None) -> None:
         resolved_root = root or ROOT
         state_root = Path(os.environ.get("REPL_STATE_ROOT", str(default_repl_root())))
-        self._base_session_id = self._resolve_session_id(resolved_root)
+        self._base_session_id = derive_session_id(
+            os.environ.get("REPL_SESSION_ID"), resolved_root
+        )
         self._state_root = state_root
         self._repl_by_profile: dict[str, ReplState] = {}
         self.pipeline = PipelineEngine(root=resolved_root)
@@ -42,41 +45,59 @@ class ReplDaemon:
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if name == "icc_exec":
-            mode = str(arguments.get("mode", "inline_code"))
-            target_profile = str(arguments.get("target_profile", "default"))
-            candidate_key = self._candidate_key(
-                target_profile=target_profile,
-                intent_signature=str(arguments.get("intent_signature", "")),
-                script_ref=str(arguments.get("script_ref", "")),
-            )
-            sampled_in_policy = self._should_sample(candidate_key)
-            code = self._resolve_exec_code(mode=mode, arguments=arguments)
-            repl = self._get_repl(target_profile)
-            result = repl.exec_code(
-                code,
-                metadata={
-                    "mode": mode,
-                    "target_profile": target_profile,
-                    "intent_signature": arguments.get("intent_signature", ""),
-                    "script_ref": arguments.get("script_ref", ""),
-                },
-                inject_vars={"__args": arguments.get("script_args", {})},
-            )
-            self._record_exec_event(
-                arguments=arguments,
-                result=result,
-                target_profile=target_profile,
-                mode=mode,
-                sampled_in_policy=sampled_in_policy,
-                candidate_key=candidate_key,
-            )
-            return result
+            try:
+                mode = str(arguments.get("mode", "inline_code"))
+                target_profile = str(arguments.get("target_profile", "default"))
+                candidate_key = self._candidate_key(
+                    target_profile=target_profile,
+                    intent_signature=str(arguments.get("intent_signature", "")),
+                    script_ref=str(arguments.get("script_ref", "")),
+                )
+                sampled_in_policy = self._should_sample(candidate_key)
+                code = self._resolve_exec_code(mode=mode, arguments=arguments)
+                repl = self._get_repl(target_profile)
+                result = repl.exec_code(
+                    code,
+                    metadata={
+                        "mode": mode,
+                        "target_profile": target_profile,
+                        "intent_signature": arguments.get("intent_signature", ""),
+                        "script_ref": arguments.get("script_ref", ""),
+                    },
+                    inject_vars={"__args": arguments.get("script_args", {})},
+                )
+                self._record_exec_event(
+                    arguments=arguments,
+                    result=result,
+                    target_profile=target_profile,
+                    mode=mode,
+                    sampled_in_policy=sampled_in_policy,
+                    candidate_key=candidate_key,
+                )
+                return result
+            except Exception as exc:
+                return {
+                    "isError": True,
+                    "content": [{"type": "text", "text": f"icc_exec failed: {exc}"}],
+                }
         if name == "icc_read":
-            result = self.pipeline.run_read(arguments)
-            return {"content": [{"type": "text", "text": json.dumps(result)}]}
+            try:
+                result = self.pipeline.run_read(arguments)
+                return {"content": [{"type": "text", "text": json.dumps(result)}]}
+            except Exception as exc:
+                return {
+                    "isError": True,
+                    "content": [{"type": "text", "text": f"icc_read failed: {exc}"}],
+                }
         if name == "icc_write":
-            result = self.pipeline.run_write(arguments)
-            return {"content": [{"type": "text", "text": json.dumps(result)}]}
+            try:
+                result = self.pipeline.run_write(arguments)
+                return {"content": [{"type": "text", "text": json.dumps(result)}]}
+            except Exception as exc:
+                return {
+                    "isError": True,
+                    "content": [{"type": "text", "text": f"icc_write failed: {exc}"}],
+                }
         return {"isError": True, "content": [{"type": "text", "text": f"Unknown tool: {name}"}]}
 
     def handle_jsonrpc(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -110,25 +131,17 @@ class ReplDaemon:
         }
 
     def _get_repl(self, target_profile: str) -> ReplState:
-        key = target_profile or "default"
-        if key not in self._repl_by_profile:
-            safe_profile = self._sanitize_profile(key)
-            if safe_profile == "default":
+        normalized = (target_profile or "default").strip() or "default"
+        profile_key = "__default__" if normalized == "default" else derive_profile_token(normalized)
+        if profile_key not in self._repl_by_profile:
+            if normalized == "default":
                 session_id = self._base_session_id
             else:
-                session_id = f"{self._base_session_id}__{safe_profile}"
-            self._repl_by_profile[key] = ReplState(state_root=self._state_root, session_id=session_id)
-        return self._repl_by_profile[key]
-
-    @staticmethod
-    def _sanitize_profile(profile: str) -> str:
-        allowed = []
-        for ch in profile:
-            if ch.isalnum() or ch in {".", "-", "_"}:
-                allowed.append(ch)
-            else:
-                allowed.append("_")
-        return "".join(allowed) or "default"
+                session_id = f"{self._base_session_id}__{profile_key}"
+            self._repl_by_profile[profile_key] = ReplState(
+                state_root=self._state_root, session_id=session_id
+            )
+        return self._repl_by_profile[profile_key]
 
     def _resolve_exec_code(self, mode: str, arguments: dict[str, Any]) -> str:
         if mode == "script_ref":
@@ -200,9 +213,11 @@ class ReplDaemon:
                 "degraded_count": 0,
                 "consecutive_failures": 0,
                 "recent_outcomes": [],
+                "total_calls": 0,
                 "last_ts_ms": 0,
             },
         )
+        entry["total_calls"] = int(entry.get("total_calls", 0)) + 1
         if is_error:
             sampled_in_policy = True
         if sampled_in_policy:
@@ -284,7 +299,7 @@ class ReplDaemon:
                 reason = "promotion_threshold_met"
                 pipeline["rollout_pct"] = 20
         elif status == "canary":
-            if consecutive_failures >= 2:
+            if consecutive_failures >= ROLLBACK_CONSECUTIVE_FAILURES:
                 status = "explore"
                 transitioned = True
                 reason = "two_consecutive_failures"
@@ -340,14 +355,6 @@ class ReplDaemon:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
-    def _resolve_session_id(self, resolved_root: Path) -> str:
-        explicit = os.environ.get("REPL_SESSION_ID")
-        if explicit:
-            return explicit
-        project_hash = sha1(str(resolved_root).encode("utf-8")).hexdigest()[:10]
-        project_name = resolved_root.name or "project"
-        return f"{project_name}-{project_hash}"
-
     def _resolve_script_roots(self) -> list[Path]:
         raw = os.environ.get("REPL_SCRIPT_ROOTS", "").strip()
         if raw:
@@ -391,14 +398,14 @@ class ReplDaemon:
             return False
 
         candidates_path = session_dir / "candidates.json"
-        attempts = 0
+        total_calls = 0
         if candidates_path.exists():
             cand = json.loads(candidates_path.read_text(encoding="utf-8"))
             entry = cand.get("candidates", {}).get(candidate_key, {})
             if isinstance(entry, dict):
-                attempts = int(entry.get("attempts", 0))
-        next_attempt = attempts + 1
-        return (next_attempt % 100) < rollout_pct
+                total_calls = int(entry.get("total_calls", 0))
+        next_call = total_calls + 1
+        return ((next_call - 1) % 100) < rollout_pct
 
 
 def run_stdio() -> None:

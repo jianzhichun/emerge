@@ -133,3 +133,16 @@ def test_repl_admin_default_root_is_home_emerge(tmp_path: Path):
     env["REPL_SESSION_ID"] = "default-check"
     out = _run_admin(["status"], env)
     assert out["state_root"] == str(tmp_path / ".emerge" / "repl")
+
+
+def test_repl_admin_policy_status_handles_corrupt_registry(tmp_path: Path):
+    env = os.environ.copy()
+    env["REPL_STATE_ROOT"] = str(tmp_path)
+    env["REPL_SESSION_ID"] = "corrupt"
+    session_dir = tmp_path / "corrupt"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "pipelines-registry.json").write_text("{bad json", encoding="utf-8")
+    out = _run_admin(["policy-status"], env)
+    assert out["registry_exists"] is True
+    assert out["registry_corrupt"] is True
+    assert out["pipeline_count"] == 0

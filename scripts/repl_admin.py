@@ -20,6 +20,7 @@ from scripts.policy_config import (
     STABLE_MIN_ATTEMPTS,
     STABLE_MIN_SUCCESS_RATE,
     STABLE_MIN_VERIFY_RATE,
+    derive_session_id,
     default_repl_root,
 )
 
@@ -29,7 +30,7 @@ def _resolve_state_root() -> Path:
 
 
 def _resolve_session_id() -> str:
-    return os.environ.get("REPL_SESSION_ID", "default")
+    return derive_session_id(os.environ.get("REPL_SESSION_ID"), ROOT)
 
 
 def _session_paths() -> tuple[Path, Path, Path]:
@@ -72,8 +73,13 @@ def cmd_policy_status() -> dict:
     session_dir, _, _ = _session_paths()
     registry_path = session_dir / "pipelines-registry.json"
     pipelines = []
+    registry_corrupt = False
     if registry_path.exists():
-        data = json.loads(registry_path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(registry_path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {"pipelines": {}}
+            registry_corrupt = True
         raw = data.get("pipelines", {})
         if isinstance(raw, dict):
             for key, value in raw.items():
@@ -86,6 +92,7 @@ def cmd_policy_status() -> dict:
         "session_id": _resolve_session_id(),
         "state_root": str(_resolve_state_root()),
         "registry_exists": registry_path.exists(),
+        "registry_corrupt": registry_corrupt,
         "pipeline_count": len(pipelines),
         "thresholds": {
             "promote_min_attempts": PROMOTE_MIN_ATTEMPTS,

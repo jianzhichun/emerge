@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from hashlib import sha1
 from pathlib import Path
 
 PROMOTE_MIN_ATTEMPTS = 20
@@ -25,4 +27,25 @@ def default_repl_root() -> Path:
 
 def default_hook_state_root() -> Path:
     return default_emerge_home() / "hook-state"
+
+
+def stable_token(raw: str, *, max_prefix: int = 48) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", raw).strip("._-") or "token"
+    digest = sha1(raw.encode("utf-8")).hexdigest()[:10]
+    return f"{safe[:max_prefix]}-{digest}"
+
+
+def derive_session_id(explicit: str | None, project_root: Path) -> str:
+    if explicit:
+        if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", explicit):
+            return explicit
+        return stable_token(explicit, max_prefix=56)
+    project_name = project_root.name or "project"
+    project_fingerprint = str(project_root.resolve())
+    base = f"{project_name}-{sha1(project_fingerprint.encode('utf-8')).hexdigest()[:10]}"
+    return stable_token(base, max_prefix=56)
+
+
+def derive_profile_token(profile: str) -> str:
+    return stable_token(profile or "default", max_prefix=56)
 

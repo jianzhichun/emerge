@@ -72,3 +72,29 @@ def test_hook_default_state_dir_uses_home_emerge(tmp_path: Path):
     parsed = json.loads(proc.stdout.strip())
     assert parsed["hookEventName"] == "SessionStart"
     assert (tmp_path / ".emerge" / "hook-state" / "state.json").exists()
+
+
+def test_hooks_tolerate_invalid_json_and_budget(tmp_path: Path):
+    env = os.environ.copy()
+    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+    bad = subprocess.run(
+        ["python3", str(ROOT / "hooks" / "session_start.py")],
+        input="{not json",
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    parsed_bad = json.loads(bad.stdout.strip())
+    assert parsed_bad["hookEventName"] == "SessionStart"
+
+    weird_budget = subprocess.run(
+        ["python3", str(ROOT / "hooks" / "user_prompt_submit.py")],
+        input=json.dumps({"budget_chars": None}),
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    parsed_budget = json.loads(weird_budget.stdout.strip())
+    assert parsed_budget["hookEventName"] == "UserPromptSubmit"

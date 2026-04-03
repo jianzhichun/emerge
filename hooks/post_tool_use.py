@@ -29,7 +29,10 @@ def _classify_level(tool_name: str) -> str:
 
 def main() -> None:
     payload_text = sys.stdin.read().strip()
-    payload = json.loads(payload_text) if payload_text else {}
+    try:
+        payload = json.loads(payload_text) if payload_text else {}
+    except Exception:
+        payload = {}
 
     tool_name = payload.get("tool_name", "")
     result = payload.get("tool_result", {})
@@ -56,7 +59,11 @@ def main() -> None:
     if isinstance(reconcile, dict) and "delta_id" in reconcile and "outcome" in reconcile:
         tracker.reconcile_delta(str(reconcile["delta_id"]), str(reconcile["outcome"]))
 
-    budget_chars = int(payload.get("budget_chars", 0)) or None
+    raw_budget = payload.get("budget_chars", 0)
+    try:
+        budget_chars = int(raw_budget) or None
+    except Exception:
+        budget_chars = None
     context = tracker.format_context(budget_chars=budget_chars)
     save_tracker(state_path, tracker)
 

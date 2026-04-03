@@ -15,7 +15,10 @@ from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
 
 def main() -> None:
     payload_text = sys.stdin.read().strip()
-    payload = json.loads(payload_text) if payload_text else {}
+    try:
+        payload = json.loads(payload_text) if payload_text else {}
+    except Exception:
+        payload = {}
     goal = payload.get("goal", "Initialize Emerge session")
 
     state_path = Path(

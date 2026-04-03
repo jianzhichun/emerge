@@ -79,3 +79,41 @@ def test_wal_replay_tolerates_broken_entries(tmp_path: Path):
     finally:
         os.environ.pop("REPL_STATE_ROOT", None)
         os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_wal_replay_tolerates_invalid_json_lines(tmp_path: Path):
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
+    os.environ["REPL_SESSION_ID"] = "recover-json"
+    try:
+        daemon1 = ReplDaemon(root=ROOT)
+        daemon1.call_tool("icc_exec", {"code": "x = 8"})
+        session_dir = tmp_path / "recover-json"
+        wal = session_dir / "wal.jsonl"
+        wal.write_text(wal.read_text(encoding="utf-8") + "{not valid json}\n", encoding="utf-8")
+
+        daemon2 = ReplDaemon(root=ROOT)
+        out = daemon2.call_tool("icc_exec", {"code": "print(x)"})
+        assert out.get("isError") is not True
+        assert "8" in out["content"][0]["text"]
+        recovery = session_dir / "recovery.json"
+        assert recovery.exists()
+        assert "invalid_wal_json" in recovery.read_text(encoding="utf-8")
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_explicit_session_id_is_contained_under_state_root(tmp_path: Path):
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["REPL_SESSION_ID"] = "../../etc/passwd"
+    try:
+        daemon = ReplDaemon(root=ROOT)
+        daemon.call_tool("icc_exec", {"code": "x = 1"})
+        dirs = [p for p in (tmp_path / "state").iterdir() if p.is_dir()]
+        assert len(dirs) == 1
+        assert dirs[0].parent.resolve() == (tmp_path / "state").resolve()
+        assert ".." not in dirs[0].name
+        assert "/" not in dirs[0].name
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)

@@ -15,7 +15,10 @@ from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
 
 def main() -> None:
     payload_text = sys.stdin.read().strip()
-    payload = json.loads(payload_text) if payload_text else {}
+    try:
+        payload = json.loads(payload_text) if payload_text else {}
+    except Exception:
+        payload = {}
 
     state_path = Path(
         os.environ.get("CLAUDE_PLUGIN_DATA", str(default_hook_state_root()))
@@ -24,7 +27,11 @@ def main() -> None:
     if "goal" in payload:
         tracker.set_goal(str(payload["goal"]))
 
-    budget_chars = int(payload.get("budget_chars", 0)) or None
+    raw_budget = payload.get("budget_chars", 0)
+    try:
+        budget_chars = int(raw_budget) or None
+    except Exception:
+        budget_chars = None
     context = tracker.format_context(budget_chars=budget_chars)
     save_tracker(state_path, tracker)
 

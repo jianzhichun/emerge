@@ -3,9 +3,6 @@ import os
 from pathlib import Path
 import sys
 
-import pytest
-
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -46,11 +43,12 @@ def test_icc_exec_script_ref_rejects_path_outside_allowlist(tmp_path: Path):
     os.environ["REPL_SCRIPT_ROOTS"] = str(tmp_path / "allowed")
     try:
         daemon = ReplDaemon(root=ROOT)
-        with pytest.raises(PermissionError):
-            daemon.call_tool(
-                "icc_exec",
-                {"mode": "script_ref", "script_ref": str(outside)},
-            )
+        out = daemon.call_tool(
+            "icc_exec",
+            {"mode": "script_ref", "script_ref": str(outside)},
+        )
+        assert out["isError"] is True
+        assert "outside allowed roots" in out["content"][0]["text"]
     finally:
         os.environ.pop("REPL_STATE_ROOT", None)
         os.environ.pop("REPL_SESSION_ID", None)
@@ -195,6 +193,45 @@ def test_auto_rolls_back_canary_on_two_consecutive_failures(tmp_path: Path):
         key = "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py"
         assert data["pipelines"][key]["status"] == "explore"
         assert data["pipelines"][key]["last_transition_reason"] == "two_consecutive_failures"
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_canary_sampling_progresses_to_stable(tmp_path: Path):
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["REPL_SESSION_ID"] = "flywheel"
+    try:
+        daemon = ReplDaemon(root=ROOT)
+        for _ in range(20):
+            daemon.call_tool(
+                "icc_exec",
+                {
+                    "mode": "inline_code",
+                    "code": "x = 1",
+                    "target_profile": "mycader-1.zwcad",
+                    "intent_signature": "zwcad.add_wall",
+                    "script_ref": "connectors/cade/actions/zwcad_add_wall.py",
+                    "verify_passed": True,
+                },
+            )
+        for _ in range(140):
+            daemon.call_tool(
+                "icc_exec",
+                {
+                    "mode": "inline_code",
+                    "code": "x = 1",
+                    "target_profile": "mycader-1.zwcad",
+                    "intent_signature": "zwcad.add_wall",
+                    "script_ref": "connectors/cade/actions/zwcad_add_wall.py",
+                    "verify_passed": True,
+                },
+            )
+        reg = tmp_path / "state" / "flywheel" / "pipelines-registry.json"
+        data = json.loads(reg.read_text(encoding="utf-8"))
+        key = "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py"
+        assert data["pipelines"][key]["status"] == "stable"
+        assert data["pipelines"][key]["rollout_pct"] == 100
     finally:
         os.environ.pop("REPL_STATE_ROOT", None)
         os.environ.pop("REPL_SESSION_ID", None)
