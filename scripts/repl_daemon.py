@@ -463,7 +463,7 @@ class ReplDaemon:
                     connector, _, mode, name_yaml = parts
                     name = name_yaml[:-5]
                     uri = f"pipeline://{connector}/{mode}/{name}"
-                    static.append({"uri": uri, "name": f"{connector} {mode} pipeline: {name}", "mimeType": "application/json"})
+                    static.append({"uri": uri, "name": f"{connector} {mode} pipeline: {name}", "mimeType": "application/json", "description": f"Pipeline metadata for {connector}/{mode}/{name}"})
         return static
 
     def _read_resource(self, uri: str) -> dict[str, Any]:
