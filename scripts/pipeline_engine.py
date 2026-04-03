@@ -118,8 +118,8 @@ class PipelineEngine:
             errors.append("rollback_or_stop_policy (must be 'stop' or 'rollback')")
         has_read = isinstance(data.get("read_steps"), list) and len(data["read_steps"]) > 0
         has_write = isinstance(data.get("write_steps"), list) and len(data["write_steps"]) > 0
-        if not has_read and not has_write:
-            errors.append("read_steps or write_steps (at least one required, non-empty list)")
+        if not (has_read ^ has_write):
+            errors.append("read_steps or write_steps (exactly one required, non-empty list)")
         has_verify = isinstance(data.get("verify_steps"), list) and len(data["verify_steps"]) > 0
         if not has_verify:
             errors.append("verify_steps (required, non-empty list)")

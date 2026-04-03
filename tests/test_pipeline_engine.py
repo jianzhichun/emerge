@@ -123,6 +123,15 @@ def test_load_metadata_rejects_missing_steps(tmp_path):
         engine._load_metadata(bad)
 
 
+def test_load_metadata_rejects_both_steps_present(tmp_path):
+    from scripts.pipeline_engine import PipelineEngine
+    bad = tmp_path / "bad.yaml"
+    bad.write_text('{"intent_signature": "s", "rollback_or_stop_policy": "stop", "read_steps": ["x"], "write_steps": ["y"], "verify_steps": ["z"]}')
+    engine = PipelineEngine()
+    with pytest.raises(ValueError, match="read_steps.*write_steps"):
+        engine._load_metadata(bad)
+
+
 def test_load_metadata_rejects_missing_verify_steps(tmp_path):
     from scripts.pipeline_engine import PipelineEngine
     bad = tmp_path / "bad.yaml"
