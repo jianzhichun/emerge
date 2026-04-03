@@ -24,7 +24,7 @@ class LocalJSONLSink:
         fd, tmp = tempfile.mkstemp(prefix=".metrics-", suffix=".jsonl", dir=str(self._path.parent))
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                if self._path.exists():
+                if self._path.exists() and self._path.stat().st_size > 0:
                     f.write(self._path.read_text(encoding="utf-8"))
                 f.write(line)
                 f.flush()

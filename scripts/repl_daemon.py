@@ -82,10 +82,13 @@ class ReplDaemon:
         if len(parts) != 3:
             return None
         connector, mode, name = parts
-        if mode == "write":
-            result = self.pipeline.run_write({**arguments, "connector": connector, "pipeline": name})
-        else:
-            result = self.pipeline.run_read({**arguments, "connector": connector, "pipeline": name})
+        try:
+            if mode == "write":
+                result = self.pipeline.run_write({**arguments, "connector": connector, "pipeline": name})
+            else:
+                result = self.pipeline.run_read({**arguments, "connector": connector, "pipeline": name})
+        except Exception:
+            return None
         result["l15_promoted"] = True
         try:
             self._sink.emit("l15.promoted", {"key": key, "pipeline_id": base_pipeline_id})
@@ -249,12 +252,12 @@ class ReplDaemon:
             tracker.reconcile_delta(delta_id, outcome)
             save_tracker(state_path, tracker)
             td = tracker.to_dict()
-            return {
+            return {"isError": False, "content": [{"type": "text", "text": json.dumps({
                 "delta_id": delta_id,
                 "outcome": outcome,
                 "verification_state": td.get("verification_state", "unverified"),
                 "goal": td.get("goal", ""),
-            }
+            })}]}
         return {"isError": True, "content": [{"type": "text", "text": f"Unknown tool: {name}"}]}
 
     def handle_jsonrpc(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -288,8 +291,8 @@ class ReplDaemon:
             return {"jsonrpc": "2.0", "id": req_id, "result": {}}
 
         if method.startswith("notifications/"):
-            # CC may send notifications (e.g. cancelled); acknowledge silently
-            return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+            # MCP notifications are one-way; do NOT send a response
+            return None
 
         if method == "tools/list":
             return {
@@ -1009,7 +1012,10 @@ class ReplDaemon:
     def _load_json_object(path: Path, *, root_key: str) -> dict[str, Any]:
         if not path.exists():
             return {root_key: {}}
-        data = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {root_key: {}}
         if not isinstance(data, dict):
             raise ValueError(f"{path.name} must be a JSON object")
         if root_key not in data or not isinstance(data[root_key], dict):
@@ -1032,8 +1038,9 @@ def run_stdio() -> None:
                 "id": None,
                 "error": {"code": -32603, "message": str(exc)},
             }
-        sys.stdout.write(json.dumps(resp) + "\n")
-        sys.stdout.flush()
+        if resp is not None:
+            sys.stdout.write(json.dumps(resp) + "\n")
+            sys.stdout.flush()
 
 
 if __name__ == "__main__":

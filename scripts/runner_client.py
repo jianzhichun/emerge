@@ -23,6 +23,14 @@ class RetryConfig:
     base_delay_s: float = 0.5
     max_delay_s: float = 10.0
 
+    def __post_init__(self) -> None:
+        if self.max_attempts < 1:
+            raise ValueError(f"RetryConfig.max_attempts must be >= 1, got {self.max_attempts}")
+        if self.base_delay_s < 0:
+            raise ValueError(f"RetryConfig.base_delay_s must be >= 0, got {self.base_delay_s}")
+        if self.max_delay_s < self.base_delay_s:
+            raise ValueError(f"RetryConfig.max_delay_s must be >= base_delay_s")
+
 
 @dataclass
 class RunnerClient:

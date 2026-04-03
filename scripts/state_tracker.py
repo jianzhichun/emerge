@@ -48,6 +48,7 @@ class StateTracker:
         verification_state: str = "verified",
         provisional: bool = False,
     ) -> str:
+        message = str(message).strip() or "(no message)"
         delta_id = f"d-{int(time.time() * 1000)}-{len(self.state['deltas'])}"
         self.state["deltas"].append(
             {
@@ -70,14 +71,15 @@ class StateTracker:
         self.add_risk(reason)
 
     def reconcile_delta(self, delta_id: str, outcome: str) -> None:
+        if outcome not in {"confirm", "correct", "retract"}:
+            raise ValueError(f"reconcile_delta: outcome must be confirm/correct/retract, got {outcome!r}")
         for delta in self.state["deltas"]:
             if delta["id"] == delta_id:
                 delta["provisional"] = False
-                if outcome in {"confirm", "correct", "retract"}:
-                    delta["reconcile_outcome"] = outcome
-                    if outcome == "retract":
-                        delta["verification_state"] = "degraded"
-                        self.state["verification_state"] = "degraded"
+                delta["reconcile_outcome"] = outcome
+                if outcome == "retract":
+                    delta["verification_state"] = "degraded"
+                    self.state["verification_state"] = "degraded"
                 break
 
     def can_auto_chain_high_risk_write(self) -> bool:

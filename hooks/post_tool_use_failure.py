@@ -30,8 +30,8 @@ def main() -> None:
         tracker = load_tracker(state_path)
         tracker.mark_degraded(f"Tool failure: {tool_name} — {error_text[:120]}")
         save_tracker(state_path, tracker)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"post_tool_use_failure: tracker update failed: {exc}", file=sys.stderr)
 
     out = {
         "hookSpecificOutput": {

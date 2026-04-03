@@ -504,7 +504,9 @@ def test_icc_reconcile_confirms_delta(tmp_path):
 
         # Now reconcile it
         daemon = ReplDaemon(root=ROOT)
-        result = daemon.call_tool("icc_reconcile", {"delta_id": delta_id, "outcome": "confirm"})
+        raw = daemon.call_tool("icc_reconcile", {"delta_id": delta_id, "outcome": "confirm"})
+        assert raw["isError"] is False
+        result = json.loads(raw["content"][0]["text"])
         assert result["delta_id"] == delta_id
         assert result["outcome"] == "confirm"
         assert "verification_state" in result

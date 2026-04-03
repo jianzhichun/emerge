@@ -121,8 +121,16 @@ def _validate_settings(s: dict) -> None:
         if key in policy and not isinstance(policy[key], (int, float)):
             raise ValueError(f"settings.policy.{key} must be a number, got {policy[key]!r}")
     runner = s.get("runner", {})
-    if "timeout_s" in runner and not isinstance(runner["timeout_s"], (int, float)):
-        raise ValueError(f"settings.runner.timeout_s must be a number")
+    if not isinstance(runner, dict):
+        raise ValueError(f"settings.runner must be an object, got {type(runner).__name__}")
+    if "timeout_s" in runner and (not isinstance(runner["timeout_s"], (int, float)) or isinstance(runner["timeout_s"], bool)):
+        raise ValueError("settings.runner.timeout_s must be a number")
+    if "retry_max_attempts" in runner and (not isinstance(runner["retry_max_attempts"], int) or isinstance(runner["retry_max_attempts"], bool) or runner["retry_max_attempts"] < 1):
+        raise ValueError("settings.runner.retry_max_attempts must be a positive integer")
+    if "retry_base_delay_s" in runner and (not isinstance(runner["retry_base_delay_s"], (int, float)) or isinstance(runner["retry_base_delay_s"], bool) or runner["retry_base_delay_s"] < 0):
+        raise ValueError("settings.runner.retry_base_delay_s must be a non-negative number")
+    if "retry_max_delay_s" in runner and (not isinstance(runner["retry_max_delay_s"], (int, float)) or isinstance(runner["retry_max_delay_s"], bool) or runner["retry_max_delay_s"] < 0):
+        raise ValueError("settings.runner.retry_max_delay_s must be a non-negative number")
     sink = s.get("metrics_sink", "local_jsonl")
     if sink not in ("local_jsonl", "null"):
         raise ValueError(f"settings.metrics_sink must be 'local_jsonl' or 'null', got {sink!r}")
