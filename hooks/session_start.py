@@ -17,7 +17,9 @@ def main() -> None:
     payload = json.loads(payload_text) if payload_text else {}
     goal = payload.get("goal", "Initialize Emerge session")
 
-    state_path = Path(os.environ.get("CLAUDE_PLUGIN_DATA", ".plugin-data")) / "state.json"
+    state_path = Path(
+        os.environ.get("CLAUDE_PLUGIN_DATA", str(Path.home() / ".emerge" / "hook-state"))
+    ) / "state.json"
     tracker = load_tracker(state_path)
     tracker.set_goal(goal)
     save_tracker(state_path, tracker)

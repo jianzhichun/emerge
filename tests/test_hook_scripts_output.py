@@ -55,3 +55,20 @@ def test_post_tool_use_and_pre_compact_contract(tmp_path: Path):
     )
     text = proc.stdout.strip()
     assert text.startswith("Keep only Goal")
+
+
+def test_hook_default_state_dir_uses_home_emerge(tmp_path: Path):
+    env = os.environ.copy()
+    env.pop("CLAUDE_PLUGIN_DATA", None)
+    env["HOME"] = str(tmp_path)
+    proc = subprocess.run(
+        ["python3", str(ROOT / "hooks" / "session_start.py")],
+        input=json.dumps({"goal": "home default"}),
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    parsed = json.loads(proc.stdout.strip())
+    assert parsed["hookEventName"] == "SessionStart"
+    assert (tmp_path / ".emerge" / "hook-state" / "state.json").exists()

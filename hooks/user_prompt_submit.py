@@ -16,7 +16,9 @@ def main() -> None:
     payload_text = sys.stdin.read().strip()
     payload = json.loads(payload_text) if payload_text else {}
 
-    state_path = Path(os.environ.get("CLAUDE_PLUGIN_DATA", ".plugin-data")) / "state.json"
+    state_path = Path(
+        os.environ.get("CLAUDE_PLUGIN_DATA", str(Path.home() / ".emerge" / "hook-state"))
+    ) / "state.json"
     tracker = load_tracker(state_path)
     if "goal" in payload:
         tracker.set_goal(str(payload["goal"]))

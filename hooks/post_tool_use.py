@@ -32,7 +32,9 @@ def main() -> None:
 
     tool_name = payload.get("tool_name", "")
     result = payload.get("tool_result", {})
-    state_path = Path(os.environ.get("CLAUDE_PLUGIN_DATA", ".plugin-data")) / "state.json"
+    state_path = Path(
+        os.environ.get("CLAUDE_PLUGIN_DATA", str(Path.home() / ".emerge" / "hook-state"))
+    ) / "state.json"
     tracker = load_tracker(state_path)
 
     message = payload.get("delta_message") or f"Tool used: {tool_name or 'unknown'}"

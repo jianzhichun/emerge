@@ -57,3 +57,11 @@ def test_tools_call_routes_exec_read_write_in_same_runtime():
     )
     write_obj = json.loads(write["result"]["content"][0]["text"])
     assert write_obj["verification_state"] == "verified"
+
+
+def test_tools_list_does_not_expose_admin_state_operations():
+    daemon = ReplDaemon(root=ROOT)
+    listed = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 99, "method": "tools/list", "params": {}})
+    names = [t["name"] for t in listed["result"]["tools"]]
+    assert "icc_state_status" not in names
+    assert "icc_state_clear" not in names
