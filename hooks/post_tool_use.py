@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.state_tracker import (  # noqa: E402
+    LEVEL_CORE_CRITICAL,
+    LEVEL_CORE_SECONDARY,
+    LEVEL_PERIPHERAL,
+    load_tracker,
+    save_tracker,
+)
+
+
+def _classify_level(tool_name: str) -> str:
+    if tool_name.endswith("__icc_write"):
+        return LEVEL_CORE_CRITICAL
+    if tool_name.endswith("__icc_read"):
+        return LEVEL_CORE_SECONDARY
+    return LEVEL_PERIPHERAL
+
+
+def main() -> None:
+    payload_text = sys.stdin.read().strip()
+    payload = json.loads(payload_text) if payload_text else {}
+
+    tool_name = payload.get("tool_name", "")
+    result = payload.get("tool_result", {})
+    state_path = Path(os.environ.get("CLAUDE_PLUGIN_DATA", ".plugin-data")) / "state.json"
+    tracker = load_tracker(state_path)
+
+    message = payload.get("delta_message") or f"Tool used: {tool_name or 'unknown'}"
+    level = _classify_level(tool_name)
+    provisional = bool(payload.get("provisional", False))
+    verification_state = result.get("verification_state", "verified")
+    delta_id = tracker.add_delta(
+        message=message,
+        level=level,
+        verification_state=verification_state,
+        provisional=provisional,
+    )
+
+    if payload.get("mismatch_reason"):
+        tracker.mark_degraded(str(payload["mismatch_reason"]))
+
+    reconcile = payload.get("reconcile")
+    if isinstance(reconcile, dict) and "delta_id" in reconcile and "outcome" in reconcile:
+        tracker.reconcile_delta(str(reconcile["delta_id"]), str(reconcile["outcome"]))
+
+    budget_chars = int(payload.get("budget_chars", 0)) or None
+    context = tracker.format_context(budget_chars=budget_chars)
+    save_tracker(state_path, tracker)
+
+    output = {
+        "hookEventName": "PostToolUse",
+        "hookSpecificOutput": {
+            "additionalContext": (
+                f"Goal\n{context['Goal']}\n\n"
+                f"Delta\n{context['Delta']}\n\n"
+                f"Open Risks\n{context['Open Risks']}"
+            )
+        },
+        "delta_id": delta_id,
+    }
+    if "tool_result" in payload:
+        output["updatedMCPToolOutput"] = payload["tool_result"]
+    print(json.dumps(output))
+
+
+if __name__ == "__main__":
+    main()

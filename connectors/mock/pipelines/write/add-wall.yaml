@@ -1,0 +1,6 @@
+{
+  "intent_signature": "write.mock.add-wall",
+  "write_steps": ["append_wall"],
+  "verify_steps": ["read_back_wall"],
+  "rollback_or_stop_policy": "stop"
+}

@@ -1,0 +1,8 @@
+{
+  "name": "emerge",
+  "version": "0.1.0",
+  "description": "Minimal Emerge Claude Code plugin foundation",
+  "author": {
+    "name": "Emerge"
+  }
+}

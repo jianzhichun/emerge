@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": ".*",
+        "command": "python3 hooks/session_start.py"
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": ".*",
+        "command": "python3 hooks/user_prompt_submit.py"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__plugin_.*emerge.*__icc_(read|write|exec)",
+        "command": "python3 hooks/post_tool_use.py"
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": ".*",
+        "command": "python3 hooks/pre_compact.py"
+      }
+    ]
+  }
+}

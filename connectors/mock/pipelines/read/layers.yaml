@@ -1,0 +1,6 @@
+{
+  "intent_signature": "read.mock.layers",
+  "read_steps": ["load_layers"],
+  "verify_steps": ["shape_check"],
+  "rollback_or_stop_policy": "stop"
+}
