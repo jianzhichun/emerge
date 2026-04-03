@@ -21,16 +21,27 @@ def _run(script: str, payload: dict, data_dir: Path) -> str:
     return proc.stdout.strip()
 
 
+def _extract_l15_token(additional_context: str) -> dict:
+    marker = "L1_5_TOKEN\n"
+    assert marker in additional_context
+    token_text = additional_context.rsplit(marker, 1)[1].strip()
+    return json.loads(token_text)
+
+
 def test_session_start_and_user_prompt_submit_output_parseable(tmp_path: Path):
     s_out = _run("session_start.py", {"goal": "Test goal"}, tmp_path)
     s_json = json.loads(s_out)
-    assert s_json["hookEventName"] == "SessionStart"
+    assert s_json["hookSpecificOutput"]["hookEventName"] == "SessionStart"
     assert "additionalContext" in s_json["hookSpecificOutput"]
 
     u_out = _run("user_prompt_submit.py", {"budget_chars": 120}, tmp_path)
     u_json = json.loads(u_out)
-    assert u_json["hookEventName"] == "UserPromptSubmit"
+    assert u_json["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
     assert "Goal" in u_json["hookSpecificOutput"]["additionalContext"]
+    token = _extract_l15_token(u_json["hookSpecificOutput"]["additionalContext"])
+    assert token["schema_version"] == "l15.v1"
+    assert "deltas" in token
+    assert token["goal_source"] in {"unset", "hook_payload"}
 
 
 def test_post_tool_use_and_pre_compact_contract(tmp_path: Path):
@@ -44,8 +55,11 @@ def test_post_tool_use_and_pre_compact_contract(tmp_path: Path):
         tmp_path,
     )
     p_json = json.loads(p_out)
-    assert p_json["hookEventName"] == "PostToolUse"
+    assert p_json["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
     assert "additionalContext" in p_json["hookSpecificOutput"]
+    token = _extract_l15_token(p_json["hookSpecificOutput"]["additionalContext"])
+    assert token["schema_version"] == "l15.v1"
+    assert token["deltas"]
 
     proc = subprocess.run(
         ["python3", str(ROOT / "hooks" / "pre_compact.py")],
@@ -70,7 +84,7 @@ def test_hook_default_state_dir_uses_home_emerge(tmp_path: Path):
         check=True,
     )
     parsed = json.loads(proc.stdout.strip())
-    assert parsed["hookEventName"] == "SessionStart"
+    assert parsed["hookSpecificOutput"]["hookEventName"] == "SessionStart"
     assert (tmp_path / ".emerge" / "hook-state" / "state.json").exists()
 
 
@@ -86,7 +100,7 @@ def test_hooks_tolerate_invalid_json_and_budget(tmp_path: Path):
         check=True,
     )
     parsed_bad = json.loads(bad.stdout.strip())
-    assert parsed_bad["hookEventName"] == "SessionStart"
+    assert parsed_bad["hookSpecificOutput"]["hookEventName"] == "SessionStart"
 
     weird_budget = subprocess.run(
         ["python3", str(ROOT / "hooks" / "user_prompt_submit.py")],
@@ -97,7 +111,7 @@ def test_hooks_tolerate_invalid_json_and_budget(tmp_path: Path):
         check=True,
     )
     parsed_budget = json.loads(weird_budget.stdout.strip())
-    assert parsed_budget["hookEventName"] == "UserPromptSubmit"
+    assert parsed_budget["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
 
 
 def test_post_tool_use_tolerates_non_object_tool_result(tmp_path: Path):
@@ -111,5 +125,23 @@ def test_post_tool_use_tolerates_non_object_tool_result(tmp_path: Path):
         tmp_path,
     )
     parsed = json.loads(out)
-    assert parsed["hookEventName"] == "PostToolUse"
+    assert parsed["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
     assert "additionalContext" in parsed["hookSpecificOutput"]
+
+
+def test_session_start_without_goal_does_not_write_default_goal(tmp_path: Path):
+    out = _run("session_start.py", {}, tmp_path)
+    parsed = json.loads(out)
+    token = _extract_l15_token(parsed["hookSpecificOutput"]["additionalContext"])
+    assert token["goal"] == ""
+    assert token["goal_source"] == "unset"
+
+
+def test_goal_is_capped_and_source_marked(tmp_path: Path):
+    long_goal = "g" * 500
+    _run("session_start.py", {"goal": long_goal}, tmp_path)
+    out = _run("user_prompt_submit.py", {}, tmp_path)
+    parsed = json.loads(out)
+    token = _extract_l15_token(parsed["hookSpecificOutput"]["additionalContext"])
+    assert len(token["goal"]) == 120
+    assert token["goal_source"] == "hook_payload"

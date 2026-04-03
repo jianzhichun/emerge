@@ -20,13 +20,15 @@ from scripts.policy_config import (
     STABLE_MIN_ATTEMPTS,
     STABLE_MIN_SUCCESS_RATE,
     STABLE_MIN_VERIFY_RATE,
+    derive_profile_token,
     derive_session_id,
+    default_hook_state_root,
     default_repl_root,
 )
 
 
 def _resolve_state_root() -> Path:
-    return Path(os.environ.get("REPL_STATE_ROOT", str(default_repl_root())))
+    return Path(os.environ.get("REPL_STATE_ROOT", str(default_repl_root()))).expanduser().resolve()
 
 
 def _resolve_session_id() -> str:
@@ -36,8 +38,29 @@ def _resolve_session_id() -> str:
 def _session_paths() -> tuple[Path, Path, Path]:
     state_root = _resolve_state_root()
     session_id = _resolve_session_id()
+    target_profile = str(os.environ.get("REPL_TARGET_PROFILE", "default")).strip() or "default"
+    if target_profile != "default":
+        profile_key = derive_profile_token(target_profile)
+        session_id = f"{session_id}__{profile_key}"
     session_dir = state_root / session_id
     return session_dir, session_dir / "wal.jsonl", session_dir / "checkpoint.json"
+
+
+def _load_hook_state_summary() -> dict[str, str]:
+    state_path = Path(
+        os.environ.get("CLAUDE_PLUGIN_DATA", str(default_hook_state_root()))
+    ) / "state.json"
+    if not state_path.exists():
+        return {"goal": "", "goal_source": "unset"}
+    try:
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"goal": "", "goal_source": "unset"}
+    if not isinstance(data, dict):
+        return {"goal": "", "goal_source": "unset"}
+    goal = str(data.get("goal", "") or "")
+    goal_source = str(data.get("goal_source", "unset") or "unset")
+    return {"goal": goal, "goal_source": goal_source}
 
 
 def cmd_status() -> dict:
@@ -88,11 +111,14 @@ def cmd_policy_status() -> dict:
                 item = {"key": key, **value}
                 pipelines.append(item)
     pipelines.sort(key=lambda x: (str(x.get("status", "")), str(x.get("key", ""))))
+    hook_summary = _load_hook_state_summary()
     return {
         "session_id": _resolve_session_id(),
         "state_root": str(_resolve_state_root()),
         "registry_exists": registry_path.exists(),
         "registry_corrupt": registry_corrupt,
+        "goal": hook_summary["goal"],
+        "goal_source": hook_summary["goal_source"],
         "pipeline_count": len(pipelines),
         "thresholds": {
             "promote_min_attempts": PROMOTE_MIN_ATTEMPTS,
@@ -112,6 +138,8 @@ def render_policy_status_pretty(data: dict) -> str:
     lines: list[str] = []
     lines.append(f"Session: {data.get('session_id', '')}")
     lines.append(f"State root: {data.get('state_root', '')}")
+    lines.append(f"Goal: {data.get('goal', '')}")
+    lines.append(f"Goal source: {data.get('goal_source', 'unset')}")
     lines.append("")
     lines.append("Thresholds:")
     thresholds = data.get("thresholds", {})
@@ -131,6 +159,10 @@ def render_policy_status_pretty(data: dict) -> str:
             lines.append(f"  verify_rate: {item.get('verify_rate', 0)}")
             lines.append(f"  human_fix_rate: {item.get('human_fix_rate', 0)}")
             lines.append(f"  consecutive_failures: {item.get('consecutive_failures', 0)}")
+            lines.append(f"  policy_enforced_count: {item.get('policy_enforced_count', 0)}")
+            lines.append(f"  stop_triggered_count: {item.get('stop_triggered_count', 0)}")
+            lines.append(f"  rollback_executed_count: {item.get('rollback_executed_count', 0)}")
+            lines.append(f"  last_policy_action: {item.get('last_policy_action', 'none')}")
             lines.append(f"  transition_reason: {item.get('last_transition_reason', '')}")
     return "\n".join(lines) + "\n"
 

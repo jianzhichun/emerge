@@ -62,25 +62,22 @@ def main() -> None:
 
     raw_budget = payload.get("budget_chars", 0)
     try:
-        budget_chars = int(raw_budget) or None
+        budget_chars = int(raw_budget)
+        if budget_chars <= 0:
+            budget_chars = None
     except Exception:
         budget_chars = None
-    context = tracker.format_context(budget_chars=budget_chars)
+    context_text = tracker.format_additional_context(budget_chars=budget_chars)
     save_tracker(state_path, tracker)
 
     output = {
-        "hookEventName": "PostToolUse",
         "hookSpecificOutput": {
-            "additionalContext": (
-                f"Goal\n{context['Goal']}\n\n"
-                f"Delta\n{context['Delta']}\n\n"
-                f"Open Risks\n{context['Open Risks']}"
-            )
-        },
-        "delta_id": delta_id,
+            "hookEventName": "PostToolUse",
+            "additionalContext": context_text,
+        }
     }
-    if "tool_result" in payload:
-        output["updatedMCPToolOutput"] = payload["tool_result"]
+    if isinstance(payload.get("tool_result"), dict):
+        output["hookSpecificOutput"]["updatedMCPToolOutput"] = payload["tool_result"]
     print(json.dumps(output))
 
 

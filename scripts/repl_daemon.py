@@ -48,10 +48,9 @@ class ReplDaemon:
             try:
                 mode = str(arguments.get("mode", "inline_code"))
                 target_profile = str(arguments.get("target_profile", "default"))
-                candidate_key = self._candidate_key(
+                candidate_key = self._resolve_exec_candidate_key(
+                    arguments=arguments,
                     target_profile=target_profile,
-                    intent_signature=str(arguments.get("intent_signature", "")),
-                    script_ref=str(arguments.get("script_ref", "")),
                 )
                 sampled_in_policy = self._should_sample(candidate_key)
                 code = self._resolve_exec_code(mode=mode, arguments=arguments)
@@ -86,8 +85,31 @@ class ReplDaemon:
         if name == "icc_read":
             try:
                 result = self.pipeline.run_read(arguments)
-                return {"isError": False, "content": [{"type": "text", "text": json.dumps(result)}]}
+                response = {
+                    "isError": False,
+                    "content": [{"type": "text", "text": json.dumps(result)}],
+                }
+                try:
+                    self._record_pipeline_event(
+                        tool_name=name,
+                        arguments=arguments,
+                        result=result,
+                        is_error=False,
+                    )
+                except Exception as exc:
+                    self._append_warning_text(response, f"policy bookkeeping failed: {exc}")
+                return response
             except Exception as exc:
+                try:
+                    self._record_pipeline_event(
+                        tool_name=name,
+                        arguments=arguments,
+                        result={},
+                        is_error=True,
+                        error_text=str(exc),
+                    )
+                except Exception:
+                    pass
                 return {
                     "isError": True,
                     "content": [{"type": "text", "text": f"icc_read failed: {exc}"}],
@@ -95,8 +117,31 @@ class ReplDaemon:
         if name == "icc_write":
             try:
                 result = self.pipeline.run_write(arguments)
-                return {"isError": False, "content": [{"type": "text", "text": json.dumps(result)}]}
+                response = {
+                    "isError": False,
+                    "content": [{"type": "text", "text": json.dumps(result)}],
+                }
+                try:
+                    self._record_pipeline_event(
+                        tool_name=name,
+                        arguments=arguments,
+                        result=result,
+                        is_error=False,
+                    )
+                except Exception as exc:
+                    self._append_warning_text(response, f"policy bookkeeping failed: {exc}")
+                return response
             except Exception as exc:
+                try:
+                    self._record_pipeline_event(
+                        tool_name=name,
+                        arguments=arguments,
+                        result={},
+                        is_error=True,
+                        error_text=str(exc),
+                    )
+                except Exception:
+                    pass
                 return {
                     "isError": True,
                     "content": [{"type": "text", "text": f"icc_write failed: {exc}"}],
@@ -106,7 +151,9 @@ class ReplDaemon:
     def handle_jsonrpc(self, request: dict[str, Any]) -> dict[str, Any]:
         req_id = request.get("id")
         method = request.get("method", "")
-        params = request.get("params", {})
+        params = request.get("params") or {}
+        if not isinstance(params, dict):
+            params = {}
 
         if method == "tools/list":
             return {
@@ -124,6 +171,8 @@ class ReplDaemon:
         if method == "tools/call":
             name = params.get("name", "")
             arguments = params.get("arguments", {}) or {}
+            if not isinstance(arguments, dict):
+                arguments = {}
             result = self.call_tool(name, arguments)
             return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
@@ -176,14 +225,19 @@ class ReplDaemon:
         is_error = bool(result.get("isError"))
         intent_signature = str(arguments.get("intent_signature", ""))
         script_ref = str(arguments.get("script_ref", ""))
+        base_pipeline_id = str(arguments.get("base_pipeline_id", "")).strip()
+        trusted_verify_passed = not is_error
+        trusted_human_fix = False
         event = {
             "ts_ms": int(time.time() * 1000),
+            "source": "exec",
             "mode": mode,
             "target_profile": target_profile,
             "intent_signature": intent_signature,
             "script_ref": script_ref,
-            "verify_passed": bool(arguments.get("verify_passed", False)),
-            "human_fix": bool(arguments.get("human_fix", False)),
+            "base_pipeline_id": base_pipeline_id,
+            "verify_passed": trusted_verify_passed,
+            "human_fix": trusted_human_fix,
             "is_error": is_error,
             "sampled_in_policy": sampled_in_policy,
         }
@@ -203,6 +257,7 @@ class ReplDaemon:
         entry = registry["candidates"].get(
             key,
             {
+                "source": "exec",
                 "target_profile": target_profile,
                 "intent_signature": intent_signature,
                 "script_ref": script_ref or "<inline>",
@@ -224,11 +279,123 @@ class ReplDaemon:
             entry["attempts"] += 1
             if not is_error:
                 entry["successes"] += 1
+            if trusted_verify_passed:
+                entry["verify_passes"] += 1
+            if trusted_human_fix:
+                entry["human_fixes"] += 1
+        is_degraded = False
+        failed_attempt = (is_error or is_degraded) and sampled_in_policy
+        if sampled_in_policy and is_degraded:
+            entry["degraded_count"] += 1
+        if sampled_in_policy:
+            entry["consecutive_failures"] = (
+                int(entry.get("consecutive_failures", 0)) + 1 if failed_attempt else 0
+            )
+            recent = list(entry.get("recent_outcomes", []))
+            recent.append(0 if failed_attempt else 1)
+            entry["recent_outcomes"] = recent[-WINDOW_SIZE:]
+        entry["last_ts_ms"] = event["ts_ms"]
+        registry["candidates"][key] = entry
+
+        self._atomic_write_json(registry_path, registry)
+        self._update_pipeline_registry(session_dir=session_dir, candidate_key=key, entry=entry)
+
+    def _record_pipeline_event(
+        self,
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+        result: dict[str, Any],
+        is_error: bool,
+        error_text: str = "",
+    ) -> None:
+        session_dir = self._state_root / self._base_session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        connector = str(arguments.get("connector", "mock"))
+        mode = "read" if tool_name == "icc_read" else "write"
+        pipeline = str(arguments.get("pipeline", "layers" if mode == "read" else "add-wall"))
+        pipeline_id = str(result.get("pipeline_id", f"{connector}.{mode}.{pipeline}"))
+        intent_signature = str(result.get("intent_signature", ""))
+        target_profile = str(arguments.get("target_profile", "default"))
+        verify_passed = str(result.get("verification_state", "")).lower() == "verified"
+        trusted_human_fix = False
+        key = self._resolve_pipeline_candidate_key(arguments=arguments, pipeline_id=pipeline_id)
+        sampled_in_policy = self._should_sample(key)
+        if is_error:
+            sampled_in_policy = True
+
+        event = {
+            "ts_ms": int(time.time() * 1000),
+            "source": "pipeline",
+            "tool_name": tool_name,
+            "pipeline_id": pipeline_id,
+            "target_profile": target_profile,
+            "intent_signature": intent_signature,
+            "script_ref": pipeline_id,
+            "verify_passed": verify_passed,
+            "human_fix": trusted_human_fix,
+            "is_error": is_error,
+            "sampled_in_policy": sampled_in_policy,
+            "error": error_text,
+        }
+
+        events_path = session_dir / "pipeline-events.jsonl"
+        with events_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=True) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+
+        registry_path = session_dir / "candidates.json"
+        registry = self._load_json_object(registry_path, root_key="candidates")
+        entry = registry["candidates"].get(
+            key,
+            {
+                "source": "l15_composed" if key.startswith("l15::") else "pipeline",
+                "pipeline_id": pipeline_id,
+                "target_profile": target_profile,
+                "intent_signature": intent_signature or pipeline_id,
+                "script_ref": pipeline_id,
+                "attempts": 0,
+                "successes": 0,
+                "verify_passes": 0,
+                "human_fixes": 0,
+                "degraded_count": 0,
+                "consecutive_failures": 0,
+                "recent_outcomes": [],
+                "total_calls": 0,
+                "policy_enforced_count": 0,
+                "stop_triggered_count": 0,
+                "rollback_executed_count": 0,
+                "last_policy_action": "none",
+                "last_ts_ms": 0,
+            },
+        )
+        policy_enforced = bool(result.get("policy_enforced", False))
+        stop_triggered = bool(result.get("stop_triggered", False))
+        rollback_executed = bool(result.get("rollback_executed", False))
+        if policy_enforced:
+            entry["policy_enforced_count"] = int(entry.get("policy_enforced_count", 0)) + 1
+        if stop_triggered:
+            entry["stop_triggered_count"] = int(entry.get("stop_triggered_count", 0)) + 1
+        if rollback_executed:
+            entry["rollback_executed_count"] = int(entry.get("rollback_executed_count", 0)) + 1
+        if rollback_executed:
+            entry["last_policy_action"] = "rollback"
+        elif stop_triggered:
+            entry["last_policy_action"] = "stop"
+        else:
+            entry["last_policy_action"] = "none"
+        entry["total_calls"] = int(entry.get("total_calls", 0)) + 1
+        if sampled_in_policy:
+            entry["attempts"] += 1
+            if not is_error:
+                entry["successes"] += 1
             if event["verify_passed"]:
                 entry["verify_passes"] += 1
-            if event["human_fix"]:
+            if trusted_human_fix:
                 entry["human_fixes"] += 1
-        is_degraded = str(arguments.get("verification_state", "")).lower() == "degraded"
+        is_degraded = str(result.get("verification_state", "")).lower() == "degraded"
         failed_attempt = (is_error or is_degraded) and sampled_in_policy
         if sampled_in_policy and is_degraded:
             entry["degraded_count"] += 1
@@ -330,6 +497,10 @@ class ReplDaemon:
         pipeline["human_fix_rate"] = round(human_fix_rate, 4)
         pipeline["consecutive_failures"] = consecutive_failures
         pipeline["window_success_rate"] = round(window_success_rate, 4)
+        pipeline["policy_enforced_count"] = int(entry.get("policy_enforced_count", 0))
+        pipeline["stop_triggered_count"] = int(entry.get("stop_triggered_count", 0))
+        pipeline["rollback_executed_count"] = int(entry.get("rollback_executed_count", 0))
+        pipeline["last_policy_action"] = str(entry.get("last_policy_action", "none"))
         pipeline["updated_at_ms"] = int(time.time() * 1000)
         if transitioned:
             pipeline["last_transition_reason"] = reason
@@ -347,8 +518,9 @@ class ReplDaemon:
                 tmp.flush()
                 os.fsync(tmp.fileno())
             os.replace(tmp_path, path)
+            tmp_path = ""
         finally:
-            if os.path.exists(tmp_path):
+            if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
     def _resolve_script_roots(self) -> list[Path]:
@@ -374,6 +546,33 @@ class ReplDaemon:
     @staticmethod
     def _candidate_key(*, target_profile: str, intent_signature: str, script_ref: str) -> str:
         return f"{target_profile}::{intent_signature}::{script_ref or '<inline>'}"
+
+    @staticmethod
+    def _pipeline_candidate_key(pipeline_id: str) -> str:
+        return f"pipeline::{pipeline_id}"
+
+    @staticmethod
+    def _l15_candidate_key(pipeline_id: str, intent_signature: str, script_ref: str) -> str:
+        return f"l15::{pipeline_id}::{intent_signature}::{script_ref}"
+
+    def _resolve_exec_candidate_key(self, *, arguments: dict[str, Any], target_profile: str) -> str:
+        intent_signature = str(arguments.get("intent_signature", "")).strip()
+        script_ref = str(arguments.get("script_ref", "")).strip() or "<inline>"
+        base_pipeline_id = str(arguments.get("base_pipeline_id", "")).strip()
+        if base_pipeline_id and intent_signature:
+            return self._l15_candidate_key(base_pipeline_id, intent_signature, script_ref)
+        return self._candidate_key(
+            target_profile=target_profile,
+            intent_signature=intent_signature,
+            script_ref=script_ref,
+        )
+
+    def _resolve_pipeline_candidate_key(self, *, arguments: dict[str, Any], pipeline_id: str) -> str:
+        exec_signature = str(arguments.get("exec_signature", "")).strip()
+        script_ref = str(arguments.get("script_ref", "")).strip()
+        if exec_signature and script_ref:
+            return self._l15_candidate_key(pipeline_id, exec_signature, script_ref)
+        return self._pipeline_candidate_key(pipeline_id)
 
     def _should_sample(self, candidate_key: str) -> bool:
         if "::" not in candidate_key:

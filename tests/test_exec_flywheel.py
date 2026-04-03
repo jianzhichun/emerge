@@ -88,7 +88,7 @@ def test_icc_exec_success_updates_candidate_registry(tmp_path: Path):
                 "target_profile": "mycader-1.zwcad",
                 "intent_signature": "zwcad.add_wall",
                 "script_ref": "connectors/cade/actions/zwcad_add_wall.py",
-                "verify_passed": True,
+                "verify_passed": False,
             },
         )
         assert out.get("isError") is not True
@@ -270,7 +270,7 @@ def test_stable_rolls_back_on_window_failure_rate(tmp_path: Path):
         os.environ.pop("REPL_SESSION_ID", None)
 
 
-def test_degraded_exec_updates_failure_counters(tmp_path: Path):
+def test_exec_degraded_argument_is_not_trusted_for_policy_counters(tmp_path: Path):
     os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["REPL_SESSION_ID"] = "flywheel"
     try:
@@ -290,8 +290,8 @@ def test_degraded_exec_updates_failure_counters(tmp_path: Path):
 
         registry = tmp_path / "state" / "flywheel" / "candidates.json"
         data = json.loads(registry.read_text(encoding="utf-8"))
-        assert data["candidates"][key]["degraded_count"] == 2
-        assert data["candidates"][key]["consecutive_failures"] == 2
+        assert data["candidates"][key]["degraded_count"] == 0
+        assert data["candidates"][key]["consecutive_failures"] == 0
     finally:
         os.environ.pop("REPL_STATE_ROOT", None)
         os.environ.pop("REPL_SESSION_ID", None)

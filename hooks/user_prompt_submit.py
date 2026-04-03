@@ -25,25 +25,23 @@ def main() -> None:
     ) / "state.json"
     tracker = load_tracker(state_path)
     if "goal" in payload:
-        tracker.set_goal(str(payload["goal"]))
+        tracker.set_goal(str(payload["goal"]), source="hook_payload")
 
     raw_budget = payload.get("budget_chars", 0)
     try:
-        budget_chars = int(raw_budget) or None
+        budget_chars = int(raw_budget)
+        if budget_chars <= 0:
+            budget_chars = None
     except Exception:
         budget_chars = None
-    context = tracker.format_context(budget_chars=budget_chars)
+    context_text = tracker.format_additional_context(budget_chars=budget_chars)
     save_tracker(state_path, tracker)
 
     out = {
-        "hookEventName": "UserPromptSubmit",
         "hookSpecificOutput": {
-            "additionalContext": (
-                f"Goal\n{context['Goal']}\n\n"
-                f"Delta\n{context['Delta']}\n\n"
-                f"Open Risks\n{context['Open Risks']}"
-            )
-        },
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": context_text,
+        }
     }
     print(json.dumps(out))
 

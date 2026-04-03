@@ -19,25 +19,20 @@ def main() -> None:
         payload = json.loads(payload_text) if payload_text else {}
     except Exception:
         payload = {}
-    goal = payload.get("goal", "Initialize Emerge session")
-
     state_path = Path(
         os.environ.get("CLAUDE_PLUGIN_DATA", str(default_hook_state_root()))
     ) / "state.json"
     tracker = load_tracker(state_path)
-    tracker.set_goal(goal)
+    if "goal" in payload:
+        tracker.set_goal(str(payload["goal"]), source="hook_payload")
     save_tracker(state_path, tracker)
-    context = tracker.format_context()
+    context_text = tracker.format_additional_context()
 
     out = {
-        "hookEventName": "SessionStart",
         "hookSpecificOutput": {
-            "additionalContext": (
-                f"Goal\n{context['Goal']}\n\n"
-                f"Delta\n{context['Delta']}\n\n"
-                f"Open Risks\n{context['Open Risks']}"
-            )
-        },
+            "hookEventName": "SessionStart",
+            "additionalContext": context_text,
+        }
     }
     print(json.dumps(out))
 

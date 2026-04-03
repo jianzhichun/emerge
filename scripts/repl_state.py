@@ -161,6 +161,8 @@ class ReplState:
                                 "code_preview": code[:200],
                             }
                         )
+                        # Stop replay at first failed WAL step to avoid applying a non-prefix tail.
+                        break
         # Persist the new replay point so startup remains fast after crash recovery.
         if self._wal_seq_applied:
             self._write_checkpoint(self._wal_seq_applied)

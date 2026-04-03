@@ -32,3 +32,10 @@ def test_hooks_json_has_required_events_and_post_tool_matcher():
 
     matcher = hooks["PostToolUse"][0]["matcher"]
     assert "mcp__plugin_.*emerge.*__icc_(read|write|exec)" == matcher
+
+
+def test_policy_command_uses_plugin_root_for_repl_admin():
+    policy_md = (ROOT / "commands" / "policy.md").read_text(encoding="utf-8")
+    assert "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" in policy_md
+    assert "policy-status" in policy_md
+    assert "python3 scripts/repl_admin.py" not in policy_md

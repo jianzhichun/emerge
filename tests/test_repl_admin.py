@@ -146,3 +146,77 @@ def test_repl_admin_policy_status_handles_corrupt_registry(tmp_path: Path):
     assert out["registry_exists"] is True
     assert out["registry_corrupt"] is True
     assert out["pipeline_count"] == 0
+
+
+def test_repl_admin_policy_status_includes_policy_execution_metrics(tmp_path: Path):
+    env = os.environ.copy()
+    env["REPL_STATE_ROOT"] = str(tmp_path)
+    env["REPL_SESSION_ID"] = "policy-exec"
+
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
+    os.environ["REPL_SESSION_ID"] = "policy-exec"
+    try:
+        daemon = ReplDaemon(root=ROOT)
+        daemon.call_tool("icc_write", {"connector": "mock", "pipeline": "add-wall", "length": 0})
+        daemon.call_tool(
+            "icc_write", {"connector": "mock", "pipeline": "add-wall-rollback", "length": 800}
+        )
+
+        policy = _run_admin(["policy-status"], env)
+        by_key = {item["key"]: item for item in policy["pipelines"]}
+        stop_key = "pipeline::mock.write.add-wall"
+        rb_key = "pipeline::mock.write.add-wall-rollback"
+        assert by_key[stop_key]["policy_enforced_count"] >= 1
+        assert by_key[stop_key]["stop_triggered_count"] >= 1
+        assert by_key[stop_key]["last_policy_action"] == "stop"
+        assert by_key[rb_key]["policy_enforced_count"] >= 1
+        assert by_key[rb_key]["rollback_executed_count"] >= 1
+        assert by_key[rb_key]["last_policy_action"] == "rollback"
+
+        pretty = _run_admin_raw(["policy-status", "--pretty"], env)
+        assert "policy_enforced_count" in pretty
+        assert "rollback_executed_count" in pretty
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_repl_admin_policy_status_includes_goal_source_from_hook_state(tmp_path: Path):
+    env = os.environ.copy()
+    env["REPL_STATE_ROOT"] = str(tmp_path / "repl")
+    env["REPL_SESSION_ID"] = "goal-source"
+    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path / "hook-state")
+
+    hook_dir = tmp_path / "hook-state"
+    hook_dir.mkdir(parents=True, exist_ok=True)
+    (hook_dir / "state.json").write_text(
+        json.dumps({"goal": "reduce token noise", "goal_source": "hook_payload"}),
+        encoding="utf-8",
+    )
+
+    out = _run_admin(["policy-status"], env)
+    assert out["goal"] == "reduce token noise"
+    assert out["goal_source"] == "hook_payload"
+
+    pretty = _run_admin_raw(["policy-status", "--pretty"], env)
+    assert "Goal: reduce token noise" in pretty
+    assert "Goal source: hook_payload" in pretty
+
+
+def test_repl_admin_status_supports_target_profile_session_dir(tmp_path: Path):
+    env = os.environ.copy()
+    env["REPL_STATE_ROOT"] = str(tmp_path)
+    env["REPL_SESSION_ID"] = "profiled"
+    env["REPL_TARGET_PROFILE"] = "mycader-1.zwcad"
+
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
+    os.environ["REPL_SESSION_ID"] = "profiled"
+    try:
+        daemon = ReplDaemon(root=ROOT)
+        daemon.call_tool("icc_exec", {"code": "x = 1", "target_profile": "mycader-1.zwcad"})
+        status = _run_admin(["status"], env)
+        assert status["wal_exists"] is True
+        assert "__" in status["session_dir"]
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
