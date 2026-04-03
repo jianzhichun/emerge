@@ -10,6 +10,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _reset_cache():
+    from scripts.policy_config import _reset_settings_cache
+    _reset_settings_cache()
+    yield
+    _reset_settings_cache()
+
+
 def _write_settings(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data), encoding="utf-8")
@@ -37,14 +45,17 @@ def test_load_settings_file_overrides_defaults(tmp_path, monkeypatch):
     assert s["policy"]["promote_min_success_rate"] == 0.95
 
 
-def test_load_settings_env_path_takes_priority(tmp_path, monkeypatch):
-    cfg = tmp_path / "custom.json"
-    _write_settings(cfg, {"metrics_sink": "null"})
-    monkeypatch.setenv("EMERGE_SETTINGS_PATH", str(cfg))
-    from scripts.policy_config import load_settings, _reset_settings_cache
-    _reset_settings_cache()
+def test_load_settings_env_path_overrides_default_home_path(tmp_path, monkeypatch):
+    # env-path file wins over any default home path
+    env_cfg = tmp_path / "custom.json"
+    _write_settings(env_cfg, {"metrics_sink": "null"})
+    # point default home somewhere else so it can't interfere
+    monkeypatch.setenv("EMERGE_SETTINGS_PATH", str(env_cfg))
+    from scripts.policy_config import load_settings
     s = load_settings()
     assert s["metrics_sink"] == "null"
+    # sanity: non-overridden keys still come from defaults
+    assert s["policy"]["promote_min_attempts"] == 20
 
 
 def test_load_settings_rejects_invalid_policy_value(tmp_path, monkeypatch):

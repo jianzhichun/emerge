@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json as _json
+import os as _os
 import re
 from hashlib import sha1
 from pathlib import Path
@@ -53,9 +55,6 @@ def derive_profile_token(profile: str) -> str:
     return stable_token(profile or "default", max_prefix=56)
 
 
-import json as _json
-import os as _os
-
 _SETTINGS_CACHE: dict | None = None
 
 _DEFAULTS: dict = {
@@ -103,19 +102,20 @@ def _reset_settings_cache() -> None:
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
-    result = {**base}
+    import copy
+    result = copy.deepcopy(base)
     for k, v in override.items():
         if isinstance(v, dict) and isinstance(result.get(k), dict):
             result[k] = _deep_merge(result[k], v)
         else:
-            result[k] = v
+            result[k] = copy.deepcopy(v)
     return result
 
 
 def _validate_settings(s: dict) -> None:
     policy = s.get("policy", {})
     for key in _POLICY_INT_KEYS:
-        if key in policy and not isinstance(policy[key], int):
+        if key in policy and (not isinstance(policy[key], int) or isinstance(policy[key], bool)):
             raise ValueError(f"settings.policy.{key} must be an integer, got {policy[key]!r}")
     for key in _POLICY_FLOAT_KEYS:
         if key in policy and not isinstance(policy[key], (int, float)):
@@ -139,7 +139,8 @@ def load_settings() -> dict:
             raise ValueError(f"settings file must be a JSON object: {path}")
         merged = _deep_merge(_DEFAULTS, raw)
     else:
-        merged = _deep_merge(_DEFAULTS, {})
+        import copy
+        merged = copy.deepcopy(_DEFAULTS)
     _validate_settings(merged)
     _SETTINGS_CACHE = merged
     return _SETTINGS_CACHE
