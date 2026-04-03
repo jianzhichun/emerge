@@ -477,6 +477,19 @@ class ReplDaemon:
             f.flush()
             os.fsync(f.fileno())
 
+        try:
+            self._sink.emit(
+                "exec.call",
+                {
+                    "intent_signature": arguments.get("intent_signature", ""),
+                    "target_profile": arguments.get("target_profile", "default"),
+                    "is_error": is_error,
+                    "session_id": self._base_session_id,
+                },
+            )
+        except Exception:
+            pass
+
         if not intent_signature:
             return
         key = candidate_key
@@ -573,6 +586,19 @@ class ReplDaemon:
             f.write(json.dumps(event, ensure_ascii=True) + "\n")
             f.flush()
             os.fsync(f.fileno())
+
+        try:
+            _mode = "read" if "read" in tool_name else "write"
+            self._sink.emit(
+                f"pipeline.{_mode}",
+                {
+                    "pipeline_id": pipeline_id,
+                    "is_error": is_error,
+                    "session_id": self._base_session_id,
+                },
+            )
+        except Exception:
+            pass
 
         registry_path = session_dir / "candidates.json"
         registry = self._load_json_object(registry_path, root_key="candidates")
@@ -733,6 +759,13 @@ class ReplDaemon:
         if transitioned:
             pipeline["last_transition_reason"] = reason
             pipeline["attempts_at_transition"] = attempts
+            try:
+                self._sink.emit(
+                    "policy.transition",
+                    {"candidate_key": candidate_key, "new_status": status, "session_id": self._base_session_id},
+                )
+            except Exception:
+                pass
 
         registry["pipelines"][candidate_key] = pipeline
         self._atomic_write_json(registry_path, registry)

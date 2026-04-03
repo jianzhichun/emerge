@@ -46,3 +46,35 @@ def test_get_sink_returns_null_sink(tmp_path):
     from scripts.metrics import get_sink, NullSink
     sink = get_sink({"metrics_sink": "null"}, default_path=tmp_path / "m.jsonl")
     assert isinstance(sink, NullSink)
+
+
+def test_daemon_emits_pipeline_read_metric(tmp_path):
+    import os, sys, json
+    from pathlib import Path
+    ROOT = Path(__file__).resolve().parents[1]
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["REPL_SESSION_ID"] = "metric-test"
+    os.environ["EMERGE_SETTINGS_PATH"] = str(tmp_path / "settings.json")
+    metrics_path = tmp_path / "metrics.jsonl"
+    (tmp_path / "settings.json").write_text('{"metrics_sink": "local_jsonl"}')
+
+    try:
+        from scripts.policy_config import _reset_settings_cache
+        _reset_settings_cache()
+        from scripts.repl_daemon import ReplDaemon
+        daemon = ReplDaemon(root=ROOT)
+        daemon._sink = __import__("scripts.metrics", fromlist=["LocalJSONLSink"]).LocalJSONLSink(path=metrics_path)
+        daemon.call_tool("icc_read", {"connector": "mock", "pipeline": "layers"})
+        assert metrics_path.exists()
+        events = [json.loads(l) for l in metrics_path.read_text().strip().split("\n") if l]
+        types = [e["event_type"] for e in events]
+        assert "pipeline.read" in types
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_SETTINGS_PATH", None)
+        from scripts.policy_config import _reset_settings_cache
+        _reset_settings_cache()
