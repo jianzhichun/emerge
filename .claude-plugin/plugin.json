@@ -1,8 +1,14 @@
 {
   "name": "emerge",
-  "version": "0.1.0",
-  "description": "Minimal Emerge Claude Code plugin foundation",
-  "author": {
-    "name": "Emerge"
+  "version": "0.2.0",
+  "description": "Generic RWB flywheel plugin for Claude Code",
+  "capabilities": {
+    "tools": ["icc_exec", "icc_read", "icc_write", "icc_reconcile"],
+    "resources": ["policy://current", "pipeline://*", "runner://status", "state://deltas"],
+    "prompts": ["icc_explore", "icc_promote"]
+  },
+  "permissions": {
+    "filesystem": ["~/.emerge/"],
+    "network": ["localhost", "192.168.122.0/24"]
   }
 }

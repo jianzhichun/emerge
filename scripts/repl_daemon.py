@@ -170,6 +170,26 @@ class ReplDaemon:
                     "isError": True,
                     "content": [{"type": "text", "text": f"icc_write failed: {exc}"}],
                 }
+        if name == "icc_reconcile":
+            delta_id = str(arguments.get("delta_id", "")).strip()
+            outcome = str(arguments.get("outcome", "")).strip()
+            if not delta_id:
+                raise ValueError("icc_reconcile: delta_id is required")
+            if outcome not in ("confirm", "correct", "retract"):
+                raise ValueError(f"icc_reconcile: outcome must be confirm/correct/retract, got {outcome!r}")
+            from scripts.policy_config import default_hook_state_root
+            from scripts.state_tracker import load_tracker, save_tracker
+            state_path = Path(os.environ.get("CLAUDE_PLUGIN_DATA", str(default_hook_state_root()))) / "state.json"
+            tracker = load_tracker(state_path)
+            tracker.reconcile_delta(delta_id, outcome)
+            save_tracker(state_path, tracker)
+            td = tracker.to_dict()
+            return {
+                "delta_id": delta_id,
+                "outcome": outcome,
+                "verification_state": td.get("verification_state", "unverified"),
+                "goal": td.get("goal", ""),
+            }
         return {"isError": True, "content": [{"type": "text", "text": f"Unknown tool: {name}"}]}
 
     def handle_jsonrpc(self, request: dict[str, Any]) -> dict[str, Any]:
