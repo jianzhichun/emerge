@@ -1,0 +1,3 @@
+[submodule "references/claude-code"]
+	path = references/claude-code
+	url = git@github.com:jinhuayanshi/claude-code.git
