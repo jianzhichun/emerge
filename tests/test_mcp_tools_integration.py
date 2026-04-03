@@ -512,11 +512,14 @@ def test_icc_reconcile_confirms_delta(tmp_path):
         os.environ.pop("CLAUDE_PLUGIN_DATA", None)
 
 
-def test_icc_reconcile_not_in_tools_list():
+def test_icc_reconcile_in_tools_list():
+    """icc_reconcile is now advertised in tools/list (with _internal flag)."""
     daemon = ReplDaemon(root=ROOT)
     resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 70, "method": "tools/list", "params": {}})
     names = [t["name"] for t in resp["result"]["tools"]]
-    assert "icc_reconcile" not in names
+    assert "icc_reconcile" in names
+    reconcile_tool = next(t for t in resp["result"]["tools"] if t["name"] == "icc_reconcile")
+    assert reconcile_tool.get("_internal") is True
 
 
 def test_l15_exec_routes_to_pipeline_when_stable(tmp_path):

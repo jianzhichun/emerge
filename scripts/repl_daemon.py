@@ -264,15 +264,95 @@ class ReplDaemon:
         if not isinstance(params, dict):
             params = {}
 
+        if method == "initialize":
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "tools": {},
+                        "resources": {"subscribe": False},
+                        "prompts": {},
+                        "logging": {},
+                    },
+                    "serverInfo": {"name": "emerge", "version": "0.2.0"},
+                },
+            }
+
+        if method == "ping":
+            return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+
+        if method == "logging/setLevel":
+            # acknowledge but take no action (logging is daemon-managed)
+            return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+
+        if method.startswith("notifications/"):
+            # CC may send notifications (e.g. cancelled); acknowledge silently
+            return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+
         if method == "tools/list":
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
                 "result": {
                     "tools": [
-                        {"name": "icc_exec", "description": "Persistent Python exec"},
-                        {"name": "icc_read", "description": "Run read pipeline"},
-                        {"name": "icc_write", "description": "Run write pipeline"},
+                        {
+                            "name": "icc_exec",
+                            "description": "Execute Python code in a persistent REPL with policy flywheel tracking",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "code": {"type": "string", "description": "Python code to execute (inline_code mode)"},
+                                    "mode": {"type": "string", "enum": ["inline_code", "script_ref"], "default": "inline_code"},
+                                    "target_profile": {"type": "string", "description": "Execution profile / remote runner key", "default": "default"},
+                                    "intent_signature": {"type": "string", "description": "Stable identifier for this exec pattern (e.g. zwcad.read.state)"},
+                                    "script_ref": {"type": "string", "description": "Path to script file (script_ref mode)"},
+                                    "script_args": {"type": "object", "description": "Arguments injected as __args in script scope"},
+                                    "base_pipeline_id": {"type": "string", "description": "Pipeline id for L1.5 promotion routing (e.g. mock.read.layers)"},
+                                },
+                                "required": [],
+                            },
+                        },
+                        {
+                            "name": "icc_read",
+                            "description": "Run a read pipeline and return structured rows with verification",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "connector": {"type": "string", "description": "Connector name (e.g. zwcad, mock)"},
+                                    "pipeline": {"type": "string", "description": "Pipeline name (e.g. state, layers)"},
+                                    "target_profile": {"type": "string", "description": "Remote runner key if applicable"},
+                                },
+                                "required": ["connector", "pipeline"],
+                            },
+                        },
+                        {
+                            "name": "icc_write",
+                            "description": "Run a write pipeline with verification and rollback/stop policy enforcement",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "connector": {"type": "string", "description": "Connector name (e.g. zwcad, mock)"},
+                                    "pipeline": {"type": "string", "description": "Pipeline name (e.g. apply-change, add-wall)"},
+                                    "target_profile": {"type": "string", "description": "Remote runner key if applicable"},
+                                },
+                                "required": ["connector", "pipeline"],
+                            },
+                        },
+                        {
+                            "name": "icc_reconcile",
+                            "description": "Reconcile a state tracker delta — confirm, correct, or retract a recorded observation. Not auto-recommended; call directly when needed.",
+                            "_internal": True,
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "delta_id": {"type": "string", "description": "ID of the delta to reconcile"},
+                                    "outcome": {"type": "string", "enum": ["confirm", "correct", "retract"], "description": "Reconciliation outcome"},
+                                },
+                                "required": ["delta_id", "outcome"],
+                            },
+                        },
                     ]
                 },
             }
@@ -300,6 +380,40 @@ class ReplDaemon:
                 return {"jsonrpc": "2.0", "id": req_id,
                         "error": {"code": -32603, "message": f"Resource read error: {exc}"}}
 
+        if method == "resources/templates/list":
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "resourceTemplates": [
+                        {
+                            "uriTemplate": "pipeline://{connector}/{mode}/{name}",
+                            "name": "Pipeline metadata",
+                            "description": "Read pipeline YAML metadata by connector/mode/name",
+                            "mimeType": "application/json",
+                        },
+                        {
+                            "uriTemplate": "policy://current",
+                            "name": "Policy registry",
+                            "description": "Current session pipeline lifecycle state",
+                            "mimeType": "application/json",
+                        },
+                        {
+                            "uriTemplate": "runner://status",
+                            "name": "Runner status",
+                            "description": "Remote runner health summary",
+                            "mimeType": "application/json",
+                        },
+                        {
+                            "uriTemplate": "state://deltas",
+                            "name": "State deltas",
+                            "description": "StateTracker goal, deltas, and risks",
+                            "mimeType": "application/json",
+                        },
+                    ]
+                },
+            }
+
         if method == "prompts/list":
             return {"jsonrpc": "2.0", "id": req_id, "result": {"prompts": self._PROMPTS}}
 
@@ -321,9 +435,24 @@ class ReplDaemon:
 
     def _list_resources(self) -> list[dict[str, Any]]:
         static = [
-            {"uri": "policy://current", "name": "Pipeline policy registry", "mimeType": "application/json"},
-            {"uri": "runner://status", "name": "Runner health summary", "mimeType": "application/json"},
-            {"uri": "state://deltas", "name": "State tracker deltas", "mimeType": "application/json"},
+            {
+                "uri": "policy://current",
+                "name": "Pipeline policy registry",
+                "mimeType": "application/json",
+                "description": "Current session pipeline lifecycle tracking (explore→canary→stable)",
+            },
+            {
+                "uri": "runner://status",
+                "name": "Runner health summary",
+                "mimeType": "application/json",
+                "description": "Remote runner connectivity and health for all configured endpoints",
+            },
+            {
+                "uri": "state://deltas",
+                "name": "State tracker deltas",
+                "mimeType": "application/json",
+                "description": "Session goal, recorded deltas, and open risks",
+            },
         ]
         for connector_root in self.pipeline._connector_roots:
             if not connector_root.exists():
