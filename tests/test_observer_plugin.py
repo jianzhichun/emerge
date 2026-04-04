@@ -70,7 +70,8 @@ def test_adapter_registry_loads_custom_adapter(tmp_path):
     assert ctx["vertical"] == "zwcad"
 
 
-def test_adapter_registry_fallback_to_accessibility(tmp_path):
+def test_adapter_registry_fallback_to_generic(tmp_path):
+    # No zwcad adapter → fallback to _GenericFallback
     registry = AdapterRegistry(adapter_root=tmp_path)
     plugin = registry.get_plugin("zwcad")
     assert plugin is not None
