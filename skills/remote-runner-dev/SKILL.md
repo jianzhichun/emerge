@@ -151,16 +151,44 @@ GET  /health        # {"ok": true, "status": "ready", "uptime_s": N}
 GET  /status        # pid, python, root, uptime_s
 GET  /logs?n=100    # last N lines of .runner.log
 POST /run           # {"tool_name": "icc_exec", "arguments": {...}}
+POST /operator-event                                      # append one event to local EventBus
+GET  /operator-events?machine_id=&since_ms=&limit=        # read events since ts
 ```
 
-The runner accepts **only `icc_exec`** requests. Pipeline operations (`icc_read`, `icc_write`) are handled by the daemon: it loads pipeline `.py` + `.yaml` locally, builds self-contained inline code, and sends it as `icc_exec`. Connector files never need to exist on the runner machine.
+The runner accepts **only `icc_exec`** requests on `/run`. Pipeline operations (`icc_read`, `icc_write`) are handled by the daemon: it loads pipeline `.py` + `.yaml` locally, builds self-contained inline code, and sends it as `icc_exec`. Connector files never need to exist on the runner machine.
 
-Request / response shape:
+Request / response shape for `/run`:
 ```json
 {"tool_name": "icc_exec", "arguments": {"code": "...", "target_profile": "default", "no_replay": false}}
 {"ok": true,  "result": {"isError": false, "content": [{"type": "text", "text": "..."}]}}
 {"ok": false, "error": "string message"}
 ```
+
+### EventBus endpoints
+
+`POST /operator-event` — append a single operator event to the local EventBus file.
+
+Request body (JSON):
+```json
+{
+  "ts_ms": 1712345678000,
+  "machine_id": "workstation-01",
+  "session_role": "operator",
+  "event_type": "entity_added",
+  "app": "zwcad",
+  "payload": {"layer": "标注", "content": "主卧"}
+}
+```
+
+`machine_id` must be a plain identifier — no path separators or `..` components. Response: `{"ok": true}` or HTTP 400 with `{"ok": false, "error": "..."}`.
+
+---
+
+`GET /operator-events?machine_id=<id>&since_ms=<ts>&limit=<n>` — read events newer than `since_ms` (default 0), up to `limit` (default 200, max 1000).
+
+Response: `{"ok": true, "events": [...]}`.
+
+These two endpoints are consumed by `OperatorMonitor` in the daemon when `EMERGE_OPERATOR_MONITOR=1`.
 
 ## Common Mistakes
 
