@@ -122,3 +122,42 @@ def test_frequency_check_no_signature_collision_across_event_types():
     assert len(set(sigs)) == len(sigs), f"Duplicate signatures found: {sigs}"
     assert any("entity_added" in s for s in sigs)
     assert any("entity_modified" in s for s in sigs)
+
+
+def test_error_rate_check_ignores_old_undos():
+    """Undo events outside FREQ_WINDOW_MS must not count toward error rate."""
+    import time
+    now_ms = int(time.time() * 1000)
+    old_ms = now_ms - PatternDetector.FREQ_WINDOW_MS - 60_000
+    detector = PatternDetector()
+
+    events = [
+        {"ts_ms": old_ms - i * 1000, "machine_id": "m1", "session_role": "operator",
+         "event_type": "undo", "app": "zwcad", "session_id": "s1", "payload": {}}
+        for i in range(5)
+    ] + [
+        {"ts_ms": now_ms, "machine_id": "m1", "session_role": "operator",
+         "event_type": "entity_added", "app": "zwcad", "session_id": "s1", "payload": {}}
+    ]
+    summaries = detector.ingest(events)
+    assert not any("error_rate" in s.detector_signals for s in summaries)
+
+
+def test_cross_machine_check_ignores_old_events():
+    """Events outside FREQ_WINDOW_MS must not trigger cross-machine detection."""
+    import time
+    now_ms = int(time.time() * 1000)
+    old_ms = now_ms - PatternDetector.FREQ_WINDOW_MS - 60_000
+    detector = PatternDetector()
+
+    events = [
+        {"ts_ms": old_ms - i * 1000, "machine_id": "mA", "session_role": "operator",
+         "event_type": "entity_added", "app": "zwcad", "session_id": "s1", "payload": {}}
+        for i in range(2)
+    ] + [
+        {"ts_ms": old_ms - i * 1000, "machine_id": "mB", "session_role": "operator",
+         "event_type": "entity_added", "app": "zwcad", "session_id": "s2", "payload": {}}
+        for i in range(2)
+    ]
+    summaries = detector.ingest(events)
+    assert not any("cross_machine" in s.detector_signals for s in summaries)

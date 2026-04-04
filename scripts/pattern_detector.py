@@ -81,8 +81,10 @@ class PatternDetector:
         return summaries
 
     def _error_rate_check(self, events: list[dict]) -> list[PatternSummary]:
+        now_ms = int(time.time() * 1000)
+        window_events = [e for e in events if now_ms - e.get("ts_ms", 0) <= self.FREQ_WINDOW_MS]
         by_session: dict[str, list[dict]] = {}
-        for e in events:
+        for e in window_events:
             sid = e.get("session_id", "unknown")
             by_session.setdefault(sid, []).append(e)
 
@@ -101,15 +103,17 @@ class PatternDetector:
                 machine_ids=machines,
                 intent_signature=f"{app}.high_error_rate",
                 occurrences=len(grp),
-                window_minutes=0.0,
+                window_minutes=self.FREQ_WINDOW_MS / 60_000,
                 detector_signals=["error_rate"],
                 context_hint={"app": app, "undo_ratio": ratio, "session_id": sid},
             ))
         return summaries
 
     def _cross_machine_check(self, events: list[dict]) -> list[PatternSummary]:
+        now_ms = int(time.time() * 1000)
+        window_events = [e for e in events if now_ms - e.get("ts_ms", 0) <= self.FREQ_WINDOW_MS]
         by_app_event: dict[tuple, dict[str, list[dict]]] = {}
-        for e in events:
+        for e in window_events:
             key = (e.get("app", ""), e.get("event_type", ""))
             machine = e.get("machine_id", "unknown")
             by_app_event.setdefault(key, {}).setdefault(machine, []).append(e)
@@ -129,7 +133,7 @@ class PatternDetector:
                 machine_ids=machines,
                 intent_signature=f"{app}.{event_type}.cross_machine",
                 occurrences=len(all_events),
-                window_minutes=0.0,
+                window_minutes=self.FREQ_WINDOW_MS / 60_000,
                 detector_signals=["cross_machine"],
                 context_hint={"app": app, "event_type": event_type, "machines": machines},
             ))
