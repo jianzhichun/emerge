@@ -175,3 +175,20 @@ def test_exec_success_not_reversed_by_policy_bookkeeping_failure(tmp_path: Path)
     finally:
         os.environ.pop("REPL_STATE_ROOT", None)
         os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_icc_exec_structured_error_fields(tmp_path: Path):
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
+    try:
+        daemon = ReplDaemon(root=ROOT)
+        result = daemon.call_tool("icc_exec", {"code": "x = undefined_var"})
+        assert result.get("isError") is True
+        assert "error_class" in result
+        assert result["error_class"] == "NameError"
+        assert "error_summary" in result
+        assert "undefined_var" in result["error_summary"]
+        assert "failed_line" in result
+        assert isinstance(result["failed_line"], int)
+        assert result.get("recovery_suggestion") == "exec"
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)

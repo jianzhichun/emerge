@@ -116,6 +116,11 @@ class ExecSession:
             payload: dict[str, Any] = {"content": [{"type": "text", "text": text}]}
             if is_error:
                 payload["isError"] = True
+                parsed = self._parse_exec_error(error_message, code)
+                payload["error_class"] = parsed["error_class"]
+                payload["error_summary"] = parsed["error_summary"]
+                payload["failed_line"] = parsed["failed_line"]
+                payload["recovery_suggestion"] = "exec"
             return payload
 
     def _ensure_paths(self) -> None:
@@ -281,3 +286,33 @@ class ExecSession:
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
+
+    @staticmethod
+    def _parse_exec_error(error_message: str, code: str) -> dict:
+        """Extract structured fields from a traceback string.
+
+        Returns dict with keys: error_class (str), error_summary (str), failed_line (int).
+        """
+        import re
+        error_class = "Exception"
+        error_summary = error_message.strip().splitlines()[-1] if error_message.strip() else ""
+        failed_line = 0
+
+        # Extract exception class from last line: "ExcClass: message"
+        last_line = error_summary
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*):\s*(.*)", last_line)
+        if m:
+            error_class = m.group(1).split(".")[-1]   # e.g. "NameError" not "builtins.NameError"
+            error_summary = m.group(2).strip()
+
+        # Extract line number from "File ..., line N"
+        for line in error_message.splitlines():
+            lm = re.search(r",\s*line\s+(\d+)", line)
+            if lm:
+                failed_line = int(lm.group(1))
+
+        return {
+            "error_class": error_class,
+            "error_summary": error_summary,
+            "failed_line": failed_line,
+        }
