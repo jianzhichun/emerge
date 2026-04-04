@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/version-v0.2.0-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-134%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-157%20passing-brightgreen?logo=pytest)
 
 **Emerge** is a Claude Code plugin (v0.2.0) that implements a **muscle-memory flywheel**: repeated work is tracked via `icc_exec`, promoted through a **policy registry** (explore → canary → stable), and can be **crystallized** into connector pipelines so the same tasks run as structured `icc_read` / `icc_write` instead of ad-hoc code.
 
@@ -256,7 +256,7 @@ flowchart LR
 | Ops / bootstrap | `scripts/repl_admin.py` |
 | Test connector (mock) | `tests/connectors/mock/pipelines/` |
 | Slash commands | `commands/` (`init`, `policy`, `runner-status`) |
-| Skills | `skills/` (`initializing-vertical-flywheel`, `remote-runner-dev`) |
+| Skills | `skills/` (`initializing-vertical-flywheel`, `remote-runner-dev`, `writing-vertical-adapter`, `operator-monitor-debug`) |
 | Reference (submodule) | `references/claude-code` |
 
 ## Requirements
@@ -271,7 +271,7 @@ flowchart LR
 python -m pytest tests -q
 ```
 
-Current baseline: **134** tests passing.
+Current baseline: **157** tests passing.
 
 ## Repository layout
 
@@ -296,7 +296,7 @@ references/         External reference codebases (git submodule)
 </td>
 </tr>
 <tr>
-<td align="center">🔵<br><sub>next</sub></td>
+<td align="center">🟢<br><sub>shipped</sub></td>
 <td><b>Operator Intelligence Loop</b><br>
 <sub>A reverse flywheel that observes the <i>human</i>, not just the AI. A background monitor audits operator behavior on a configurable time window (default 5 min) — surfacing a native GUI popup: <i>"you've done this 8 times today — why? want me to take it?"</i> Intent is captured, patterns are distilled into operator skill profiles, and repetitive sequences are handed off to the AI layer. The goal: progressively free operators from work that is mechanical, high-frequency, or already crystallized somewhere in the pipeline registry. Operator as author, not executor.</sub>
 </td>
