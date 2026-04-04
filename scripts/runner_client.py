@@ -96,6 +96,51 @@ class RunnerClient:
             raise RuntimeError("runner result must be an object")
         return result
 
+    def notify(
+        self,
+        stage: str,
+        message: str,
+        intent_draft: str = "",
+        timeout_s: int = 0,
+    ) -> dict[str, Any]:
+        """Send a notification request to the runner's /notify endpoint.
+
+        Blocks until the operator responds or timeout_s elapses.
+        Returns {action: str, intent: str}.
+        Raises RuntimeError on HTTP error or connection failure.
+        """
+        payload = {
+            "stage": stage,
+            "message": message,
+            "intent_draft": intent_draft,
+            "timeout_s": timeout_s,
+        }
+        body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+        # Use a longer timeout than the dialog so the HTTP connection stays open
+        # while the user is deciding.
+        http_timeout = max(self.timeout_s, float(timeout_s) + 10.0)
+        req = urllib.request.Request(
+            url=f"{self.base_url}/notify",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with _NO_PROXY_OPENER.open(req, timeout=http_timeout) as resp:
+                raw = resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"runner notify http {exc.code}: {detail}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"runner notify unreachable: {exc}") from exc
+        data = json.loads(raw)
+        if not isinstance(data, dict) or not bool(data.get("ok", False)):
+            raise RuntimeError(str(data.get("error", "notify failed")))
+        result = data.get("result", {})
+        if not isinstance(result, dict):
+            raise RuntimeError("runner notify result must be an object")
+        return result
+
     def health(self) -> dict[str, Any]:
         req = urllib.request.Request(
             url=f"{self.base_url}/health",
