@@ -8,6 +8,15 @@ from pathlib import Path
 from scripts.pattern_detector import PatternSummary
 
 
+def _validate_machine_id(machine_id: str) -> None:
+    """Reject machine_id values that could escape the event root via path traversal."""
+    if not machine_id or machine_id != machine_id.strip():
+        raise ValueError("machine_id is required and must not have leading/trailing whitespace")
+    p = Path(machine_id)
+    if p.name != machine_id or ".." in machine_id or "/" in machine_id or "\\" in machine_id:
+        raise ValueError(f"Invalid machine_id: {machine_id!r}")
+
+
 class Distiller:
     """Converts a PatternSummary into a canonical intent_signature and
     optionally writes an intent_confirmed event to the EventBus."""
@@ -39,10 +48,12 @@ class Distiller:
                 ascii_seg = "x"
             if ascii_seg:
                 clean.append(ascii_seg)
-        return ".".join(clean) if clean else "unknown.pattern"
+        result = ".".join(clean) if clean else "unknown.pattern"
+        return result[:200]
 
     def _write_confirmed_events(self, summary: PatternSummary, sig: str) -> None:
         for machine_id in summary.machine_ids:
+            _validate_machine_id(machine_id)
             machine_dir = self._event_root / machine_id
             machine_dir.mkdir(parents=True, exist_ok=True)
             event = {

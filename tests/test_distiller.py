@@ -54,3 +54,27 @@ def test_distiller_writes_intent_confirmed_event(tmp_path):
     assert any(e.get("event_type") == "intent_confirmed" for e in lines)
     confirmed = next(e for e in lines if e.get("event_type") == "intent_confirmed")
     assert confirmed["payload"]["intent_signature"] == sig
+
+
+def test_distiller_rejects_path_traversal_machine_id(tmp_path):
+    import pytest
+    from scripts.distiller import Distiller
+    from scripts.pattern_detector import PatternSummary
+    d = Distiller(event_root=tmp_path / "events")
+    summary = PatternSummary(
+        machine_ids=["../../../etc"],
+        intent_signature="zwcad.entity_added",
+        occurrences=3,
+        window_minutes=5.0,
+        detector_signals=["frequency"],
+        context_hint={"app": "zwcad"},
+    )
+    with pytest.raises(ValueError, match="Invalid machine_id"):
+        d.distill(summary, confirmed=True)
+
+
+def test_normalise_caps_length():
+    from scripts.distiller import Distiller
+    long_sig = "a" * 100 + "." + "b" * 100 + "." + "c" * 100
+    result = Distiller._normalise(long_sig)
+    assert len(result) <= 200
