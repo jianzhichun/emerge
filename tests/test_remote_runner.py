@@ -62,7 +62,7 @@ def test_runner_client_read_and_write(tmp_path: Path):
 
 
 def test_get_session_is_thread_safe(tmp_path: Path):
-    """Concurrent _get_session calls for the same profile must return the same ReplState."""
+    """Concurrent _get_session calls for the same profile must return the same ExecSession."""
     executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
     results: list[object] = []
     errors: list[Exception] = []
@@ -80,5 +80,5 @@ def test_get_session_is_thread_safe(tmp_path: Path):
         t.join()
 
     assert not errors, f"Threads raised: {errors}"
-    # All threads must have received the exact same ReplState instance
-    assert len(set(id(r) for r in results)) == 1, "Multiple ReplState instances created (race condition)"
+    # All threads must have received the exact same ExecSession instance
+    assert len(set(id(r) for r in results)) == 1, "Multiple ExecSession instances created (race condition)"

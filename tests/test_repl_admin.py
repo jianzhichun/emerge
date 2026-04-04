@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.emerge_daemon import EmergeDaemon as ReplDaemon
+from scripts.emerge_daemon import EmergeDaemon
 from scripts import repl_admin
 from scripts.remote_runner import RunnerExecutor, RunnerHTTPHandler, ThreadingHTTPServer
 
@@ -76,7 +76,7 @@ def test_repl_admin_status_and_clear(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
     os.environ["EMERGE_SESSION_ID"] = "admin-session"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         daemon.call_tool("icc_exec", {"code": "x = 12\nprint(x)"})
 
         status_before = _run_admin(["status"], env)
@@ -103,7 +103,7 @@ def test_repl_admin_policy_status_reports_pipeline_registry(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
     os.environ["EMERGE_SESSION_ID"] = "admin-session"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         for _ in range(20):
             daemon.call_tool(
                 "icc_exec",
@@ -136,7 +136,7 @@ def test_repl_admin_policy_status_pretty_output(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
     os.environ["EMERGE_SESSION_ID"] = "admin-session"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         for _ in range(20):
             daemon.call_tool(
                 "icc_exec",
@@ -189,7 +189,7 @@ def test_repl_admin_policy_status_includes_policy_execution_metrics(tmp_path: Pa
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
     os.environ["EMERGE_SESSION_ID"] = "policy-exec"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         daemon.call_tool("icc_write", {"connector": "mock", "pipeline": "add-wall", "length": 0})
         daemon.call_tool(
             "icc_write", {"connector": "mock", "pipeline": "add-wall-rollback", "length": 800}
@@ -240,7 +240,7 @@ def test_repl_admin_status_supports_target_profile_session_dir(tmp_path: Path):
     env = os.environ.copy()
     env["EMERGE_STATE_ROOT"] = str(tmp_path)
     env["EMERGE_SESSION_ID"] = "profiled"
-    env["REPL_TARGET_PROFILE"] = "mycader-1.zwcad"
+    env["EMERGE_TARGET_PROFILE"] = "mycader-1.zwcad"
     # Isolate from global runner config so exec runs locally and writes local WAL
     empty_runner_cfg = tmp_path / "runner-map.json"
     env["EMERGE_RUNNER_CONFIG_PATH"] = str(empty_runner_cfg)
@@ -249,7 +249,7 @@ def test_repl_admin_status_supports_target_profile_session_dir(tmp_path: Path):
     os.environ["EMERGE_SESSION_ID"] = "profiled"
     os.environ["EMERGE_RUNNER_CONFIG_PATH"] = str(empty_runner_cfg)
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         daemon.call_tool("icc_exec", {"code": "x = 1", "target_profile": "mycader-1.zwcad"})
         status = _run_admin(["status"], env)
         assert status["wal_exists"] is True

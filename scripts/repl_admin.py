@@ -51,7 +51,7 @@ def _resolve_session_id() -> str:
 def _session_paths() -> tuple[Path, Path, Path]:
     state_root = _resolve_state_root()
     session_id = _resolve_session_id()
-    target_profile = str(os.environ.get("REPL_TARGET_PROFILE", "default")).strip() or "default"
+    target_profile = str(os.environ.get("EMERGE_TARGET_PROFILE", "default")).strip() or "default"
     if target_profile != "default":
         profile_key = derive_profile_token(target_profile)
         session_id = f"{session_id}__{profile_key}"

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.emerge_daemon import EmergeDaemon as ReplDaemon
+from scripts.emerge_daemon import EmergeDaemon
 from scripts.remote_runner import RunnerExecutor, RunnerHTTPHandler, ThreadingHTTPServer
 
 
@@ -43,7 +43,7 @@ class _RunnerServer:
 
 
 def test_tools_call_routes_exec_read_write_in_same_runtime():
-    daemon = ReplDaemon(root=ROOT)
+    daemon = EmergeDaemon(root=ROOT)
 
     r1 = daemon.handle_jsonrpc(
         {
@@ -93,7 +93,7 @@ def test_tools_call_routes_exec_read_write_in_same_runtime():
 
 
 def test_tools_list_does_not_expose_admin_state_operations():
-    daemon = ReplDaemon(root=ROOT)
+    daemon = EmergeDaemon(root=ROOT)
     listed = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 99, "method": "tools/list", "params": {}})
     names = [t["name"] for t in listed["result"]["tools"]]
     assert "icc_state_status" not in names
@@ -101,7 +101,7 @@ def test_tools_list_does_not_expose_admin_state_operations():
 
 
 def test_tools_call_returns_error_payload_for_missing_pipeline_and_script(tmp_path: Path):
-    daemon = ReplDaemon(root=ROOT)
+    daemon = EmergeDaemon(root=ROOT)
 
     bad_read = daemon.handle_jsonrpc(
         {
@@ -138,7 +138,7 @@ def test_icc_write_participates_in_pipeline_lifecycle_registry(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "pipeline-policy"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         for _ in range(20):
             out = daemon.handle_jsonrpc(
                 {
@@ -166,7 +166,7 @@ def test_l15_composed_key_can_be_shared_by_exec_and_pipeline(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "compose"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         daemon.call_tool(
             "icc_exec",
             {
@@ -198,7 +198,7 @@ def test_l15_composed_key_can_be_shared_by_exec_and_pipeline(tmp_path: Path):
 
 
 def test_tools_call_handles_null_params_without_crash():
-    daemon = ReplDaemon(root=ROOT)
+    daemon = EmergeDaemon(root=ROOT)
     out = daemon.handle_jsonrpc(
         {"jsonrpc": "2.0", "id": 101, "method": "tools/call", "params": None}
     )
@@ -212,7 +212,7 @@ def test_daemon_can_dispatch_tools_via_remote_runner(tmp_path: Path):
     try:
         with _RunnerServer(tmp_path / "remote-state") as server:
             os.environ["EMERGE_RUNNER_URL"] = server.url
-            daemon = ReplDaemon(root=ROOT)
+            daemon = EmergeDaemon(root=ROOT)
             out = daemon.handle_jsonrpc(
                 {
                     "jsonrpc": "2.0",
@@ -239,7 +239,7 @@ def test_daemon_can_route_to_multiple_runners_by_target_profile(tmp_path: Path):
                     "mycader-2.zwcad": b.url,
                 }
             )
-            daemon = ReplDaemon(root=ROOT)
+            daemon = EmergeDaemon(root=ROOT)
             daemon.call_tool(
                 "icc_exec",
                 {"code": "x = 1", "target_profile": "mycader-1.zwcad"},
@@ -271,7 +271,7 @@ def test_daemon_can_use_persisted_runner_config_without_env_url(tmp_path: Path):
                 encoding="utf-8",
             )
             os.environ.pop("EMERGE_RUNNER_URL", None)
-            daemon = ReplDaemon(root=ROOT)
+            daemon = EmergeDaemon(root=ROOT)
             out = daemon.handle_jsonrpc(
                 {
                     "jsonrpc": "2.0",
@@ -292,7 +292,7 @@ def test_zwcad_read_state_pipeline_returns_structured_rows(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "zwcad-read"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         out = daemon.handle_jsonrpc(
             {
                 "jsonrpc": "2.0",
@@ -318,7 +318,7 @@ def test_zwcad_write_apply_change_pipeline_enforces_policy(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "zwcad-write"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         out = daemon.handle_jsonrpc(
             {
                 "jsonrpc": "2.0",
@@ -354,7 +354,7 @@ def test_zwcad_policy_registry_tracks_pipeline_key(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "zwcad-policy"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         for _ in range(3):
             daemon.call_tool("icc_read", {"connector": "zwcad", "pipeline": "state"})
             daemon.call_tool(
@@ -381,13 +381,13 @@ def test_pipeline_registry_is_shared_across_sessions(tmp_path: Path):
     try:
         # Session A accumulates 3 calls
         os.environ["EMERGE_SESSION_ID"] = "session-a"
-        daemon_a = ReplDaemon(root=ROOT)
+        daemon_a = EmergeDaemon(root=ROOT)
         for _ in range(3):
             daemon_a.call_tool("icc_read", {"connector": "zwcad", "pipeline": "state"})
 
         # Session B reads the registry — must see session-A's attempts
         os.environ["EMERGE_SESSION_ID"] = "session-b"
-        daemon_b = ReplDaemon(root=ROOT)
+        daemon_b = EmergeDaemon(root=ROOT)
         daemon_b.call_tool("icc_read", {"connector": "zwcad", "pipeline": "state"})
 
         # Registry must be at state_root level, not inside any session dir
@@ -413,7 +413,7 @@ def test_pipeline_policy_metrics_are_recorded_for_stop_and_rollback(tmp_path: Pa
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "policy-metrics"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         daemon.call_tool(
             "icc_write",
             {"connector": "mock", "pipeline": "add-wall", "length": 0},
@@ -442,7 +442,7 @@ def test_pipeline_policy_metrics_are_recorded_for_stop_and_rollback(tmp_path: Pa
 # ── Task 6: MCP resources ────────────────────────────────────────────────────
 
 def test_resources_list_returns_static_and_pipeline_uris():
-    daemon = ReplDaemon(root=ROOT)
+    daemon = EmergeDaemon(root=ROOT)
     resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 50, "method": "resources/list", "params": {}})
     uris = [r["uri"] for r in resp["result"]["resources"]]
     assert "policy://current" in uris
@@ -455,7 +455,7 @@ def test_resources_read_policy_current(tmp_path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "res-test"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         daemon.call_tool("icc_read", {"connector": "mock", "pipeline": "layers"})
         resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 51, "method": "resources/read",
                                       "params": {"uri": "policy://current"}})
@@ -470,7 +470,7 @@ def test_resources_read_policy_current(tmp_path):
 
 
 def test_resources_read_pipeline_uri():
-    daemon = ReplDaemon(root=ROOT)
+    daemon = EmergeDaemon(root=ROOT)
     resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 52, "method": "resources/read",
                                   "params": {"uri": "pipeline://mock/read/layers"}})
     resource = resp["result"]["resource"]
@@ -480,7 +480,7 @@ def test_resources_read_pipeline_uri():
 
 
 def test_resources_read_unknown_uri_returns_error():
-    daemon = ReplDaemon(root=ROOT)
+    daemon = EmergeDaemon(root=ROOT)
     resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 53, "method": "resources/read",
                                   "params": {"uri": "unknown://foo"}})
     assert "error" in resp or resp.get("result", {}).get("isError")
@@ -488,7 +488,7 @@ def test_resources_read_unknown_uri_returns_error():
 
 def test_resources_read_pipeline_uri_rejects_path_traversal():
     """_read_resource must not serve files outside connector roots via ../."""
-    daemon = ReplDaemon(root=ROOT)
+    daemon = EmergeDaemon(root=ROOT)
     traversal_uris = [
         "pipeline://../etc/passwd/read/test",
         "pipeline://zwcad/../../etc/read/secret",
@@ -506,14 +506,14 @@ def test_resources_read_pipeline_uri_rejects_path_traversal():
 # ── Task 7: MCP prompts ──────────────────────────────────────────────────────
 
 def test_prompts_list_returns_icc_explore():
-    daemon = ReplDaemon(root=ROOT)
+    daemon = EmergeDaemon(root=ROOT)
     resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 60, "method": "prompts/list", "params": {}})
     names = [p["name"] for p in resp["result"]["prompts"]]
     assert "icc_explore" in names
 
 
 def test_prompts_get_icc_explore():
-    daemon = ReplDaemon(root=ROOT)
+    daemon = EmergeDaemon(root=ROOT)
     resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 61, "method": "prompts/get",
                                   "params": {"name": "icc_explore", "arguments": {"vertical": "zwcad", "goal": "list layers"}}})
     result = resp["result"]
@@ -523,7 +523,7 @@ def test_prompts_get_icc_explore():
 
 
 def test_prompts_get_unknown_returns_error():
-    daemon = ReplDaemon(root=ROOT)
+    daemon = EmergeDaemon(root=ROOT)
     resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 63, "method": "prompts/get",
                                   "params": {"name": "nonexistent"}})
     assert "error" in resp
@@ -547,7 +547,7 @@ def test_icc_reconcile_confirms_delta(tmp_path):
         save_tracker(state_path, tracker)
 
         # Now reconcile it
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         raw = daemon.call_tool("icc_reconcile", {"delta_id": delta_id, "outcome": "confirm"})
         assert raw["isError"] is False
         result = json.loads(raw["content"][0]["text"])
@@ -560,7 +560,7 @@ def test_icc_reconcile_confirms_delta(tmp_path):
 
 def test_icc_reconcile_in_tools_list():
     """icc_reconcile is now advertised in tools/list (with _internal flag)."""
-    daemon = ReplDaemon(root=ROOT)
+    daemon = EmergeDaemon(root=ROOT)
     resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 70, "method": "tools/list", "params": {}})
     names = [t["name"] for t in resp["result"]["tools"]]
     assert "icc_reconcile" in names
@@ -573,7 +573,7 @@ def test_l15_exec_routes_to_pipeline_when_stable(tmp_path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "l15-promote-test"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         session_dir = tmp_path / "state" / daemon._base_session_id
         session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -622,7 +622,7 @@ def test_l15_exec_does_not_promote_when_candidate_is_canary(tmp_path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "l15-canary-test"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         session_dir = tmp_path / "state" / daemon._base_session_id
         session_dir.mkdir(parents=True, exist_ok=True)
 

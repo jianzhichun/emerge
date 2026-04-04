@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.emerge_daemon import EmergeDaemon as ReplDaemon
+from scripts.emerge_daemon import EmergeDaemon
 
 
 def test_icc_exec_script_ref_mode_runs_file_with_args(tmp_path: Path):
@@ -18,7 +18,7 @@ def test_icc_exec_script_ref_mode_runs_file_with_args(tmp_path: Path):
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
     os.environ["REPL_SCRIPT_ROOTS"] = str(tmp_path)
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         out = daemon.call_tool(
             "icc_exec",
             {
@@ -42,7 +42,7 @@ def test_icc_exec_script_ref_rejects_path_outside_allowlist(tmp_path: Path):
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
     os.environ["REPL_SCRIPT_ROOTS"] = str(tmp_path / "allowed")
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         out = daemon.call_tool(
             "icc_exec",
             {"mode": "script_ref", "script_ref": str(outside)},
@@ -59,7 +59,7 @@ def test_icc_exec_target_profiles_are_isolated(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         daemon.call_tool(
             "icc_exec",
             {"code": "x = 5", "target_profile": "mycader-1.zwcad"},
@@ -79,7 +79,7 @@ def test_icc_exec_success_updates_candidate_registry(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         out = daemon.call_tool(
             "icc_exec",
             {
@@ -114,7 +114,7 @@ def test_auto_promotes_candidate_to_canary_when_thresholds_met(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         for _ in range(20):
             out = daemon.call_tool(
                 "icc_exec",
@@ -143,7 +143,7 @@ def test_auto_rolls_back_canary_on_two_consecutive_failures(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         for _ in range(20):
             daemon.call_tool(
                 "icc_exec",
@@ -192,7 +192,7 @@ def test_canary_sampling_progresses_to_stable(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         for _ in range(20):
             daemon.call_tool(
                 "icc_exec",
@@ -231,7 +231,7 @@ def test_stable_rolls_back_on_window_failure_rate(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         common = {
             "mode": "inline_code",
             "target_profile": "mycader-1.zwcad",
@@ -299,7 +299,7 @@ def test_exec_degraded_argument_is_not_trusted_for_policy_counters(tmp_path: Pat
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
-        daemon = ReplDaemon(root=ROOT)
+        daemon = EmergeDaemon(root=ROOT)
         key = "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py"
         common = {
             "mode": "inline_code",
