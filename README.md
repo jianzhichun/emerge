@@ -27,6 +27,7 @@ flowchart TB
   subgraph daemon [EmergeDaemon — scripts/emerge_daemon.py]
     T[icc_exec · icc_read · icc_write · icc_crystallize · icc_reconcile]
     R[policy:// · runner:// · state:// · pipeline://]
+    OM[OperatorMonitor thread\nenabled via EMERGE_OPERATOR_MONITOR=1]
   end
 
   subgraph core [Runtime Core]
@@ -36,23 +37,26 @@ flowchart TB
     ST[StateTracker]
     Met[Metrics sink]
     RR[RunnerRouter]
+    PD2[PatternDetector + Distiller]
   end
 
   subgraph persist [Persistence]
     SD[session/ — wal.jsonl · candidates.json · events]
-    Reg[~/.emerge/ — pipelines-registry · connectors]
+    Reg[~/.emerge/ — pipelines-registry · connectors · adapters]
     PD[.plugin-data/ — state.json · metrics.jsonl]
+    EB[~/.emerge/operator-events/\nmachine_id/events.jsonl]
   end
 
   subgraph runner [Remote Runner — optional]
     RC[RunnerClient]
-    RProc[remote_runner.py — pure icc_exec executor]
+    RProc[remote_runner.py — icc_exec + EventBus endpoints]
   end
 
   Agent <-->|MCP stdio / JSON-RPC 2.0| daemon
   Hooks -->|additionalContext — Goal · Delta| Agent
 
   T --> ES & PE & PR & ST & Met & RR
+  daemon --> OM
 
   ES --> SD
   PR --> SD & Reg
@@ -60,6 +64,11 @@ flowchart TB
   ST & Met --> PD
 
   RR --> RC -->|HTTP POST /run — icc_exec only| RProc
+  RProc -->|POST /operator-event| EB
+  OM -->|GET /operator-events| RC
+  EB --> OM
+  OM --> PD2
+  PD2 -->|MCP push — channel notify / ElicitRequest| Agent
 ```
 
 **Component responsibilities:**
