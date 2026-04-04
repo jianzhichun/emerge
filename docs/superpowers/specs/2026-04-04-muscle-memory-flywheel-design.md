@@ -221,6 +221,56 @@ With real `human_fix_rate` data:
 
 ---
 
+## Naming Unification
+
+All changes to align naming with the "muscle memory flywheel" mental model, removing the legacy "REPL" and "L1.5" framing.
+
+### Layer 1 — File + class renames (tests follow)
+
+| Old | New | Reason |
+|---|---|---|
+| `scripts/repl_state.py` | `scripts/exec_session.py` | Not a REPL — a persistent exec session with WAL |
+| `ReplState` | `ExecSession` | Same |
+| `scripts/repl_daemon.py` | `scripts/emerge_daemon.py` | It's the emerge MCP server, not a REPL daemon |
+| `ReplDaemon` | `EmergeDaemon` | Same; `plugin.json` args updated accordingly |
+
+### Layer 2 — Environment variables (add aliases, old names kept as fallback)
+
+| Old | New | Strategy |
+|---|---|---|
+| `REPL_STATE_ROOT` | `EMERGE_STATE_ROOT` | Code reads new name first, falls back to old; docs use new name only |
+| `REPL_SESSION_ID` | `EMERGE_SESSION_ID` | Same |
+
+### Layer 3 — Python method/variable names (zero disk impact)
+
+| Old | New |
+|---|---|
+| `default_repl_root()` | `default_exec_root()` |
+| `_try_l15_promote()` | `_try_flywheel_bridge()` |
+| `_l15_candidate_key()` | `_bridge_candidate_key()` |
+| `_repl_by_profile` | `_sessions_by_profile` |
+| `_get_repl()` | `_get_session()` |
+| `l15_promoted` result field | `bridge_promoted` |
+| `l15.promoted` metric event | `flywheel.bridge.promoted` |
+| `schema_version: "l15.v1"` | `"flywheel.v1"` |
+
+### Layer 4 — JSON disk keys (storage unchanged, only code names change)
+
+`l15::` prefix in `candidates.json` is historical on-disk data. **Do not change the JSON key** — only rename the Python methods that produce it. Avoids data migration with no real readability gain (it's an opaque key anyway).
+
+### MCP tool names (external API — unchanged)
+
+`icc_exec`, `icc_read`, `icc_write`, `icc_reconcile` — unchanged.
+
+New tool (not yet implemented, name it correctly from the start):
+- `icc_synthesize` in design → **`icc_crystallize`** in implementation (crystallize = muscle memory forming)
+
+### Plugin description
+
+`"Generic RWB flywheel plugin for Claude Code"` → `"Emerge muscle memory flywheel for Claude Code"`
+
+---
+
 ## Out of Scope
 
 - LLM API calls from within the daemon (daemon stays stateless/sync)
