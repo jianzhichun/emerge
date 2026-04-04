@@ -295,6 +295,12 @@ references/         External reference codebases (git submodule)
 </tr>
 <tr>
 <td align="center">🔵<br><sub>next</sub></td>
+<td><b>Operator Intelligence Loop</b><br>
+<sub>A reverse flywheel that observes the <i>human</i>, not just the AI. A background monitor audits operator behavior on a configurable time window (default 5 min) — surfacing a native GUI popup: <i>"you've done this 8 times today — why? want me to take it?"</i> Intent is captured, patterns are distilled into operator skill profiles, and repetitive sequences are handed off to the AI layer. The goal: progressively free operators from work that is mechanical, high-frequency, or already crystallized somewhere in the pipeline registry. Operator as author, not executor.</sub>
+</td>
+</tr>
+<tr>
+<td align="center">🟡<br><sub>planned</sub></td>
 <td><b>Memory Hub</b><br>
 <sub>Stable pipelines are pure data. Publish by <code>intent_signature</code>, install with one command, aggregate community success / human-fix rates. Parameterized connectors strip local paths before publish. Diff-aware re-crystallize auto-demotes when the connector API changes.</sub>
 </td>
