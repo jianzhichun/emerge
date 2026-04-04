@@ -83,6 +83,7 @@ class EmergeDaemon:
         _default_metrics_path = default_emerge_home() / "metrics.jsonl"
         self._sink = get_sink(_settings, default_path=_default_metrics_path)
         self._operator_monitor: "OperatorMonitor | None" = None
+        self._notification_dispatcher: "NotificationDispatcher | None" = None
 
     def _try_flywheel_bridge(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
         intent_signature = str(arguments.get("intent_signature", "")).strip()
@@ -1503,9 +1504,16 @@ class EmergeDaemon:
                         timeout_s=min(client.timeout_s, 10.0),
                     )
 
+        from scripts.notify_dispatcher import NotificationDispatcher
+
+        self._notification_dispatcher = NotificationDispatcher(
+            mcp_push_fn=self._mcp_push_simple,
+            runner_router=self._runner_router,
+        )
+
         self._operator_monitor = OperatorMonitor(
             machines=machines,
-            push_fn=self._push_pattern_to_cc,
+            push_fn=self._push_pattern,
             poll_interval_s=poll_s,
             event_root=Path.home() / ".emerge" / "operator-events",
             adapter_root=Path.home() / ".emerge" / "adapters",
@@ -1516,35 +1524,75 @@ class EmergeDaemon:
         if self._operator_monitor is not None:
             self._operator_monitor.stop()
 
-    def _push_pattern_to_cc(self, stage: str, context: dict, summary: Any) -> None:
-        """Push pattern detection result to CC via MCP.
+    def _push_pattern(self, stage: str, context: dict, summary: Any) -> None:
+        """Push pattern detection result to CC via MCP and OS-native dialog.
         Explore -> channel notification (LLM evaluates).
         Canary/Stable -> ElicitRequest form (blocking dialog).
         """
+        # Build message string for both paths
         if stage == "explore":
-            msg = self._build_explore_message(context, summary)
-            notification = {
+            message = self._build_explore_message(context, summary)
+        else:
+            message = f"⚡ {summary.intent_signature} × {summary.occurrences}"
+
+        # OS-native dialog (blocking — waits for operator response)
+        if self._notification_dispatcher is not None:
+            timeout_s = 10 if stage == "stable" else 0
+            intent_draft = self._build_intent_draft(context, summary)
+            self._notification_dispatcher.dispatch(
+                stage=stage,
+                message=message,
+                intent_draft=intent_draft,
+                timeout_s=timeout_s,
+                machine_ids=summary.machine_ids,
+            )
+
+        # CC MCP path (always fire; for canary/stable sends full ElicitRequest)
+        if stage == "explore":
+            self._write_mcp_push({
                 "jsonrpc": "2.0",
                 "method": "notifications/claude/channel",
                 "params": {
                     "serverName": "emerge",
-                    "content": msg,
+                    "content": message,
                     "meta": {
                         "source": "operator_monitor",
                         "intent_signature": summary.intent_signature,
                     },
                 },
-            }
-            self._write_mcp_push(notification)
+            })
         else:
             params = self._build_elicit_params(stage, context, summary)
-            request = {
+            self._write_mcp_push({
                 "jsonrpc": "2.0",
                 "id": f"elicit-{summary.intent_signature}-{int(time.time())}",
                 "method": "elicit",
                 "params": params,
-            }
-            self._write_mcp_push(request)
+            })
+
+    def _mcp_push_simple(self, stage: str, message: str) -> None:
+        """Non-blocking MCP push for the notification dispatcher's co-fire."""
+        if stage == "explore":
+            self._write_mcp_push({
+                "jsonrpc": "2.0",
+                "method": "notifications/claude/channel",
+                "params": {
+                    "serverName": "emerge",
+                    "content": message,
+                    "meta": {"source": "operator_monitor"},
+                },
+            })
+        # For canary/stable the full ElicitRequest is sent by _push_pattern
+
+    def _build_intent_draft(self, context: dict, summary: Any) -> str:
+        """Build AI pre-fill text for explore dialog editable field."""
+        app = context.get("app", "unknown")
+        event_type = context.get("event_type", summary.intent_signature)
+        samples = context.get("samples", [])
+        base = f"在 {app} 中重复执行 {event_type}"
+        if samples:
+            base += f"（如：{', '.join(str(s) for s in samples[:2])}）"
+        return base
 
     def _build_explore_message(self, context: dict, summary: Any) -> str:
         app = context.get("app", "unknown")
