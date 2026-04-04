@@ -106,8 +106,8 @@ def cmd_clear() -> dict:
 
 
 def cmd_policy_status() -> dict:
-    session_dir, _, _ = _session_paths()
-    registry_path = session_dir / "pipelines-registry.json"
+    state_root = _resolve_state_root()
+    registry_path = state_root / "pipelines-registry.json"
     pipelines = []
     registry_corrupt = False
     if registry_path.exists():
@@ -144,6 +144,78 @@ def cmd_policy_status() -> dict:
             "rollback_consecutive_failures": ROLLBACK_CONSECUTIVE_FAILURES,
         },
         "pipelines": pipelines,
+    }
+
+
+def _normalize_pipeline_key(key: str) -> str:
+    """Accept 'mock.read.layers' or 'pipeline::mock.read.layers' — always return full key."""
+    key = key.strip()
+    if not key.startswith("pipeline::"):
+        key = f"pipeline::{key}"
+    return key
+
+
+def _load_registry(state_root: Path) -> tuple[Path, dict]:
+    registry_path = state_root / "pipelines-registry.json"
+    if registry_path.exists():
+        data = json.loads(registry_path.read_text(encoding="utf-8"))
+    else:
+        data = {"pipelines": {}}
+    return registry_path, data
+
+
+def _save_registry(registry_path: Path, data: dict) -> None:
+    registry_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def cmd_pipeline_delete(*, key: str) -> dict:
+    """Remove a pipeline entry from the registry."""
+    full_key = _normalize_pipeline_key(key)
+    state_root = _resolve_state_root()
+    registry_path, data = _load_registry(state_root)
+    pipelines = data.get("pipelines", {})
+    if full_key not in pipelines:
+        return {"ok": False, "error": f"pipeline not found: {full_key}", "key": full_key}
+    del pipelines[full_key]
+    data["pipelines"] = pipelines
+    _save_registry(registry_path, data)
+    return {"ok": True, "deleted": full_key, "remaining": len(pipelines)}
+
+
+def cmd_pipeline_set(*, key: str, fields: dict) -> dict:
+    """Reconcile / patch specific fields on a pipeline registry entry.
+
+    Allowed patchable fields: status, rollout_pct, consecutive_failures,
+    policy_enforced_count, stop_triggered_count, rollback_executed_count,
+    last_policy_action, success_rate, verify_rate, human_fix_rate.
+    """
+    PATCHABLE = {
+        "status", "rollout_pct", "consecutive_failures",
+        "policy_enforced_count", "stop_triggered_count", "rollback_executed_count",
+        "last_policy_action", "success_rate", "verify_rate", "human_fix_rate",
+    }
+    unknown = set(fields) - PATCHABLE
+    if unknown:
+        return {"ok": False, "error": f"unknown fields: {sorted(unknown)}", "allowed": sorted(PATCHABLE)}
+
+    full_key = _normalize_pipeline_key(key)
+    state_root = _resolve_state_root()
+    registry_path, data = _load_registry(state_root)
+    pipelines = data.get("pipelines", {})
+
+    if full_key not in pipelines:
+        return {"ok": False, "error": f"pipeline not found: {full_key}", "key": full_key}
+
+    before = dict(pipelines[full_key])
+    pipelines[full_key].update(fields)
+    data["pipelines"] = pipelines
+    _save_registry(registry_path, data)
+    return {
+        "ok": True,
+        "key": full_key,
+        "patched": fields,
+        "before": {k: before.get(k) for k in fields},
+        "after": {k: pipelines[full_key].get(k) for k in fields},
     }
 
 
@@ -310,6 +382,100 @@ def _probe_runner_health(*, runner_url: str, attempts: int = 5, sleep_s: float =
             health_error = str(exc)
             time.sleep(max(0.0, sleep_s))
     return {}, health_error
+
+
+def cmd_runner_deploy(
+    *,
+    runner_url: str = "",
+    target_profile: str = "default",
+    files: list[str] | None = None,
+    windows: bool = False,
+) -> dict:
+    """Push local scripts/ to remote runner via icc_exec (HTTP) and signal hot-reload.
+
+    Only deploys runner-side scripts (excludes dev-machine-only tools like
+    repl_admin.py and repl_daemon.py).  The remote path is derived from the
+    runner's own /status endpoint so no path needs to be hardcoded here.
+    """
+    import base64
+    import urllib.error
+    import urllib.request
+
+    # Resolve runner URL from config if not provided
+    if not runner_url:
+        cfg = _load_runner_config()
+        runner_url = cfg.get("map", {}).get(target_profile, "") or cfg.get("default_url", "")
+    if not runner_url:
+        raise ValueError("runner_url required (or configure via runner-config-set)")
+
+    def _http_get(path: str) -> dict:
+        no_proxy = urllib.request.ProxyHandler({})
+        opener = urllib.request.build_opener(no_proxy)
+        with opener.open(runner_url.rstrip("/") + path, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    def _http_exec(code: str) -> dict:
+        payload = json.dumps({"tool_name": "icc_exec", "arguments": {"code": code}}).encode()
+        req = urllib.request.Request(
+            runner_url.rstrip("/") + "/run",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        no_proxy = urllib.request.ProxyHandler({})
+        opener = urllib.request.build_opener(no_proxy)
+        with opener.open(req, timeout=30) as resp:
+            return json.loads(resp.read())
+
+    # Fetch runner's actual plugin root from /status (avoids any hardcoded path)
+    status = _http_get("/status")
+    remote_root = status.get("root", "").strip()
+    if not remote_root:
+        raise RuntimeError(f"Could not determine remote plugin root from /status: {status}")
+
+    actions: list[str] = []
+
+    # Files to deploy: scripts/*.py that are needed on the runner.
+    # Exclude dev-machine-only tools that serve no purpose on the remote runner.
+    _DEV_ONLY = {"repl_admin.py", "repl_daemon.py"}
+    scripts_dir = ROOT / "scripts"
+    if files:
+        deploy_files = [ROOT / f for f in files]
+    else:
+        deploy_files = [
+            p for p in scripts_dir.rglob("*.py")
+            if "__pycache__" not in str(p) and p.name not in _DEV_ONLY
+        ]
+
+    for local_path in deploy_files:
+        rel = local_path.relative_to(ROOT)
+        # Use forward slashes; pathlib on the runner handles both
+        rel_posix = rel.as_posix()
+        content_b64 = base64.b64encode(local_path.read_bytes()).decode()
+        code = (
+            f"import base64, pathlib\n"
+            f"data = base64.b64decode({repr(content_b64)})\n"
+            f"dst = pathlib.Path({repr(remote_root)}) / {repr(rel_posix)}\n"
+            f"dst.parent.mkdir(parents=True, exist_ok=True)\n"
+            f"dst.write_bytes(data)\n"
+            f"print(f'wrote {{len(data)}}b -> {{dst.name}}')"
+        )
+        resp = _http_exec(code)
+        if not resp.get("ok"):
+            raise RuntimeError(f"deploy failed for {rel}: {resp}")
+    actions.append(f"files_synced ({len(deploy_files)} files)")
+
+    # Touch .watchdog-restart so the watchdog hot-reloads the runner
+    signal_code = (
+        f"import pathlib\n"
+        f"sig = pathlib.Path({repr(remote_root)}) / '.watchdog-restart'\n"
+        f"sig.touch()\n"
+        f"print('restart signal written')"
+    )
+    _http_exec(signal_code)
+    actions.append("restart_signal_sent")
+
+    return {"ok": True, "runner_url": runner_url, "file_count": len(deploy_files), "actions": actions}
 
 
 def cmd_runner_bootstrap(
@@ -583,6 +749,9 @@ def main() -> None:
             "runner-config-set",
             "runner-config-unset",
             "runner-bootstrap",
+        "runner-deploy",
+        "pipeline-delete",
+        "pipeline-set",
         ],
     )
     parser.add_argument("--pretty", action="store_true", help="Render human-readable output")
@@ -606,6 +775,9 @@ def main() -> None:
         action="store_true",
         help="Use Windows-compatible (PowerShell) commands for bootstrap (SSH target is Windows)",
     )
+    parser.add_argument("--pipeline-key", default="", help="Pipeline key for pipeline-delete/pipeline-set (e.g. mock.read.layers)")
+    parser.add_argument("--set", dest="set_fields", action="append", metavar="FIELD=VALUE",
+                        help="Field to patch for pipeline-set (repeatable, e.g. --set status=explore --set rollout_pct=0)")
     args = parser.parse_args()
 
     if args.command == "status":
@@ -639,6 +811,27 @@ def main() -> None:
             deploy=not bool(args.skip_deploy),
             windows=bool(args.windows),
         )
+    elif args.command == "runner-deploy":
+        out = cmd_runner_deploy(
+            runner_url=str(args.runner_url),
+            target_profile=str(args.target_profile) or "default",
+        )
+    elif args.command == "pipeline-delete":
+        out = cmd_pipeline_delete(key=str(args.pipeline_key))
+    elif args.command == "pipeline-set":
+        fields: dict = {}
+        for pair in (args.set_fields or []):
+            k, _, v = pair.partition("=")
+            k = k.strip()
+            # coerce numeric-looking values
+            try:
+                fields[k] = int(v)
+            except ValueError:
+                try:
+                    fields[k] = float(v)
+                except ValueError:
+                    fields[k] = v
+        out = cmd_pipeline_set(key=str(args.pipeline_key), fields=fields)
     else:
         out = cmd_clear()
 

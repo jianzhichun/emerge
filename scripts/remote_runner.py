@@ -2,17 +2,39 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import logging.handlers
 import os
+import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+# Ensure plugin root is on sys.path so this script is self-contained
+# regardless of how it is launched (no PYTHONPATH required).
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 from scripts.pipeline_engine import PipelineEngine
 from scripts.policy_config import derive_profile_token, derive_session_id, default_repl_root
 from scripts.repl_state import ReplState
 
 ROOT = Path(__file__).resolve().parents[1]
+_START_TIME = time.time()
+_LOG_FILE = ROOT / ".runner.log"
+_LOG_MAX_BYTES = 2 * 1024 * 1024  # 2 MB rolling
+
+
+def _setup_logging() -> None:
+    handler = logging.handlers.RotatingFileHandler(
+        _LOG_FILE, maxBytes=_LOG_MAX_BYTES, backupCount=2, encoding="utf-8"
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logging.getLogger().addHandler(handler)
+    logging.getLogger().setLevel(logging.INFO)
 
 
 class RunnerExecutor:
@@ -94,6 +116,7 @@ class RunnerHTTPHandler(BaseHTTPRequestHandler):
         if self.path != "/run":
             self._send_json(404, {"ok": False, "error": "not_found"})
             return
+        t0 = time.time()
         try:
             content_length = int(self.headers.get("Content-Length", "0"))
             raw = self.rfile.read(content_length).decode("utf-8")
@@ -105,8 +128,12 @@ class RunnerHTTPHandler(BaseHTTPRequestHandler):
             if not isinstance(arguments, dict):
                 raise ValueError("arguments must be an object")
             result = self.executor.run(tool_name=tool_name, arguments=arguments)
+            elapsed = round(time.time() - t0, 3)
+            logging.info("POST /run tool=%s elapsed=%.3fs ok=True", tool_name, elapsed)
             self._send_json(200, {"ok": True, "result": result})
         except Exception as exc:
+            elapsed = round(time.time() - t0, 3)
+            logging.warning("POST /run elapsed=%.3fs error=%s", elapsed, exc)
             self._send_json(400, {"ok": False, "error": str(exc)})
 
     def do_GET(self) -> None:  # noqa: N802
@@ -117,8 +144,41 @@ class RunnerHTTPHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "service": "emerge-remote-runner",
                     "status": "ready",
+                    "uptime_s": round(time.time() - _START_TIME),
                 },
             )
+            return
+        if self.path == "/status":
+            self._send_json(
+                200,
+                {
+                    "ok": True,
+                    "service": "emerge-remote-runner",
+                    "uptime_s": round(time.time() - _START_TIME),
+                    "log_file": str(_LOG_FILE),
+                    "pid": os.getpid(),
+                    "python": sys.executable,
+                    "root": str(ROOT),
+                },
+            )
+            return
+        if self.path.startswith("/logs"):
+            try:
+                n = int(self.path.split("?n=")[-1]) if "?n=" in self.path else 100
+                n = min(max(n, 1), 2000)
+                lines: list[str] = []
+                if _LOG_FILE.exists():
+                    with open(_LOG_FILE, encoding="utf-8", errors="replace") as f:
+                        lines = f.readlines()
+                tail = "".join(lines[-n:])
+                body = tail.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                self._send_json(500, {"ok": False, "error": str(exc)})
             return
         self._send_json(404, {"ok": False, "error": "not_found"})
 
@@ -127,6 +187,8 @@ class RunnerHTTPHandler(BaseHTTPRequestHandler):
 
 
 def run_server(host: str, port: int, *, root: Path | None = None, state_root: Path | None = None) -> None:
+    _setup_logging()
+    logging.info("emerge-remote-runner starting host=%s port=%d pid=%d", host, port, os.getpid())
     executor = RunnerExecutor(root=root, state_root=state_root)
     handler_cls = type(
         "BoundRunnerHTTPHandler",

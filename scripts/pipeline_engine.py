@@ -12,10 +12,13 @@ _USER_CONNECTOR_ROOT = Path("~/.emerge/connectors").expanduser()
 class PipelineEngine:
     def __init__(self, root: Path | None = None) -> None:
         self.root = root or Path(__file__).resolve().parents[1]
-        # Search order: env override → user connector root → plugin connector root (mock only)
+        # Search order: env override (prepended) → user connector root → plugin connector root
+        # EMERGE_CONNECTOR_ROOT adds an *extra* root at the front — it does not replace the
+        # user connector root.  This lets tests inject fixtures (e.g. mock) while still
+        # reaching user-space connectors (e.g. zwcad in ~/.emerge/connectors/).
         env_root = os.environ.get("EMERGE_CONNECTOR_ROOT", "").strip()
         if env_root:
-            self._connector_roots = [Path(env_root).expanduser(), self.root / "connectors"]
+            self._connector_roots = [Path(env_root).expanduser(), _USER_CONNECTOR_ROOT, self.root / "connectors"]
         else:
             self._connector_roots = [_USER_CONNECTOR_ROOT, self.root / "connectors"]
 

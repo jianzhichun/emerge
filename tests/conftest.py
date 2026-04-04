@@ -2,7 +2,20 @@
 Shared pytest fixtures for the emerge test suite.
 """
 import os
+from pathlib import Path
+
 import pytest
+
+_TESTS_DIR = Path(__file__).resolve().parent
+
+
+@pytest.fixture(autouse=True)
+def _mock_connector_root(monkeypatch):
+    """Point EMERGE_CONNECTOR_ROOT at tests/connectors so PipelineEngine finds
+    the mock connector during testing.  The mock directory lives here rather than
+    in the plugin root so it is not shipped when Claude Code installs the plugin.
+    """
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(_TESTS_DIR / "connectors"))
 
 
 @pytest.fixture(autouse=True)
