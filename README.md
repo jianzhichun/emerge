@@ -54,7 +54,7 @@ flowchart LR
     direction TB
     RC[RunnerClient]
     RProc[remote_runner.py<br/>icc_exec + EventBus endpoints]
-    RC -->|POST /run (icc_exec)| RProc
+    RC -->|POST /run: icc_exec| RProc
   end
 
   subgraph persist [Persistence]
