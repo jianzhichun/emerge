@@ -446,6 +446,23 @@ def test_resources_read_unknown_uri_returns_error():
     assert "error" in resp or resp.get("result", {}).get("isError")
 
 
+def test_resources_read_pipeline_uri_rejects_path_traversal():
+    """_read_resource must not serve files outside connector roots via ../."""
+    daemon = ReplDaemon(root=ROOT)
+    traversal_uris = [
+        "pipeline://../etc/passwd/read/test",
+        "pipeline://zwcad/../../etc/read/secret",
+        "pipeline://zwcad/read/../../../etc/passwd",
+        "pipeline:///absolute/path/read/evil",
+    ]
+    for uri in traversal_uris:
+        resp = daemon.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 99, "method": "resources/read", "params": {"uri": uri}}
+        )
+        # Must return an error, never file contents
+        assert "error" in resp, f"Expected error for traversal URI {uri!r}, got {resp}"
+
+
 # ── Task 7: MCP prompts ──────────────────────────────────────────────────────
 
 def test_prompts_list_returns_icc_explore_and_icc_promote():

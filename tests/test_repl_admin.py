@@ -338,6 +338,47 @@ def test_remote_root_expr_expands_home():
     assert repl_admin._remote_root_expr("~/plugin") == "$HOME/plugin"
 
 
+def test_runner_bootstrap_shell_commands_quote_remote_root(monkeypatch):
+    """SSH shell strings must shlex-quote remote_root to prevent injection."""
+    import shlex
+    captured: list[list[str]] = []
+
+    def fake_run_checked(command: list[str], *, timeout_s: int = 90) -> str:
+        captured.append(command)
+        return ""
+
+    monkeypatch.setattr(repl_admin, "_run_checked", fake_run_checked)
+    monkeypatch.setattr(
+        repl_admin,
+        "_probe_runner_health",
+        lambda **kwargs: ({"ok": True, "status": "ready"}, ""),
+    )
+    monkeypatch.setattr(repl_admin, "cmd_runner_config_set", lambda **kwargs: {})
+
+    evil_root = "/tmp/test && echo INJECTED"
+    try:
+        repl_admin.cmd_runner_bootstrap(
+            ssh_target="user@host",
+            target_profile="test",
+            remote_plugin_root=evil_root,
+            runner_host="127.0.0.1",
+            runner_port=8787,
+            runner_url="http://host:8787",
+            python_bin="python3",
+            deploy=False,
+        )
+    except Exception:
+        pass  # health or other failures are OK; we only care about command shape
+
+    # All SSH shell strings containing remote_root must have it quoted
+    for cmd in captured:
+        if cmd and cmd[0] == "ssh":
+            shell_str = cmd[-1]
+            if evil_root in shell_str or shlex.quote(evil_root) in shell_str:
+                # The raw unquoted evil string must NOT appear as a standalone token
+                assert "echo INJECTED" not in shell_str or shlex.quote(evil_root) in shell_str
+
+
 def test_runner_bootstrap_rejects_invalid_port():
     with pytest.raises(ValueError):
         repl_admin.cmd_runner_bootstrap(

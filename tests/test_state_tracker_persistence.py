@@ -59,3 +59,26 @@ def test_set_goal_truncates_to_token_budget():
     tracker.set_goal("x" * 300, source="test")
     token = tracker.format_recovery_token()
     assert len(token["goal"]) == 120
+
+
+def test_format_recovery_token_hard_budget_cap():
+    """Token must fit within budget_chars even when all deltas are CORE_CRITICAL."""
+    import json
+    from scripts.state_tracker import LEVEL_CORE_CRITICAL
+    tracker = StateTracker()
+    tracker.set_goal("stress test", source="test")
+    # Add many large critical deltas — total will far exceed 800 chars
+    for i in range(30):
+        tracker.add_delta(
+            message=f"critical delta {i}: " + "x" * 60,
+            level=LEVEL_CORE_CRITICAL,
+        )
+    budget = 800
+    token = tracker.format_recovery_token(budget_chars=budget)
+    encoded = json.dumps(token, ensure_ascii=True, separators=(",", ":"))
+    assert len(encoded) <= budget, (
+        f"Token ({len(encoded)} chars) exceeds budget ({budget} chars)"
+    )
+    # Must still have schema and goal
+    assert token["schema_version"] == "l15.v1"
+    assert token["goal"] == "stress test"
