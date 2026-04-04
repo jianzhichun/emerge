@@ -163,7 +163,7 @@ class StateTracker:
             )
 
         token: dict[str, Any] = {
-            "schema_version": "l15.v1",
+            "schema_version": "flywheel.v1",
             "goal": self.state.get("goal") or "",
             "goal_source": self.state.get("goal_source", "unset"),
             "verification_state": self.state.get("verification_state", "verified"),

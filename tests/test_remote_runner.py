@@ -61,15 +61,15 @@ def test_runner_client_read_and_write(tmp_path: Path):
         assert write["isError"] is False
 
 
-def test_get_repl_is_thread_safe(tmp_path: Path):
-    """Concurrent _get_repl calls for the same profile must return the same ReplState."""
+def test_get_session_is_thread_safe(tmp_path: Path):
+    """Concurrent _get_session calls for the same profile must return the same ReplState."""
     executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
     results: list[object] = []
     errors: list[Exception] = []
 
     def fetch() -> None:
         try:
-            results.append(executor._get_repl("default"))
+            results.append(executor._get_session("default"))
         except Exception as exc:
             errors.append(exc)
 

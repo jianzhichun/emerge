@@ -43,14 +43,14 @@ class RunnerExecutor:
         self._root = resolved_root
         self._state_root = (state_root or default_repl_root()).expanduser().resolve()
         self._base_session_id = derive_session_id(os.environ.get("REPL_SESSION_ID"), resolved_root)
-        self._repl_by_profile: dict[str, ExecSession] = {}
+        self._sessions_by_profile: dict[str, ExecSession] = {}
         self._repl_lock = threading.Lock()
         self.pipeline = PipelineEngine(root=resolved_root)
 
     def run(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if tool_name == "icc_exec":
             profile = str(arguments.get("target_profile", "default"))
-            repl = self._get_repl(profile)
+            repl = self._get_session(profile)
             mode = str(arguments.get("mode", "inline_code"))
             code = self._resolve_exec_code(mode=mode, arguments=arguments)
             return repl.exec_code(
@@ -72,21 +72,21 @@ class RunnerExecutor:
             return {"isError": False, "content": [{"type": "text", "text": json.dumps(result)}]}
         return {"isError": True, "content": [{"type": "text", "text": f"Unknown tool: {tool_name}"}]}
 
-    def _get_repl(self, target_profile: str) -> ExecSession:
+    def _get_session(self, target_profile: str) -> ExecSession:
         normalized = (target_profile or "default").strip() or "default"
         profile_key = "__default__" if normalized == "default" else derive_profile_token(normalized)
-        if profile_key not in self._repl_by_profile:
+        if profile_key not in self._sessions_by_profile:
             with self._repl_lock:
-                if profile_key not in self._repl_by_profile:
+                if profile_key not in self._sessions_by_profile:
                     session_id = (
                         self._base_session_id
                         if normalized == "default"
                         else f"{self._base_session_id}__{profile_key}"
                     )
-                    self._repl_by_profile[profile_key] = ExecSession(
+                    self._sessions_by_profile[profile_key] = ExecSession(
                         state_root=self._state_root, session_id=session_id
                     )
-        return self._repl_by_profile[profile_key]
+        return self._sessions_by_profile[profile_key]
 
     def _resolve_exec_code(self, mode: str, arguments: dict[str, Any]) -> str:
         if mode == "script_ref":

@@ -621,7 +621,7 @@ def test_l15_exec_routes_to_pipeline_when_stable(tmp_path):
         })
         assert out["isError"] is False
         body = json.loads(out["content"][0]["text"])
-        assert body.get("l15_promoted") is True
+        assert body.get("bridge_promoted") is True
         assert body.get("pipeline_id") == "mock.read.layers"
     finally:
         os.environ.pop("REPL_STATE_ROOT", None)
@@ -657,10 +657,10 @@ def test_l15_exec_does_not_promote_when_candidate_is_canary(tmp_path):
         })
         assert out["isError"] is False
         body_text = out["content"][0]["text"]
-        # Should NOT be promoted — either normal exec output or no l15_promoted key
+        # Should NOT be promoted — either normal exec output or no bridge_promoted key
         try:
             body = json.loads(body_text)
-            assert body.get("l15_promoted") is not True
+            assert body.get("bridge_promoted") is not True
         except Exception:
             pass  # non-JSON output is fine for normal exec
     finally:

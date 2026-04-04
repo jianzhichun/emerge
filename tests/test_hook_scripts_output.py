@@ -39,7 +39,7 @@ def test_session_start_and_user_prompt_submit_output_parseable(tmp_path: Path):
     assert u_json["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
     assert "Goal" in u_json["hookSpecificOutput"]["additionalContext"]
     token = _extract_l15_token(u_json["hookSpecificOutput"]["additionalContext"])
-    assert token["schema_version"] == "l15.v1"
+    assert token["schema_version"] == "flywheel.v1"
     assert "deltas" in token
     assert token["goal_source"] in {"unset", "hook_payload"}
 
@@ -58,7 +58,7 @@ def test_post_tool_use_and_pre_compact_contract(tmp_path: Path):
     assert p_json["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
     assert "additionalContext" in p_json["hookSpecificOutput"]
     token = _extract_l15_token(p_json["hookSpecificOutput"]["additionalContext"])
-    assert token["schema_version"] == "l15.v1"
+    assert token["schema_version"] == "flywheel.v1"
     assert token["deltas"]
 
     import os
@@ -174,6 +174,6 @@ def test_pre_compact_emits_recovery_token(tmp_path: Path):
     assert "L1_5_TOKEN" in ctx
     token_text = ctx.rsplit("L1_5_TOKEN\n", 1)[1].strip()
     token = json.loads(token_text)
-    assert token["schema_version"] == "l15.v1"
+    assert token["schema_version"] == "flywheel.v1"
     assert isinstance(token["deltas"], list)
     assert len(ctx) <= 900  # budget enforced

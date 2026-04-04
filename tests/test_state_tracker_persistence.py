@@ -48,7 +48,7 @@ def test_format_recovery_token_includes_schema_and_deltas():
     tracker.set_goal("recover", source="test")
     tracker.add_delta("core update")
     token = tracker.format_recovery_token()
-    assert token["schema_version"] == "l15.v1"
+    assert token["schema_version"] == "flywheel.v1"
     assert token["goal"] == "recover"
     assert token["goal_source"] == "test"
     assert token["deltas"]
@@ -80,5 +80,5 @@ def test_format_recovery_token_hard_budget_cap():
         f"Token ({len(encoded)} chars) exceeds budget ({budget} chars)"
     )
     # Must still have schema and goal
-    assert token["schema_version"] == "l15.v1"
+    assert token["schema_version"] == "flywheel.v1"
     assert token["goal"] == "stress test"

@@ -44,7 +44,7 @@ class EmergeDaemon:
             resolved_root,
         )
         self._state_root = state_root
-        self._repl_by_profile: dict[str, ExecSession] = {}
+        self._sessions_by_profile: dict[str, ExecSession] = {}
         self.pipeline = PipelineEngine(root=resolved_root)
         self._root = resolved_root
         self._script_roots = self._resolve_script_roots()
@@ -58,7 +58,7 @@ class EmergeDaemon:
         _default_metrics_path = default_emerge_home() / "metrics.jsonl"
         self._sink = get_sink(_settings, default_path=_default_metrics_path)
 
-    def _try_l15_promote(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
+    def _try_flywheel_bridge(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
         intent_signature = str(arguments.get("intent_signature", "")).strip()
         script_ref = str(arguments.get("script_ref", "")).strip()
         base_pipeline_id = str(arguments.get("base_pipeline_id", "")).strip()
@@ -94,17 +94,17 @@ class EmergeDaemon:
                 result = self.pipeline.run_read({**arguments, "connector": connector, "pipeline": name})
         except Exception:
             return None
-        result["l15_promoted"] = True
+        result["bridge_promoted"] = True
         try:
-            self._sink.emit("l15.promoted", {"key": key, "pipeline_id": base_pipeline_id})
+            self._sink.emit("flywheel.bridge.promoted", {"key": key, "pipeline_id": base_pipeline_id})
         except Exception:
             pass
         return result
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if name == "icc_exec":
-            # L1.5 promotion: if candidate is stable and pipeline is ready, redirect
-            promoted = self._try_l15_promote(arguments)
+            # flywheel bridge: if candidate is stable and pipeline is ready, redirect
+            promoted = self._try_flywheel_bridge(arguments)
             if promoted is not None:
                 response = {"isError": False, "content": [{"type": "text", "text": json.dumps(promoted)}]}
                 try:
@@ -131,7 +131,7 @@ class EmergeDaemon:
                     result = _exec_client.call_tool("icc_exec", arguments)
                 else:
                     code = self._resolve_exec_code(mode=mode, arguments=arguments)
-                    repl = self._get_repl(target_profile)
+                    repl = self._get_session(target_profile)
                     result = repl.exec_code(
                         code,
                         metadata={
@@ -318,7 +318,7 @@ class EmergeDaemon:
                                     "intent_signature": {"type": "string", "description": "Stable identifier for this exec pattern (e.g. zwcad.read.state)"},
                                     "script_ref": {"type": "string", "description": "Path to script file (script_ref mode)"},
                                     "script_args": {"type": "object", "description": "Arguments injected as __args in script scope"},
-                                    "base_pipeline_id": {"type": "string", "description": "Pipeline id for L1.5 promotion routing (e.g. mock.read.layers)"},
+                                    "base_pipeline_id": {"type": "string", "description": "Pipeline id for flywheel bridge routing (e.g. mock.read.layers)"},
                                 },
                                 "required": [],
                             },
@@ -555,18 +555,18 @@ class EmergeDaemon:
             return {"name": name, "messages": [{"role": "user", "content": content}]}
         raise KeyError(f"Prompt not found: {name}")
 
-    def _get_repl(self, target_profile: str) -> ExecSession:
+    def _get_session(self, target_profile: str) -> ExecSession:
         normalized = (target_profile or "default").strip() or "default"
         profile_key = "__default__" if normalized == "default" else derive_profile_token(normalized)
-        if profile_key not in self._repl_by_profile:
+        if profile_key not in self._sessions_by_profile:
             if normalized == "default":
                 session_id = self._base_session_id
             else:
                 session_id = f"{self._base_session_id}__{profile_key}"
-            self._repl_by_profile[profile_key] = ExecSession(
+            self._sessions_by_profile[profile_key] = ExecSession(
                 state_root=self._state_root, session_id=session_id
             )
-        return self._repl_by_profile[profile_key]
+        return self._sessions_by_profile[profile_key]
 
     def _resolve_exec_code(self, mode: str, arguments: dict[str, Any]) -> str:
         if mode == "script_ref":
@@ -958,7 +958,7 @@ class EmergeDaemon:
         return f"pipeline::{pipeline_id}"
 
     @staticmethod
-    def _l15_candidate_key(pipeline_id: str, intent_signature: str, script_ref: str) -> str:
+    def _bridge_candidate_key(pipeline_id: str, intent_signature: str, script_ref: str) -> str:
         return f"l15::{pipeline_id}::{intent_signature}::{script_ref}"
 
     def _resolve_exec_candidate_key(self, *, arguments: dict[str, Any], target_profile: str) -> str:
@@ -966,7 +966,7 @@ class EmergeDaemon:
         script_ref = str(arguments.get("script_ref", "")).strip() or "<inline>"
         base_pipeline_id = str(arguments.get("base_pipeline_id", "")).strip()
         if base_pipeline_id and intent_signature:
-            return self._l15_candidate_key(base_pipeline_id, intent_signature, script_ref)
+            return self._bridge_candidate_key(base_pipeline_id, intent_signature, script_ref)
         return self._candidate_key(
             target_profile=target_profile,
             intent_signature=intent_signature,
@@ -977,7 +977,7 @@ class EmergeDaemon:
         exec_signature = str(arguments.get("exec_signature", "")).strip()
         script_ref = str(arguments.get("script_ref", "")).strip()
         if exec_signature and script_ref:
-            return self._l15_candidate_key(pipeline_id, exec_signature, script_ref)
+            return self._bridge_candidate_key(pipeline_id, exec_signature, script_ref)
         return self._pipeline_candidate_key(pipeline_id)
 
     def _should_sample(self, candidate_key: str) -> bool:
