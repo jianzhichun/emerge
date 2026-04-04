@@ -501,14 +501,15 @@ class EmergeDaemon:
                     "tools": [
                         {
                             "name": "icc_exec",
-                            "description": "Execute Python code in a persistent exec session with policy flywheel tracking",
+                            "description": "Execute Python in a persistent session with flywheel tracking. intent_signature is required (enforced). Read tasks set __result=[{...}]; write tasks set __action={'ok':True,...}; side effects use no_replay=True.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "code": {"type": "string", "description": "Python code to execute (inline_code mode)"},
                                     "mode": {"type": "string", "enum": ["inline_code", "script_ref"], "default": "inline_code"},
                                     "target_profile": {"type": "string", "description": "Execution profile / remote runner key", "default": "default"},
-                                    "intent_signature": {"type": "string", "description": "Stable identifier for this exec pattern (e.g. zwcad.read.state)"},
+                                    "intent_signature": {"type": "string", "description": "Stable dot-notation identifier for this exec pattern (e.g. zwcad.read.state). Required for flywheel tracking."},
+                                    "no_replay": {"type": "boolean", "description": "If true, exclude this call from WAL replay and crystallization. Use for side-effectful calls only.", "default": False},
                                     "script_ref": {"type": "string", "description": "Path to script file (script_ref mode)"},
                                     "script_args": {"type": "object", "description": "Arguments injected as __args in script scope"},
                                     "base_pipeline_id": {"type": "string", "description": "Pipeline id for flywheel bridge routing (e.g. mock.read.layers)"},

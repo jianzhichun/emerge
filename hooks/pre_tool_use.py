@@ -34,12 +34,21 @@ def main() -> None:
 
     if tool_name.endswith("__icc_exec"):
         mode = str(arguments.get("mode", "inline_code")).strip()
+        intent_signature = str(arguments.get("intent_signature", "")).strip()
         if mode not in ("inline_code", "script_ref"):
             error_msg = f"icc_exec: 'mode' must be inline_code or script_ref, got {mode!r}"
         elif mode == "inline_code" and not str(arguments.get("code", "")).strip():
             error_msg = "icc_exec (mode=inline_code): 'code' argument is required"
         elif mode == "script_ref" and not str(arguments.get("script_ref", "")).strip():
             error_msg = "icc_exec (mode=script_ref): 'script_ref' argument is required"
+        elif not intent_signature:
+            error_msg = (
+                "icc_exec: 'intent_signature' is required (e.g. 'zwcad.read.state'). "
+                "Read tasks must set __result=[{...}] in code. "
+                "Write tasks must set __action={'ok': True, ...} in code. "
+                "Side-effectful calls (COM, file writes, network) must use no_replay=True. "
+                "State setup calls (imports, object creation) must NOT use no_replay."
+            )
 
     if tool_name.endswith("__icc_reconcile"):
         delta_id = str(arguments.get("delta_id", "")).strip()
