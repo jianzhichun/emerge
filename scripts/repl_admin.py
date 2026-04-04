@@ -3,8 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
+import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +29,15 @@ from scripts.policy_config import (
     default_hook_state_root,
     default_repl_root,
 )
+from scripts.runner_client import RunnerClient, RunnerRouter
+
+
+def _local_plugin_version() -> str:
+    manifest = ROOT / ".claude-plugin" / "plugin.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("version", "") or "").strip()
 
 
 def _resolve_state_root() -> Path:
@@ -134,6 +147,368 @@ def cmd_policy_status() -> dict:
     }
 
 
+def cmd_runner_status() -> dict:
+    router = RunnerRouter.from_env()
+    if router is None:
+        return {
+            "runner_configured": False,
+            "runner_reachable": False,
+            "endpoints": [],
+            "error": "runner config is not set (persisted config or EMERGE_RUNNER_*)",
+        }
+    summary = router.health_summary()
+    return {
+        "runner_configured": bool(summary.get("configured", False)),
+        "runner_reachable": bool(summary.get("any_reachable", False)),
+        "endpoint_count": int(summary.get("endpoint_count", 0)),
+        "endpoints": summary.get("endpoints", []),
+        "error": "",
+    }
+
+
+def _load_runner_config() -> dict:
+    path = RunnerRouter.persisted_config_path()
+    if not path.exists():
+        return {"default_url": "", "map": {}, "pool": []}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("runner config must be a JSON object")
+    raw_map = data.get("map", {})
+    if not isinstance(raw_map, dict):
+        raw_map = {}
+    raw_pool = data.get("pool", [])
+    if not isinstance(raw_pool, list):
+        raw_pool = []
+    return {
+        "default_url": str(data.get("default_url", "") or ""),
+        "map": {str(k): str(v) for k, v in raw_map.items()},
+        "pool": [str(x) for x in raw_pool],
+    }
+
+
+def _save_runner_config(data: dict) -> None:
+    path = RunnerRouter.persisted_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix="runner-map-", suffix=".json", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=True, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+        tmp_path = ""
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+def cmd_runner_config_status() -> dict:
+    path = RunnerRouter.persisted_config_path()
+    data = _load_runner_config()
+    return {
+        "config_path": str(path),
+        "exists": path.exists(),
+        "default_url": data.get("default_url", ""),
+        "map": data.get("map", {}),
+        "pool": data.get("pool", []),
+    }
+
+
+def cmd_runner_config_set(*, runner_key: str, runner_url: str, as_default: bool = False) -> dict:
+    key = runner_key.strip()
+    url = runner_url.strip()
+    if not url:
+        raise ValueError("--runner-url is required")
+    data = _load_runner_config()
+    if as_default:
+        data["default_url"] = url
+    else:
+        if not key:
+            raise ValueError("--runner-key is required unless --as-default is set")
+        data.setdefault("map", {})
+        data["map"][key] = url
+    _save_runner_config(data)
+    out = cmd_runner_config_status()
+    out["updated"] = True
+    return out
+
+
+def cmd_runner_config_unset(*, runner_key: str, clear_default: bool = False) -> dict:
+    key = runner_key.strip()
+    data = _load_runner_config()
+    changed = False
+    if clear_default and data.get("default_url", ""):
+        data["default_url"] = ""
+        changed = True
+    if key:
+        mapped = data.get("map", {})
+        if isinstance(mapped, dict) and key in mapped:
+            del mapped[key]
+            changed = True
+    _save_runner_config(data)
+    out = cmd_runner_config_status()
+    out["updated"] = changed
+    return out
+
+
+def _run_checked(command: list[str], *, timeout_s: int = 90) -> str:
+    proc = subprocess.run(
+        command,
+        capture_output=True,
+        timeout=timeout_s,
+    )
+    proc.stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
+    proc.stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip()
+        stdout = (proc.stdout or "").strip()
+        detail = stderr or stdout or f"exit={proc.returncode}"
+        raise RuntimeError(f"command failed: {' '.join(command)} :: {detail}")
+    return (proc.stdout or "").strip()
+
+
+def _remote_root_expr(raw_root: str) -> str:
+    text = raw_root.strip()
+    if text == "~":
+        return "$HOME"
+    if text.startswith("~/"):
+        suffix = text[2:]
+        return "$HOME/" + shlex.quote(suffix)
+    return shlex.quote(text)
+
+
+def _remote_root_expr_win(raw_root: str) -> str:
+    """Return a PowerShell-safe path expression for Windows SSH targets."""
+    text = raw_root.strip()
+    if text == "~":
+        return "$env:USERPROFILE\\.emerge\\plugin"
+    if text.startswith("~/"):
+        suffix = text[2:].replace("/", "\\")
+        return f"$env:USERPROFILE\\{suffix}"
+    # Absolute path — return as-is (backslash-safe for PowerShell)
+    return text.replace("/", "\\")
+
+
+def _read_remote_plugin_version(*, ssh_target: str, remote_root_expr: str) -> str:
+    read_cmd = f"cd {remote_root_expr} && cat .claude-plugin/plugin.json"
+    raw = _run_checked(["ssh", ssh_target, read_cmd], timeout_s=20)
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("version", "") or "").strip()
+
+
+def _probe_runner_health(*, runner_url: str, attempts: int = 5, sleep_s: float = 1.0) -> tuple[dict, str]:
+    health_error = ""
+    health: dict = {}
+    client = RunnerClient(base_url=runner_url.rstrip("/"), timeout_s=8.0)
+    for _ in range(max(1, attempts)):
+        try:
+            health = client.health()
+            return health, ""
+        except Exception as exc:
+            health_error = str(exc)
+            time.sleep(max(0.0, sleep_s))
+    return {}, health_error
+
+
+def cmd_runner_bootstrap(
+    *,
+    ssh_target: str,
+    target_profile: str,
+    remote_plugin_root: str,
+    runner_host: str,
+    runner_port: int,
+    runner_url: str,
+    python_bin: str,
+    deploy: bool,
+    windows: bool = False,
+) -> dict:
+    ssh_target = ssh_target.strip()
+    target_profile = target_profile.strip()
+    remote_plugin_root = remote_plugin_root.strip()
+    python_bin = python_bin.strip() or ("python" if windows else "python3")
+    if not ssh_target:
+        raise ValueError("--ssh-target is required")
+    if not target_profile:
+        raise ValueError("--target-profile is required")
+    if not remote_plugin_root:
+        raise ValueError("--remote-plugin-root is required")
+
+    if not runner_url.strip():
+        host_part = ssh_target.split("@")[-1]
+        host_part = host_part.split(":")[0]
+        runner_url = f"http://{host_part}:{int(runner_port)}"
+    if int(runner_port) <= 0 or int(runner_port) > 65535:
+        raise ValueError("--runner-port must be in 1..65535")
+
+    actions: list[str] = []
+    local_version = _local_plugin_version()
+    remote_version = ""
+    runner_reused = False
+    if windows:
+        remote_root = _remote_root_expr_win(remote_plugin_root)
+        mkdir_cmd = f'powershell -Command "New-Item -Force -ItemType Directory -Path \\"{remote_root}\\" | Out-Null"'
+    else:
+        remote_root = _remote_root_expr(remote_plugin_root)
+        mkdir_cmd = f"mkdir -p {remote_root}"
+    _run_checked(["ssh", ssh_target, mkdir_cmd])
+    actions.append("remote_root_ready")
+
+    try:
+        remote_version = _read_remote_plugin_version(
+            ssh_target=ssh_target,
+            remote_root_expr=remote_root,
+        )
+        actions.append("remote_version_detected")
+    except Exception:
+        remote_version = ""
+
+    pre_health, pre_health_error = _probe_runner_health(
+        runner_url=runner_url,
+        attempts=2,
+        sleep_s=0.5,
+    )
+    if not pre_health_error and pre_health:
+        if remote_version and local_version and remote_version != local_version:
+            raise RuntimeError(
+                "runner already reachable but remote plugin version mismatches local version; "
+                "stop remote runner first or change runner-url/port before bootstrap"
+            )
+        cfg = cmd_runner_config_set(
+            runner_key=target_profile,
+            runner_url=runner_url,
+            as_default=False,
+        )
+        actions.append("runner_already_healthy")
+        actions.append("runner_route_persisted")
+        runner_reused = True
+        return {
+            "ok": True,
+            "ssh_target": ssh_target,
+            "target_profile": target_profile,
+            "remote_plugin_root": remote_plugin_root,
+            "runner_url": runner_url,
+            "runner_pid": "",
+            "actions": actions,
+            "health": pre_health,
+            "config": cfg,
+            "reused_existing_runner": runner_reused,
+            "local_plugin_version": local_version,
+            "remote_plugin_version": remote_version,
+            "version_match": (not remote_version) or (remote_version == local_version),
+        }
+
+    if deploy:
+        tar_args = [
+            "tar",
+            "-czf",
+            "-",
+            "--exclude=.git",
+            "--exclude=.worktrees",
+            "--exclude=.plugin-data",
+            "--exclude=.pytest_cache",
+            "--exclude=__pycache__",
+            "--exclude=.venv",
+            ".",
+        ]
+        if windows:
+            # Windows tar (bsdtar) supports piped stdin; mkdir via PowerShell first
+            untar_cmd = (
+                f'powershell -Command "New-Item -Force -ItemType Directory -Path \\"{remote_root}\\" | Out-Null; '
+                f'$input | tar -xzf - -C \\"{remote_root}\\""'
+            )
+        else:
+            untar_cmd = f"mkdir -p {remote_root} && tar -xzf - -C {remote_root}"
+        proc_tar = subprocess.Popen(
+            tar_args,
+            cwd=str(ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,
+        )
+        proc_ssh = subprocess.Popen(
+            ["ssh", ssh_target, untar_cmd],
+            stdin=proc_tar.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,
+        )
+        assert proc_tar.stdout is not None
+        proc_tar.stdout.close()
+        ssh_out_b, ssh_err_b = proc_ssh.communicate()
+        ssh_out = ssh_out_b.decode("utf-8", errors="replace") if ssh_out_b else ""
+        ssh_err = ssh_err_b.decode("utf-8", errors="replace") if ssh_err_b else ""
+        tar_err = proc_tar.stderr.read().decode("utf-8", errors="replace") if proc_tar.stderr else ""
+        tar_rc = proc_tar.wait()
+        if tar_rc != 0:
+            raise RuntimeError(f"local tar failed: {tar_err.strip() or f'exit={tar_rc}'}")
+        if proc_ssh.returncode != 0:
+            detail = (ssh_err or ssh_out or "").strip() or f"exit={proc_ssh.returncode}"
+            raise RuntimeError(f"remote deploy failed: {detail}")
+        actions.append("remote_assets_deployed")
+        remote_version = local_version
+
+    if windows:
+        py_check = f'powershell -Command "cd \\"{remote_root}\\"; {python_bin} -V"'
+        _run_checked(["ssh", ssh_target, py_check])
+        actions.append("remote_python_verified")
+        log_path = f"{remote_root}\\remote-runner.log"
+        start_cmd = (
+            f'powershell -Command "'
+            f'cd \\"{remote_root}\\"; '
+            f'Start-Process -FilePath {python_bin} '
+            f'-ArgumentList \\"scripts/remote_runner.py --host {runner_host} --port {int(runner_port)}\\" '
+            f'-RedirectStandardOutput \\"{log_path}\\" '
+            f'-WindowStyle Hidden; '
+            f'Write-Host started"'
+        )
+    else:
+        py_check = f"cd {shlex.quote(remote_root)} && {shlex.quote(python_bin)} -V"
+        _run_checked(["ssh", ssh_target, py_check])
+        actions.append("remote_python_verified")
+        start_cmd = (
+            f"mkdir -p $HOME/.emerge && cd {shlex.quote(remote_root)} && "
+            f"nohup {shlex.quote(python_bin)} scripts/remote_runner.py "
+            f"--host {shlex.quote(runner_host)} --port {int(runner_port)} "
+            "> ~/.emerge/remote-runner.log 2>&1 < /dev/null & echo $!"
+        )
+    pid_text = _run_checked(["ssh", ssh_target, start_cmd])
+    pid = pid_text.splitlines()[-1].strip() if pid_text else ""
+    actions.append("remote_runner_started")
+
+    health, health_error = _probe_runner_health(
+        runner_url=runner_url,
+        attempts=5,
+        sleep_s=1.0,
+    )
+    if health_error:
+        raise RuntimeError(f"runner health check failed ({runner_url}): {health_error}")
+    actions.append("runner_health_ok")
+
+    cfg = cmd_runner_config_set(
+        runner_key=target_profile,
+        runner_url=runner_url,
+        as_default=False,
+    )
+    actions.append("runner_route_persisted")
+    return {
+        "ok": True,
+        "ssh_target": ssh_target,
+        "target_profile": target_profile,
+        "remote_plugin_root": remote_plugin_root,
+        "runner_url": runner_url,
+        "runner_pid": pid,
+        "actions": actions,
+        "health": health,
+        "config": cfg,
+        "reused_existing_runner": runner_reused,
+        "local_plugin_version": local_version,
+        "remote_plugin_version": remote_version,
+        "version_match": (not remote_version) or (remote_version == local_version),
+    }
+
+
 def render_policy_status_pretty(data: dict) -> str:
     lines: list[str] = []
     lines.append(f"Session: {data.get('session_id', '')}")
@@ -167,21 +542,110 @@ def render_policy_status_pretty(data: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_runner_status_pretty(data: dict) -> str:
+    lines: list[str] = []
+    lines.append(f"Runner configured: {data.get('runner_configured', False)}")
+    lines.append(f"Runner reachable: {data.get('runner_reachable', False)}")
+    lines.append(f"Endpoint count: {data.get('endpoint_count', 0)}")
+    error = str(data.get("error", "") or "")
+    if error:
+        lines.append(f"Error: {error}")
+    endpoints = data.get("endpoints", [])
+    if isinstance(endpoints, list) and endpoints:
+        lines.append("Endpoints:")
+        for item in endpoints:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"- {item.get('name', '')}: {item.get('url', '')} "
+                f"(reachable={item.get('reachable', False)})"
+            )
+            item_error = str(item.get("error", "") or "")
+            if item_error:
+                lines.append(f"  error: {item_error}")
+            health = item.get("health", {})
+            if isinstance(health, dict) and health:
+                for key in sorted(health.keys()):
+                    lines.append(f"  {key}: {health[key]}")
+    return "\n".join(lines) + "\n"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Local REPL state admin utility")
-    parser.add_argument("command", choices=["status", "clear", "policy-status"])
+    parser.add_argument(
+        "command",
+        choices=[
+            "status",
+            "clear",
+            "policy-status",
+            "runner-status",
+            "runner-config-status",
+            "runner-config-set",
+            "runner-config-unset",
+            "runner-bootstrap",
+        ],
+    )
     parser.add_argument("--pretty", action="store_true", help="Render human-readable output")
+    parser.add_argument("--runner-key", default="", help="Runner key (usually target_profile)")
+    parser.add_argument("--runner-url", default="", help="Runner URL")
+    parser.add_argument("--as-default", action="store_true", help="Set default runner URL")
+    parser.add_argument("--clear-default", action="store_true", help="Clear default runner URL")
+    parser.add_argument("--ssh-target", default="", help="SSH target for bootstrap (user@host)")
+    parser.add_argument("--target-profile", default="", help="Target profile key")
+    parser.add_argument("--remote-plugin-root", default="~/.emerge/plugin", help="Remote plugin root")
+    parser.add_argument("--runner-host", default="0.0.0.0", help="Remote runner bind host")
+    parser.add_argument("--runner-port", type=int, default=8787, help="Remote runner bind port")
+    parser.add_argument("--python-bin", default="python3", help="Remote Python executable")
+    parser.add_argument(
+        "--skip-deploy",
+        action="store_true",
+        help="Skip remote deploy and reuse existing remote plugin root",
+    )
+    parser.add_argument(
+        "--windows",
+        action="store_true",
+        help="Use Windows-compatible (PowerShell) commands for bootstrap (SSH target is Windows)",
+    )
     args = parser.parse_args()
 
     if args.command == "status":
         out = cmd_status()
     elif args.command == "policy-status":
         out = cmd_policy_status()
+    elif args.command == "runner-status":
+        out = cmd_runner_status()
+    elif args.command == "runner-config-status":
+        out = cmd_runner_config_status()
+    elif args.command == "runner-config-set":
+        out = cmd_runner_config_set(
+            runner_key=str(args.runner_key),
+            runner_url=str(args.runner_url),
+            as_default=bool(args.as_default),
+        )
+    elif args.command == "runner-config-unset":
+        out = cmd_runner_config_unset(
+            runner_key=str(args.runner_key),
+            clear_default=bool(args.clear_default),
+        )
+    elif args.command == "runner-bootstrap":
+        out = cmd_runner_bootstrap(
+            ssh_target=str(args.ssh_target),
+            target_profile=str(args.target_profile),
+            remote_plugin_root=str(args.remote_plugin_root),
+            runner_host=str(args.runner_host),
+            runner_port=int(args.runner_port),
+            runner_url=str(args.runner_url),
+            python_bin=str(args.python_bin),
+            deploy=not bool(args.skip_deploy),
+            windows=bool(args.windows),
+        )
     else:
         out = cmd_clear()
 
     if args.pretty and args.command == "policy-status":
         print(render_policy_status_pretty(out), end="")
+    elif args.pretty and args.command == "runner-status":
+        print(render_runner_status_pretty(out), end="")
     else:
         print(json.dumps(out))
 

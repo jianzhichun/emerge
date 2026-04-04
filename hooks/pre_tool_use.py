@@ -32,6 +32,15 @@ def main() -> None:
         elif not pipeline:
             error_msg = "icc_read/icc_write: 'pipeline' argument is required"
 
+    if tool_name.endswith("__icc_exec"):
+        mode = str(arguments.get("mode", "inline_code")).strip()
+        if mode not in ("inline_code", "script_ref"):
+            error_msg = f"icc_exec: 'mode' must be inline_code or script_ref, got {mode!r}"
+        elif mode == "inline_code" and not str(arguments.get("code", "")).strip():
+            error_msg = "icc_exec (mode=inline_code): 'code' argument is required"
+        elif mode == "script_ref" and not str(arguments.get("script_ref", "")).strip():
+            error_msg = "icc_exec (mode=script_ref): 'script_ref' argument is required"
+
     if tool_name.endswith("__icc_reconcile"):
         delta_id = str(arguments.get("delta_id", "")).strip()
         outcome = str(arguments.get("outcome", "")).strip()

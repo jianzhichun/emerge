@@ -162,7 +162,7 @@ class StateTracker:
                 }
             )
 
-        return {
+        token: dict[str, Any] = {
             "schema_version": "l15.v1",
             "goal": self.state.get("goal") or "",
             "goal_source": self.state.get("goal_source", "unset"),
@@ -171,6 +171,25 @@ class StateTracker:
             "open_risks": [str(r) for r in self.state.get("open_risks", [])],
             "deltas": token_deltas,
         }
+        if budget_chars:
+            encoded = json.dumps(token, ensure_ascii=True, separators=(",", ":"))
+            if len(encoded) > budget_chars:
+                # Hard cap: truncate critical deltas to fit budget
+                kept: list[dict[str, Any]] = []
+                overhead = len(encoded) - sum(
+                    len(json.dumps(d, ensure_ascii=True, separators=(",", ":")))
+                    for d in token_deltas
+                )
+                budget_left = budget_chars - overhead
+                for d in token_deltas:
+                    s = json.dumps(d, ensure_ascii=True, separators=(",", ":"))
+                    if budget_left - len(s) - 2 >= 0:
+                        kept.append(d)
+                        budget_left -= len(s) + 2  # +2 for separator
+                    else:
+                        break
+                token["deltas"] = kept
+        return token
 
     def format_additional_context(self, budget_chars: int | None = None) -> str:
         context = self.format_context(budget_chars=budget_chars)

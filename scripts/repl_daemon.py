@@ -490,8 +490,16 @@ class ReplDaemon:
             parts = rest.split("/", 2)
             if len(parts) == 3:
                 connector, mode, name = parts
+                # Reject any path traversal in URI components
+                if any(".." in p or p.startswith("/") for p in (connector, mode, name)):
+                    raise KeyError(f"Resource not found: {uri}")
                 for connector_root in self.pipeline._connector_roots:
                     meta = connector_root / connector / "pipelines" / mode / f"{name}.yaml"
+                    # Confirm resolved path stays within the connector_root
+                    try:
+                        meta.resolve().relative_to(connector_root.resolve())
+                    except ValueError:
+                        continue
                     if meta.exists():
                         data = PipelineEngine._load_metadata(meta)
                         return {"uri": uri, "mimeType": "application/json", "text": json.dumps(data)}
@@ -928,9 +936,10 @@ class ReplDaemon:
         return roots
 
     def _is_allowed_script_path(self, path: Path) -> bool:
+        resolved = path.resolve()
         for root in self._script_roots:
             try:
-                path.relative_to(root)
+                resolved.relative_to(root.resolve())
                 return True
             except ValueError:
                 continue
@@ -1031,6 +1040,17 @@ def run_stdio() -> None:
             continue
         try:
             req = json.loads(text)
+        except json.JSONDecodeError as exc:  # pragma: no cover
+            resp = {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32700, "message": f"Parse error: {exc}"},
+            }
+            if resp is not None:
+                sys.stdout.write(json.dumps(resp) + "\n")
+                sys.stdout.flush()
+            continue
+        try:
             resp = daemon.handle_jsonrpc(req)
         except Exception as exc:  # pragma: no cover
             resp = {
