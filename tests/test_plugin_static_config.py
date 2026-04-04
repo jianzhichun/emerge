@@ -14,7 +14,7 @@ def test_plugin_manifest_exists_and_has_required_keys():
     assert "mcpServers" in data, "plugin.json must declare mcpServers so CC can start the daemon"
     server = data["mcpServers"].get("emerge", {})
     assert server.get("command") == "python3"
-    assert any("repl_daemon.py" in arg for arg in server.get("args", []))
+    assert any("emerge_daemon.py" in arg for arg in server.get("args", []))
     # Must use ${CLAUDE_PLUGIN_ROOT} so path resolves correctly regardless of CWD
     assert any("${CLAUDE_PLUGIN_ROOT}" in arg for arg in server.get("args", []))
 

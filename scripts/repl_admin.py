@@ -437,7 +437,7 @@ def cmd_runner_deploy(
 
     # Files to deploy: scripts/*.py that are needed on the runner.
     # Exclude dev-machine-only tools that serve no purpose on the remote runner.
-    _DEV_ONLY = {"repl_admin.py", "repl_daemon.py"}
+    _DEV_ONLY = {"repl_admin.py", "emerge_daemon.py"}
     scripts_dir = ROOT / "scripts"
     if files:
         deploy_files = [ROOT / f for f in files]

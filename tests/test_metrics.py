@@ -64,7 +64,7 @@ def test_daemon_emits_pipeline_read_metric(tmp_path):
     try:
         from scripts.policy_config import _reset_settings_cache
         _reset_settings_cache()
-        from scripts.repl_daemon import ReplDaemon
+        from scripts.emerge_daemon import EmergeDaemon as ReplDaemon
         daemon = ReplDaemon(root=ROOT)
         daemon._sink = __import__("scripts.metrics", fromlist=["LocalJSONLSink"]).LocalJSONLSink(path=metrics_path)
         daemon.call_tool("icc_read", {"connector": "mock", "pipeline": "layers"})
