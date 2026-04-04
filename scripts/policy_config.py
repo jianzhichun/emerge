@@ -23,8 +23,18 @@ def default_emerge_home() -> Path:
     return Path.home() / ".emerge"
 
 
-def default_repl_root() -> Path:
+def default_exec_root() -> Path:
+    """Return the default execution-session state root (``~/.emerge/repl``).
+
+    The on-disk directory name stays ``repl`` for data-compatibility with
+    existing installations.
+    """
     return default_emerge_home() / "repl"
+
+
+def default_repl_root() -> Path:
+    """Backward-compat alias for default_exec_root()."""
+    return default_exec_root()
 
 
 def default_hook_state_root() -> Path:
