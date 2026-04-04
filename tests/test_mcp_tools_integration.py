@@ -1015,3 +1015,31 @@ def test_run_stdio_starts_operator_monitor_when_env_set(monkeypatch, tmp_path):
         sys.stdin = _orig_stdin
 
     assert started, "run_stdio did not call start_operator_monitor()"
+
+
+def test_build_elicit_params_schema_is_valid_json_schema(tmp_path):
+    """requestedSchema must be a valid JSON Schema object with type=object and properties."""
+    import os
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
+    try:
+        from scripts.emerge_daemon import EmergeDaemon
+        from scripts.pattern_detector import PatternSummary
+        daemon = EmergeDaemon(root=tmp_path)
+        summary = PatternSummary(
+            machine_ids=["m1"],
+            intent_signature="zwcad.entity_added",
+            occurrences=5,
+            window_minutes=10.0,
+            detector_signals=["frequency"],
+            context_hint={"app": "zwcad"},
+            policy_stage="canary",
+        )
+        params = daemon._build_elicit_params("canary", {"app": "zwcad"}, summary)
+        schema = params["requestedSchema"]
+        assert schema.get("type") == "object"
+        assert "properties" in schema
+        assert "action" in schema["properties"]
+        assert "note" in schema["properties"]
+        assert schema.get("required") == ["action"]
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)

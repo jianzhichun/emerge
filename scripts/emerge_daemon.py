@@ -1565,7 +1565,7 @@ class EmergeDaemon:
             + (f" 上下文: {context}。" if stage == "canary" else "")
             + f" 是否接管？（{timeout_s}s 无响应自动确认）"
         )
-        schema: dict = {
+        properties: dict = {
             "action": {
                 "type": "string",
                 "oneOf": [
@@ -1576,7 +1576,12 @@ class EmergeDaemon:
             }
         }
         if stage == "canary":
-            schema["note"] = {"type": "string", "description": "补充说明（可选）", "maxLength": 200}
+            properties["note"] = {"type": "string", "description": "补充说明（可选）", "maxLength": 200}
+        schema = {
+            "type": "object",
+            "properties": properties,
+            "required": ["action"],
+        }
         return {"mode": "form", "message": message, "requestedSchema": schema}
 
     def _write_mcp_push(self, payload: dict) -> None:
