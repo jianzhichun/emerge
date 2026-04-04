@@ -20,19 +20,19 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "mcp__plugin_.*emerge.*__icc_(read|write|exec|reconcile)",
+        "matcher": "mcp__plugin_.*emerge.*__icc_(read|write|exec|reconcile|crystallize)",
         "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/pre_tool_use.py"
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__plugin_.*emerge.*__icc_(read|write|exec|reconcile)",
+        "matcher": "mcp__plugin_.*emerge.*__icc_(read|write|exec|reconcile|crystallize)",
         "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/post_tool_use.py"
       }
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "mcp__plugin_.*emerge.*__icc_(read|write|exec|reconcile)",
+        "matcher": "mcp__plugin_.*emerge.*__icc_(read|write|exec|reconcile|crystallize)",
         "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/post_tool_use_failure.py"
       }
     ],

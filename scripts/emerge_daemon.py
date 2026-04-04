@@ -515,7 +515,7 @@ class EmergeDaemon:
                     "tools": [
                         {
                             "name": "icc_exec",
-                            "description": "Execute Python code in a persistent REPL with policy flywheel tracking",
+                            "description": "Execute Python code in a persistent exec session with policy flywheel tracking",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -1165,7 +1165,7 @@ class EmergeDaemon:
             self._atomic_write_json(candidates_path, registry)
 
     def _resolve_script_roots(self) -> list[Path]:
-        raw = os.environ.get("REPL_SCRIPT_ROOTS", "").strip()
+        raw = os.environ.get("EMERGE_SCRIPT_ROOTS", "").strip()
         if raw:
             roots = [Path(p).expanduser().resolve() for p in raw.split(",") if p.strip()]
         else:

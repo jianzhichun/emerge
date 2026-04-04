@@ -33,7 +33,7 @@ def main() -> None:
         f"Goal\n{token.get('goal') or 'Not set.'}\n\n"
         f"Open Risks\n"
         + ("\n".join(f"- {r}" for r in token.get("open_risks", [])) or "- None.")
-        + f"\n\nL1_5_TOKEN\n{token_json}"
+        + f"\n\nFLYWHEEL_TOKEN\n{token_json}"
     )
 
     out = {

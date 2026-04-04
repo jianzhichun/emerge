@@ -16,7 +16,7 @@ def test_icc_exec_script_ref_mode_runs_file_with_args(tmp_path: Path):
 
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
-    os.environ["REPL_SCRIPT_ROOTS"] = str(tmp_path)
+    os.environ["EMERGE_SCRIPT_ROOTS"] = str(tmp_path)
     try:
         daemon = EmergeDaemon(root=ROOT)
         out = daemon.call_tool(
@@ -32,7 +32,7 @@ def test_icc_exec_script_ref_mode_runs_file_with_args(tmp_path: Path):
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
-        os.environ.pop("REPL_SCRIPT_ROOTS", None)
+        os.environ.pop("EMERGE_SCRIPT_ROOTS", None)
 
 
 def test_icc_exec_script_ref_rejects_path_outside_allowlist(tmp_path: Path):
@@ -40,7 +40,7 @@ def test_icc_exec_script_ref_rejects_path_outside_allowlist(tmp_path: Path):
     outside.write_text("print('x')\n", encoding="utf-8")
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
-    os.environ["REPL_SCRIPT_ROOTS"] = str(tmp_path / "allowed")
+    os.environ["EMERGE_SCRIPT_ROOTS"] = str(tmp_path / "allowed")
     try:
         daemon = EmergeDaemon(root=ROOT)
         out = daemon.call_tool(
@@ -52,7 +52,7 @@ def test_icc_exec_script_ref_rejects_path_outside_allowlist(tmp_path: Path):
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
-        os.environ.pop("REPL_SCRIPT_ROOTS", None)
+        os.environ.pop("EMERGE_SCRIPT_ROOTS", None)
 
 
 def test_icc_exec_target_profiles_are_isolated(tmp_path: Path):

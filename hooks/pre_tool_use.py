@@ -49,6 +49,20 @@ def main() -> None:
         elif outcome not in ("confirm", "correct", "retract"):
             error_msg = f"icc_reconcile: 'outcome' must be confirm/correct/retract, got {outcome!r}"
 
+    if tool_name.endswith("__icc_crystallize"):
+        intent_signature = str(arguments.get("intent_signature", "")).strip()
+        connector = str(arguments.get("connector", "")).strip()
+        pipeline_name = str(arguments.get("pipeline_name", "")).strip()
+        mode = str(arguments.get("mode", "")).strip()
+        if not intent_signature:
+            error_msg = "icc_crystallize: 'intent_signature' is required"
+        elif not connector:
+            error_msg = "icc_crystallize: 'connector' is required"
+        elif not pipeline_name:
+            error_msg = "icc_crystallize: 'pipeline_name' is required"
+        elif mode not in ("read", "write"):
+            error_msg = f"icc_crystallize: 'mode' must be read or write, got {mode!r}"
+
     if error_msg:
         # Return a block decision to reject the tool call
         out = {"decision": "block", "reason": error_msg}

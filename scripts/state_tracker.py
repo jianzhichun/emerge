@@ -199,7 +199,7 @@ class StateTracker:
             f"Goal\n{context['Goal']}\n\n"
             f"Delta\n{context['Delta']}\n\n"
             f"Open Risks\n{context['Open Risks']}\n\n"
-            f"L1_5_TOKEN\n{token_json}"
+            f"FLYWHEEL_TOKEN\n{token_json}"
         )
 
     def _partition_deltas(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:

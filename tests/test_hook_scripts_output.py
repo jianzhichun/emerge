@@ -22,7 +22,7 @@ def _run(script: str, payload: dict, data_dir: Path) -> str:
 
 
 def _extract_l15_token(additional_context: str) -> dict:
-    marker = "L1_5_TOKEN\n"
+    marker = "FLYWHEEL_TOKEN\n"
     assert marker in additional_context
     token_text = additional_context.rsplit(marker, 1)[1].strip()
     return json.loads(token_text)
@@ -171,8 +171,8 @@ def test_pre_compact_emits_recovery_token(tmp_path: Path):
     out = json.loads(proc.stdout.strip())
     assert out["hookSpecificOutput"]["hookEventName"] == "PreCompact"
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "L1_5_TOKEN" in ctx
-    token_text = ctx.rsplit("L1_5_TOKEN\n", 1)[1].strip()
+    assert "FLYWHEEL_TOKEN" in ctx
+    token_text = ctx.rsplit("FLYWHEEL_TOKEN\n", 1)[1].strip()
     token = json.loads(token_text)
     assert token["schema_version"] == "flywheel.v1"
     assert isinstance(token["deltas"], list)
