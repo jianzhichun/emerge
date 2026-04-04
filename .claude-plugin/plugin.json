@@ -2,10 +2,11 @@
   "name": "emerge",
   "version": "0.2.0",
   "description": "Generic RWB flywheel plugin for Claude Code",
-  "capabilities": {
-    "tools": ["icc_exec", "icc_read", "icc_write", "icc_reconcile"],
-    "resources": ["policy://current", "pipeline://*", "runner://status", "state://deltas"],
-    "prompts": ["icc_explore", "icc_promote"]
+  "mcpServers": {
+    "emerge": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/repl_daemon.py"]
+    }
   },
   "permissions": {
     "filesystem": ["~/.emerge/"],

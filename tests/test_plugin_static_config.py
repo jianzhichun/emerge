@@ -10,6 +10,13 @@ def test_plugin_manifest_exists_and_has_required_keys():
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert data["name"] == "emerge"
     assert "version" in data
+    # mcpServers tells CC how to start the daemon (required for plugin mode)
+    assert "mcpServers" in data, "plugin.json must declare mcpServers so CC can start the daemon"
+    server = data["mcpServers"].get("emerge", {})
+    assert server.get("command") == "python3"
+    assert any("repl_daemon.py" in arg for arg in server.get("args", []))
+    # Must use ${CLAUDE_PLUGIN_ROOT} so path resolves correctly regardless of CWD
+    assert any("${CLAUDE_PLUGIN_ROOT}" in arg for arg in server.get("args", []))
 
 
 def test_mcp_config_has_core_stdio_and_expected_tools_path():
@@ -32,6 +39,23 @@ def test_hooks_json_has_required_events_and_post_tool_matcher():
 
     matcher = hooks["PostToolUse"][0]["matcher"]
     assert "mcp__plugin_.*emerge.*__icc_(read|write|exec|reconcile)" == matcher
+
+
+def test_hooks_json_commands_use_claude_plugin_root():
+    """All hook commands must use ${CLAUDE_PLUGIN_ROOT} so they work regardless of CWD.
+
+    CC substitutes ${CLAUDE_PLUGIN_ROOT} before spawning (hooks.ts:845).
+    Without it, hooks fail when CC is run from a project other than the plugin root.
+    """
+    hooks_path = ROOT / "hooks" / "hooks.json"
+    data = json.loads(hooks_path.read_text(encoding="utf-8"))
+    for event, matchers in data["hooks"].items():
+        for entry in matchers:
+            cmd = entry["command"]
+            assert "${CLAUDE_PLUGIN_ROOT}" in cmd, (
+                f"Hook {event!r} command {cmd!r} must use ${{CLAUDE_PLUGIN_ROOT}} "
+                "to work when CC is run from outside the plugin directory"
+            )
 
 
 def test_policy_command_uses_plugin_root_for_repl_admin():
