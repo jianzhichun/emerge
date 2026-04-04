@@ -128,3 +128,49 @@ def test_operator_monitor_accumulates_events_across_polls(tmp_path):
     monitor.join(timeout=1.0)
 
     assert len(push_calls) >= 1, "pattern should fire after accumulating 3 events across polls"
+
+
+def test_operator_monitor_reads_local_event_root(tmp_path):
+    """OperatorMonitor polls local event_root when no runner machines configured."""
+    import time, json, threading
+    from scripts.operator_monitor import OperatorMonitor
+
+    machine_id = "local-test-machine"
+    event_dir = tmp_path / machine_id
+    event_dir.mkdir(parents=True)
+    events_file = event_dir / "events.jsonl"
+
+    now_ms = int(time.time() * 1000)
+    event = {
+        "ts_ms": now_ms,
+        "machine_id": machine_id,
+        "session_role": "operator",
+        "app": "hypermesh",
+        "event_type": "node_create",
+        "payload": {},
+    }
+
+    # Write 3 identical events so PatternDetector fires
+    events_file.write_text(
+        "\n".join(json.dumps({**event, "ts_ms": now_ms + i * 1000}) for i in range(3)) + "\n",
+        encoding="utf-8",
+    )
+
+    received = []
+
+    def push_fn(stage, context, summary):
+        received.append(summary)
+
+    monitor = OperatorMonitor(
+        machines={},  # no runner — local only
+        push_fn=push_fn,
+        poll_interval_s=0.1,
+        event_root=tmp_path,
+    )
+    monitor.start()
+    time.sleep(0.5)
+    monitor.stop()
+    monitor.join(timeout=2)
+
+    assert len(received) >= 1, "OperatorMonitor did not read local event_root"
+    assert received[0].intent_signature.startswith("hypermesh.")
