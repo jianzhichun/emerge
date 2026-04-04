@@ -18,55 +18,22 @@ Design anchors:
 Emerge sits **inside the Claude Code process**: the plugin exposes one stdio MCP server and a set of hooks. The daemon is the single control plane; heavy or GUI work is delegated to an **optional HTTP remote runner** while all policy state, registry, and WAL stay local.
 
 ```mermaid
-flowchart LR
-  subgraph cc [Claude Code]
-    direction TB
-    Hooks[Hook scripts]
-    Agent[Model / Agent]
-    Hooks -->|additionalContext| Agent
-  end
+flowchart TB
+  CC[Claude Code<br/>Agent + Hooks]
+  D[EmergeDaemon<br/>tools + resources + OperatorMonitor]
+  C[Runtime Core<br/>ExecSession · PipelineEngine · Policy Registry<br/>StateTracker · Metrics · RunnerRouter]
+  R[Remote Runner optional<br/>RunnerClient -> remote_runner.py]
+  P[Local Persistence<br/>session · pipelines-registry · plugin-data · operator-events]
+  X[PatternDetector + Distiller]
 
-  subgraph daemon [EmergeDaemon — scripts/emerge_daemon.py]
-    direction TB
-    T[Tool surface<br/>icc_exec · icc_read · icc_write · icc_crystallize · icc_reconcile]
-    R[Resources<br/>policy:// · runner:// · state:// · pipeline://]
-    OM[OperatorMonitor]
-    T --> R
-  end
-
-  subgraph core [Runtime Core]
-    direction TB
-    Runtime[In-process runtime<br/>ExecSession · PipelineEngine · Policy Registry<br/>StateTracker · Metrics · RunnerRouter]
-    PD2[PatternDetector + Distiller]
-  end
-
-  subgraph runner [Remote Runner — optional]
-    direction TB
-    RC[RunnerClient]
-    RProc[remote_runner.py<br/>icc_exec + EventBus endpoints]
-    RC -->|POST /run: icc_exec| RProc
-  end
-
-  subgraph persist [Persistence]
-    direction TB
-    SD[session/<br/>wal.jsonl · candidates.json · events]
-    Reg[~/.emerge/<br/>pipelines-registry · connectors · adapters]
-    PD[.plugin-data/<br/>state.json · metrics.jsonl]
-    EB[~/.emerge/operator-events/<br/>machine_id/events.jsonl]
-  end
-
-  Agent <-->|MCP stdio / JSON-RPC| T
-  T --> Runtime
-  Runtime -->|route remote exec| RC
-  OM -->|GET /operator-events| RC
-  RProc -->|POST /operator-event| EB
-  EB --> OM
-  OM --> PD2
-  PD2 -->|MCP push| Agent
-
-  Runtime --> SD
-  Runtime --> Reg
-  Runtime --> PD
+  CC <-->|MCP stdio / JSON-RPC| D
+  D --> C
+  C -->|remote icc_exec| R
+  R -->|POST /operator-event| P
+  D -->|GET /operator-events| R
+  D --> X
+  X -->|MCP push| CC
+  C --> P
 ```
 
 **Component responsibilities:**
