@@ -81,3 +81,23 @@ def test_runner_status_command_uses_plugin_root_for_repl_admin():
     assert "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" in runner_md
     assert "runner-status" in runner_md
     assert "python3 scripts/repl_admin.py" not in runner_md
+
+
+def test_marketplace_json_has_valid_structure():
+    marketplace_path = ROOT / ".claude-plugin" / "marketplace.json"
+    data = json.loads(marketplace_path.read_text(encoding="utf-8"))
+    # Required top-level fields
+    assert "name" in data
+    assert " " not in data["name"], "marketplace name must not contain spaces"
+    assert "owner" in data and "name" in data["owner"]
+    assert "plugins" in data and data["plugins"]
+    # Plugin entry for "emerge"
+    plugin = next((p for p in data["plugins"] if p["name"] == "emerge"), None)
+    assert plugin is not None, "marketplace.json must contain an 'emerge' plugin entry"
+    assert "source" in plugin
+    # Self-hosted relative path: must start with "./" so CC treats it as local
+    source = plugin["source"]
+    assert isinstance(source, str) and source.startswith("./"), (
+        "emerge plugin source must be a relative path starting with './' "
+        f"(got {source!r})"
+    )

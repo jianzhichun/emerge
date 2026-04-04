@@ -1,0 +1,22 @@
+{
+  "name": "emerge",
+  "owner": {
+    "name": "emerge",
+    "url": "https://github.com/emergentmethods/emerge"
+  },
+  "plugins": [
+    {
+      "name": "emerge",
+      "source": "./",
+      "description": "Generic RWB flywheel plugin for Claude Code — read/write/balance pipelines with policy enforcement and remote runner support.",
+      "version": "0.2.0",
+      "category": "development",
+      "tags": ["flywheel", "pipeline", "mcp", "repl", "automation"],
+      "strict": true
+    }
+  ],
+  "metadata": {
+    "version": "0.2.0",
+    "description": "Emerge plugin marketplace — self-hosted in the emerge repo"
+  }
+}
