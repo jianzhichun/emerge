@@ -44,6 +44,40 @@ class RunnerExecutor:
         self._base_session_id = derive_session_id(os.environ.get("EMERGE_SESSION_ID"), resolved_root)
         self._sessions_by_profile: dict[str, ExecSession] = {}
         self._repl_lock = threading.Lock()
+        self._event_write_lock = threading.Lock()
+        self._event_root = self._state_root.parent / "operator-events"
+
+    def write_operator_event(self, event: dict) -> None:
+        machine_id = str(event.get("machine_id", "")).strip()
+        if not machine_id:
+            raise ValueError("machine_id is required")
+        machine_dir = self._event_root / machine_id
+        machine_dir.mkdir(parents=True, exist_ok=True)
+        events_path = machine_dir / "events.jsonl"
+        with self._event_write_lock:
+            with events_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+    def read_operator_events(self, machine_id: str, since_ms: int = 0, limit: int = 200) -> list[dict]:
+        machine_dir = self._event_root / machine_id
+        if not machine_dir.exists():
+            return []
+        events_path = machine_dir / "events.jsonl"
+        if not events_path.exists():
+            return []
+        results = []
+        with events_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if e.get("ts_ms", 0) > since_ms:
+                    results.append(e)
+        return results[-limit:]
 
     def run(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Execute a tool request. The runner only handles icc_exec — pipeline
@@ -108,6 +142,18 @@ class RunnerHTTPHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/operator-event":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length).decode("utf-8")
+                event = json.loads(raw) if raw else {}
+                if not isinstance(event, dict):
+                    raise ValueError("event must be an object")
+                self.executor.write_operator_event(event)
+                self._send_json(200, {"ok": True})
+            except Exception as exc:
+                self._send_json(400, {"ok": False, "error": str(exc)})
+            return
         if self.path != "/run":
             self._send_json(404, {"ok": False, "error": "not_found"})
             return
@@ -174,6 +220,22 @@ class RunnerHTTPHandler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
             except Exception as exc:
                 self._send_json(500, {"ok": False, "error": str(exc)})
+            return
+        if self.path.startswith("/operator-events"):
+            try:
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(self.path)
+                qs = parse_qs(parsed.query)
+                machine_id = (qs.get("machine_id") or [""])[0]
+                since_ms = int((qs.get("since_ms") or ["0"])[0])
+                limit = int((qs.get("limit") or ["200"])[0])
+                if not machine_id:
+                    self._send_json(400, {"ok": False, "error": "machine_id required"})
+                    return
+                events = self.executor.read_operator_events(machine_id, since_ms, min(limit, 1000))
+                self._send_json(200, {"ok": True, "events": events})
+            except Exception as exc:
+                self._send_json(400, {"ok": False, "error": str(exc)})
             return
         self._send_json(404, {"ok": False, "error": "not_found"})
 
