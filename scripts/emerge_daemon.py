@@ -43,15 +43,15 @@ class _RunnerClientAdapter:
         self._timeout_s = timeout_s
 
     def get_events(self, machine_id: str, since_ms: int = 0) -> list[dict]:
-        import urllib.request
         import urllib.parse
         import json as _j
+        from scripts.runner_client import _NO_PROXY_OPENER
         url = (
             f"{self._base_url}/operator-events"
             f"?machine_id={urllib.parse.quote(machine_id)}&since_ms={since_ms}"
         )
         try:
-            with urllib.request.urlopen(url, timeout=self._timeout_s) as r:
+            with _NO_PROXY_OPENER.open(url, timeout=self._timeout_s) as r:
                 data = _j.loads(r.read())
             return data.get("events", [])
         except Exception:

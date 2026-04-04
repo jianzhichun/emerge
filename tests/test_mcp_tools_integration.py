@@ -1139,3 +1139,28 @@ def test_hypermesh_icc_write_participates_in_pipeline_lifecycle_registry(tmp_pat
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_runner_client_adapter_uses_no_proxy_opener(monkeypatch):
+    """_RunnerClientAdapter.get_events must not use the system proxy."""
+    from scripts.emerge_daemon import _RunnerClientAdapter
+    import urllib.request
+
+    calls = []
+
+    def tracking_open(req_or_url, *args, **kwargs):
+        if hasattr(req_or_url, 'full_url'):
+            calls.append(req_or_url.full_url)
+        else:
+            calls.append(str(req_or_url))
+        raise ConnectionRefusedError("mock: no server")
+
+    monkeypatch.setattr(urllib.request, "urlopen", tracking_open)
+
+    adapter = _RunnerClientAdapter("http://127.0.0.1:19999", timeout_s=1)
+    result = adapter.get_events("test-machine", since_ms=0)
+
+    # Should return [] on connection error (not raise)
+    assert result == []
+    # urlopen should NOT have been called (proxy-bypassing opener is used instead)
+    assert calls == [], f"Raw urlopen called — proxy bypass missing: {calls}"
