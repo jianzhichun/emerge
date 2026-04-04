@@ -36,18 +36,8 @@ flowchart LR
 
   subgraph core [Runtime Core]
     direction TB
-    D{{icc_* dispatch}}
-    subgraph handlers [In-process handlers]
-      direction LR
-      ES[ExecSession + WAL]
-      PE[PipelineEngine]
-      PR[Policy Registry]
-      ST[StateTracker]
-      Met[Metrics]
-      RR[RunnerRouter]
-    end
+    Runtime[In-process runtime<br/>ExecSession · PipelineEngine · Policy Registry<br/>StateTracker · Metrics · RunnerRouter]
     PD2[PatternDetector + Distiller]
-    D --> ES & PE & PR & ST & Met & RR
   end
 
   subgraph runner [Remote Runner — optional]
@@ -66,20 +56,17 @@ flowchart LR
   end
 
   Agent <-->|MCP stdio / JSON-RPC| T
-  T --> D
-  RR --> RC
+  T --> Runtime
+  Runtime -->|route remote exec| RC
   OM -->|GET /operator-events| RC
   RProc -->|POST /operator-event| EB
   EB --> OM
   OM --> PD2
   PD2 -->|MCP push| Agent
 
-  ES --> SD
-  PR --> SD
-  PR --> Reg
-  PE --> Reg
-  ST --> PD
-  Met --> PD
+  Runtime --> SD
+  Runtime --> Reg
+  Runtime --> PD
 ```
 
 **Component responsibilities:**
