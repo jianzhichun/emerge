@@ -18,69 +18,68 @@ Design anchors:
 Emerge sits **inside the Claude Code process**: the plugin exposes one stdio MCP server and a set of hooks. The daemon is the single control plane; heavy or GUI work is delegated to an **optional HTTP remote runner** while all policy state, registry, and WAL stay local.
 
 ```mermaid
-flowchart TB
+flowchart LR
   subgraph cc [Claude Code]
     direction TB
     Hooks[Hook scripts]
     Agent[Model / Agent]
-    Hooks -->|additionalContext — Goal · Delta| Agent
+    Hooks -->|additionalContext| Agent
   end
 
-  subgraph row [Daemon · Core · Runner]
-    direction LR
-    subgraph daemon [EmergeDaemon — scripts/emerge_daemon.py]
-      direction TB
-      T[icc_exec · icc_read · icc_write · icc_crystallize · icc_reconcile]
-      R[policy:// · runner:// · state:// · pipeline://]
-      OM[OperatorMonitor thread\nenabled via EMERGE_OPERATOR_MONITOR=1]
-      T --> R
-    end
+  subgraph daemon [EmergeDaemon — scripts/emerge_daemon.py]
+    direction TB
+    T[Tool surface<br/>icc_exec · icc_read · icc_write · icc_crystallize · icc_reconcile]
+    R[Resources<br/>policy:// · runner:// · state:// · pipeline://]
+    OM[OperatorMonitor]
+    T --> R
+  end
 
-    subgraph core [Runtime Core]
-      direction TB
-      subgraph core_row [in-process handlers]
-        direction LR
-        D{{icc_* dispatch}}
-        ES[ExecSession + WAL]
-        PE[PipelineEngine]
-        PR[Policy Registry]
-        ST[StateTracker]
-        Met[Metrics sink]
-        RR[RunnerRouter]
-      end
-      PD2[PatternDetector + Distiller]
-      D --> ES & PE & PR & ST & Met & RR
+  subgraph core [Runtime Core]
+    direction TB
+    D{{icc_* dispatch}}
+    subgraph handlers [In-process handlers]
+      direction LR
+      ES[ExecSession + WAL]
+      PE[PipelineEngine]
+      PR[Policy Registry]
+      ST[StateTracker]
+      Met[Metrics]
+      RR[RunnerRouter]
     end
+    PD2[PatternDetector + Distiller]
+    D --> ES & PE & PR & ST & Met & RR
+  end
 
-    subgraph runner [Remote Runner — optional]
-      direction TB
-      RC[RunnerClient]
-      RProc[remote_runner.py — icc_exec + EventBus endpoints]
-      RC -->|HTTP POST /run — icc_exec only| RProc
-    end
+  subgraph runner [Remote Runner — optional]
+    direction TB
+    RC[RunnerClient]
+    RProc[remote_runner.py<br/>icc_exec + EventBus endpoints]
+    RC -->|POST /run (icc_exec)| RProc
   end
 
   subgraph persist [Persistence]
-    direction LR
-    SD[session/ — wal.jsonl · candidates.json · events]
-    Reg[~/.emerge/ — pipelines-registry · connectors · adapters]
-    PD[.plugin-data/ — state.json · metrics.jsonl]
-    EB[~/.emerge/operator-events/\nmachine_id/events.jsonl]
+    direction TB
+    SD[session/<br/>wal.jsonl · candidates.json · events]
+    Reg[~/.emerge/<br/>pipelines-registry · connectors · adapters]
+    PD[.plugin-data/<br/>state.json · metrics.jsonl]
+    EB[~/.emerge/operator-events/<br/>machine_id/events.jsonl]
   end
 
-  Agent <-->|MCP stdio / JSON-RPC 2.0| T
+  Agent <-->|MCP stdio / JSON-RPC| T
   T --> D
   RR --> RC
   OM -->|GET /operator-events| RC
   RProc -->|POST /operator-event| EB
   EB --> OM
   OM --> PD2
-  PD2 -->|MCP push — channel notify / ElicitRequest| Agent
+  PD2 -->|MCP push| Agent
 
   ES --> SD
-  PR --> SD & Reg
+  PR --> SD
+  PR --> Reg
   PE --> Reg
-  ST & Met --> PD
+  ST --> PD
+  Met --> PD
 ```
 
 **Component responsibilities:**
