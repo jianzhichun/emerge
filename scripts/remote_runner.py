@@ -20,7 +20,7 @@ if str(_ROOT) not in sys.path:
 
 from scripts.pipeline_engine import PipelineEngine
 from scripts.policy_config import derive_profile_token, derive_session_id, default_repl_root
-from scripts.repl_state import ReplState
+from scripts.exec_session import ExecSession
 
 ROOT = Path(__file__).resolve().parents[1]
 _START_TIME = time.time()
@@ -43,7 +43,7 @@ class RunnerExecutor:
         self._root = resolved_root
         self._state_root = (state_root or default_repl_root()).expanduser().resolve()
         self._base_session_id = derive_session_id(os.environ.get("REPL_SESSION_ID"), resolved_root)
-        self._repl_by_profile: dict[str, ReplState] = {}
+        self._repl_by_profile: dict[str, ExecSession] = {}
         self._repl_lock = threading.Lock()
         self.pipeline = PipelineEngine(root=resolved_root)
 
@@ -60,6 +60,7 @@ class RunnerExecutor:
                     "target_profile": profile,
                     "intent_signature": arguments.get("intent_signature", ""),
                     "script_ref": arguments.get("script_ref", ""),
+                    "no_replay": bool(arguments.get("no_replay", False)),
                 },
                 inject_vars={"__args": arguments.get("script_args", {})},
             )
@@ -71,7 +72,7 @@ class RunnerExecutor:
             return {"isError": False, "content": [{"type": "text", "text": json.dumps(result)}]}
         return {"isError": True, "content": [{"type": "text", "text": f"Unknown tool: {tool_name}"}]}
 
-    def _get_repl(self, target_profile: str) -> ReplState:
+    def _get_repl(self, target_profile: str) -> ExecSession:
         normalized = (target_profile or "default").strip() or "default"
         profile_key = "__default__" if normalized == "default" else derive_profile_token(normalized)
         if profile_key not in self._repl_by_profile:
@@ -82,7 +83,7 @@ class RunnerExecutor:
                         if normalized == "default"
                         else f"{self._base_session_id}__{profile_key}"
                     )
-                    self._repl_by_profile[profile_key] = ReplState(
+                    self._repl_by_profile[profile_key] = ExecSession(
                         state_root=self._state_root, session_id=session_id
                     )
         return self._repl_by_profile[profile_key]
