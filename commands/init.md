@@ -26,8 +26,6 @@ Execution rules:
   - verification evidence
   - next recommended action
 
-For protocol and payload details, follow `docs/architecture/remote-runner-protocol.md`.
-
 Status rules:
 - `init_ok`: runner reachable (if needed), assets created, `icc_read`/`icc_write` smoke checks pass.
 - `degraded`: partial success (assets created but verification failed or policy degraded).

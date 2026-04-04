@@ -52,7 +52,16 @@ Minimum steps:
    - `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" runner-status --pretty`
    - proceed only when `Runner reachable: True`.
 
-Protocol reference: `docs/architecture/remote-runner-protocol.md`
+**Runner HTTP protocol (summary):**
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /run` | Execute one `icc_exec` call |
+| `GET /health` | Liveness probe |
+| `GET /status` | Process info (pid, uptime, root) |
+| `GET /logs?n=N` | Last N log lines |
+
+Runner accepts **only `icc_exec`**. `icc_read`/`icc_write` pipeline execution is handled by the daemon (loads files locally, sends as inline `icc_exec`). Request shape: `{"tool_name": "icc_exec", "arguments": {"code": "...", "target_profile": "...", "no_replay": false}}`.
 
 ## Connector Location Rule
 
@@ -133,15 +142,15 @@ For RED and GREEN phases, tests must exercise MCP-facing tool paths:
 
 Minimum expectation:
 
-1. At least one failing-then-passing test through `ReplDaemon.call_tool(...)` or JSON-RPC `tools/call` for each path used by the init flow.
+1. At least one failing-then-passing test through `EmergeDaemon.call_tool(...)` or JSON-RPC `tools/call` for each path used by the init flow.
 2. At least one integration assertion that policy registry changes after `icc_read/icc_write` calls.
-3. If L1.5 composition is used, include a failing-then-passing test for composed key updates (`l15::...`).
+3. If flywheel bridge is used, include a failing-then-passing test for bridge key updates (`flywheel::...`).
 
 ## Quick Reference
 
 - **Read pipeline id:** `<vertical>.read.<pipeline>`
 - **Write pipeline id:** `<vertical>.write.<pipeline>`
-- **Composed L1.5 key shape:** `l15::<pipeline_id>::<exec_signature-or-intent_signature>::<script_ref>`
+- **Flywheel bridge key shape:** `flywheel::<pipeline_id>::<intent_signature>::<script_ref>`
 - **Policy states:** `explore -> canary -> stable`
 
 ## Rationalization Table

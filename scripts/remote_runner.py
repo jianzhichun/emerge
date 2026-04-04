@@ -18,7 +18,6 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from scripts.pipeline_engine import PipelineEngine, PipelineMissingError
 from scripts.policy_config import derive_profile_token, derive_session_id, default_exec_root
 from scripts.exec_session import ExecSession
 
@@ -45,9 +44,11 @@ class RunnerExecutor:
         self._base_session_id = derive_session_id(os.environ.get("EMERGE_SESSION_ID"), resolved_root)
         self._sessions_by_profile: dict[str, ExecSession] = {}
         self._repl_lock = threading.Lock()
-        self.pipeline = PipelineEngine(root=resolved_root)
 
     def run(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Execute a tool request. The runner only handles icc_exec — pipeline
+        operations (icc_read/icc_write) and icc_crystallize are handled by the
+        daemon using locally-loaded connector assets sent as inline code."""
         if tool_name == "icc_exec":
             profile = str(arguments.get("target_profile", "default"))
             repl = self._get_session(profile)
@@ -63,33 +64,6 @@ class RunnerExecutor:
                     "no_replay": bool(arguments.get("no_replay", False)),
                 },
                 inject_vars={"__args": arguments.get("script_args", {})},
-            )
-        if tool_name == "icc_read":
-            try:
-                result = self.pipeline.run_read(arguments)
-            except PipelineMissingError as exc:
-                info = {"pipeline_missing": True, "connector": exc.connector, "mode": exc.mode, "pipeline": exc.pipeline}
-                return {"isError": False, "pipeline_missing": True, "connector": exc.connector, "mode": exc.mode, "pipeline": exc.pipeline, "content": [{"type": "text", "text": json.dumps(info)}]}
-            return {"isError": False, "content": [{"type": "text", "text": json.dumps(result)}]}
-        if tool_name == "icc_write":
-            try:
-                result = self.pipeline.run_write(arguments)
-            except PipelineMissingError as exc:
-                info = {"pipeline_missing": True, "connector": exc.connector, "mode": exc.mode, "pipeline": exc.pipeline}
-                return {"isError": False, "pipeline_missing": True, "connector": exc.connector, "mode": exc.mode, "pipeline": exc.pipeline, "content": [{"type": "text", "text": json.dumps(info)}]}
-            return {"isError": False, "content": [{"type": "text", "text": json.dumps(result)}]}
-        if tool_name == "icc_crystallize":
-            intent_signature = str(arguments.get("intent_signature", "")).strip()
-            connector = str(arguments.get("connector", "")).strip()
-            pipeline_name = str(arguments.get("pipeline_name", "")).strip()
-            mode = str(arguments.get("mode", "read")).strip()
-            target_profile = str(arguments.get("target_profile", "default")).strip()
-            return self._crystallize(
-                intent_signature=intent_signature,
-                connector=connector,
-                pipeline_name=pipeline_name,
-                mode=mode,
-                target_profile=target_profile,
             )
         return {"isError": True, "content": [{"type": "text", "text": f"Unknown tool: {tool_name}"}]}
 
@@ -121,140 +95,6 @@ class RunnerExecutor:
                 script_path = script_path.resolve()
             return script_path.read_text(encoding="utf-8")
         return str(arguments.get("code", ""))
-
-    def _crystallize(
-        self,
-        *,
-        intent_signature: str,
-        connector: str,
-        pipeline_name: str,
-        mode: str,
-        target_profile: str = "default",
-    ) -> dict[str, Any]:
-        import textwrap
-        import time as _time
-
-        from scripts.pipeline_engine import _USER_CONNECTOR_ROOT
-
-        # Locate WAL for this profile (same logic as _get_session)
-        normalized = (target_profile or "default").strip() or "default"
-        profile_key = "__default__" if normalized == "default" else derive_profile_token(normalized)
-        session_id = (
-            self._base_session_id
-            if normalized == "default"
-            else f"{self._base_session_id}__{profile_key}"
-        )
-        wal_path = self._state_root / session_id / "wal.jsonl"
-
-        best_code: str | None = None
-        if wal_path.exists():
-            with wal_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if (
-                        entry.get("status") == "success"
-                        and not entry.get("no_replay", False)
-                        and entry.get("metadata", {}).get("intent_signature") == intent_signature
-                    ):
-                        best_code = str(entry.get("code", "")).strip()
-
-        if not best_code:
-            return {
-                "isError": True,
-                "content": [{"type": "text", "text": (
-                    f"icc_crystallize: no synthesizable WAL entry found for "
-                    f"intent_signature='{intent_signature}'. Run icc_exec with "
-                    f"intent_signature='{intent_signature}' and no_replay=false first."
-                )}],
-            }
-
-        ts = int(_time.time())
-        indented = textwrap.indent(best_code, "    ")
-
-        if mode == "read":
-            py_src = (
-                f"# auto-generated by icc_crystallize — review before promoting\n"
-                f"# intent_signature: {intent_signature}\n"
-                f"# synthesized_at: {ts}\n"
-                f"\n"
-                f"def run_read(metadata, args):\n"
-                f"    __args = args  # compat with exec __args scope\n"
-                f"    # --- CRYSTALLIZED ---\n"
-                f"{indented}\n"
-                f"    # --- END ---\n"
-                f"    return __result  # exec code must set __result = [{{...}}]\n"
-                f"\n"
-                f"\n"
-                f"def verify_read(metadata, args, rows):\n"
-                f"    return {{\"ok\": bool(rows)}}\n"
-            )
-            yaml_src = (
-                f"intent_signature: {intent_signature}\n"
-                f"rollback_or_stop_policy: stop\n"
-                f"read_steps:\n"
-                f"  - run_read\n"
-                f"verify_steps:\n"
-                f"  - verify_read\n"
-                f"synthesized: true\n"
-                f"synthesized_at: {ts}\n"
-            )
-        else:  # write
-            py_src = (
-                f"# auto-generated by icc_crystallize — review before promoting\n"
-                f"# intent_signature: {intent_signature}\n"
-                f"# synthesized_at: {ts}\n"
-                f"\n"
-                f"def run_write(metadata, args):\n"
-                f"    __args = args  # compat with exec __args scope\n"
-                f"    # --- CRYSTALLIZED ---\n"
-                f"{indented}\n"
-                f"    # --- END ---\n"
-                f"    return __action  # exec code must set __action = {{\"ok\": True, ...}}\n"
-                f"\n"
-                f"\n"
-                f"def verify_write(metadata, args, action_result):\n"
-                f"    return {{\"ok\": bool(action_result.get(\"ok\"))}}\n"
-            )
-            yaml_src = (
-                f"intent_signature: {intent_signature}\n"
-                f"rollback_or_stop_policy: stop\n"
-                f"write_steps:\n"
-                f"  - run_write\n"
-                f"verify_steps:\n"
-                f"  - verify_write\n"
-                f"synthesized: true\n"
-                f"synthesized_at: {ts}\n"
-            )
-
-        env_root_str = os.environ.get("EMERGE_CONNECTOR_ROOT", "").strip()
-        target_root = Path(env_root_str).expanduser() if env_root_str else _USER_CONNECTOR_ROOT
-        pipeline_dir = target_root / connector / "pipelines" / mode
-        pipeline_dir.mkdir(parents=True, exist_ok=True)
-
-        py_path = pipeline_dir / f"{pipeline_name}.py"
-        yaml_path = pipeline_dir / f"{pipeline_name}.yaml"
-        py_path.write_text(py_src, encoding="utf-8")
-        yaml_path.write_text(yaml_src, encoding="utf-8")
-
-        preview_lines = py_src.splitlines()[:20]
-        return {
-            "ok": True,
-            "py_path": str(py_path),
-            "yaml_path": str(yaml_path),
-            "code_preview": "\n".join(preview_lines),
-            "content": [{"type": "text", "text": json.dumps({
-                "ok": True,
-                "py_path": str(py_path),
-                "yaml_path": str(yaml_path),
-            })}],
-        }
-
 
 class RunnerHTTPHandler(BaseHTTPRequestHandler):
     executor: RunnerExecutor

@@ -109,6 +109,29 @@ class PipelineEngine:
             "rollback_result": rollback_result,
         }
 
+    def _load_pipeline_source(
+        self, connector: str, mode: str, pipeline: str
+    ) -> tuple[dict[str, Any], str]:
+        """Return (metadata, py_source_text) without importing the module.
+
+        Used by the daemon to send pipeline code to a remote runner as inline
+        icc_exec code, keeping connector assets local and the runner stateless.
+        """
+        for connector_root in self._connector_roots:
+            base = connector_root / connector / "pipelines" / mode
+            meta_path = base / f"{pipeline}.yaml"
+            code_path = base / f"{pipeline}.py"
+            if meta_path.exists() and code_path.exists():
+                break
+        else:
+            searched = ", ".join(str(r / connector) for r in self._connector_roots)
+            raise PipelineMissingError(
+                connector=connector, mode=mode, pipeline=pipeline, searched=searched
+            )
+        metadata = self._load_metadata(meta_path)
+        py_source = code_path.read_text(encoding="utf-8")
+        return metadata, py_source
+
     def _load_pipeline(
         self, connector: str, mode: str, pipeline: str
     ) -> tuple[dict[str, Any], Any]:

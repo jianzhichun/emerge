@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 import sys
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -19,32 +18,27 @@ def test_icc_crystallize_generates_pipeline_files(tmp_path):
     try:
         from scripts.emerge_daemon import EmergeDaemon
         daemon = EmergeDaemon(root=ROOT)
-        # Seed WAL with a synthesizable exec
         daemon.call_tool("icc_exec", {
             "code": "__result = [{'x': 1}]",
             "intent_signature": "myconn.read.mydata",
             "no_replay": False,
         })
-
         result = daemon.call_tool("icc_crystallize", {
             "intent_signature": "myconn.read.mydata",
             "connector": "myconn",
             "pipeline_name": "mydata",
             "mode": "read",
         })
-
         assert result.get("isError") is not True, result
         assert result.get("ok") is True
         py_path = Path(result["py_path"])
         yaml_path = Path(result["yaml_path"])
         assert py_path.exists(), f"expected {py_path}"
         assert yaml_path.exists(), f"expected {yaml_path}"
-
         py_src = py_path.read_text()
         assert "def run_read" in py_src
         assert "def verify_read" in py_src
         assert "__result = [{'x': 1}]" in py_src
-
         import yaml
         meta = yaml.safe_load(yaml_path.read_text())
         assert meta["intent_signature"] == "myconn.read.mydata"
@@ -86,56 +80,36 @@ def test_icc_crystallize_write_pipeline(tmp_path):
         os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
 
 
-def test_runner_executor_crystallize_reads_local_wal(tmp_path):
-    """RunnerExecutor._crystallize reads WAL from runner's own state_root."""
-    os.environ["EMERGE_SESSION_ID"] = "runner-cryst-test"
+def test_icc_crystallize_always_writes_locally_even_with_runner(tmp_path):
+    """icc_crystallize ignores runner_router — pipeline files always land locally."""
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "cryst-local-test"
     connector_root = tmp_path / "connectors"
     os.environ["EMERGE_CONNECTOR_ROOT"] = str(connector_root)
     try:
-        from scripts.remote_runner import RunnerExecutor
-        executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
-        # Seed WAL via icc_exec so it lands in runner's own state_root
-        executor.run("icc_exec", {
-            "code": "__result = [{'val': 42}]",
-            "intent_signature": "rc.read.vals",
-            "no_replay": False,
-        })
-        result = executor.run("icc_crystallize", {
-            "intent_signature": "rc.read.vals",
-            "connector": "rc",
-            "pipeline_name": "vals",
-            "mode": "read",
-        })
-        assert result.get("isError") is not True, result
-        py_path = Path(result["py_path"])
-        assert py_path.exists()
-        assert "def run_read" in py_path.read_text()
-        assert "__result = [{'val': 42}]" in py_path.read_text()
-    finally:
-        os.environ.pop("EMERGE_SESSION_ID", None)
-        os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
-
-
-def test_daemon_crystallize_routes_to_runner_client(tmp_path, monkeypatch):
-    """When a runner client is available, icc_crystallize is forwarded to it."""
-    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["EMERGE_SESSION_ID"] = "route-cryst-test"
-    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path / "connectors")
-    try:
         from scripts.emerge_daemon import EmergeDaemon
 
-        calls: list[tuple[str, dict]] = []
+        routed_calls: list[str] = []
 
         class _FakeClient:
             def call_tool(self, name, arguments):
-                calls.append((name, arguments))
-                return {"ok": True, "routed": True, "content": [{"type": "text", "text": "{}"}]}
+                routed_calls.append(name)
+                return {"ok": True, "content": [{"type": "text", "text": "{}"}]}
 
         class _FakeRouter:
             def find_client(self, arguments):
                 return _FakeClient()
 
         daemon = EmergeDaemon(root=ROOT)
+
+        # Seed WAL locally before installing fake router
+        daemon.call_tool("icc_exec", {
+            "code": "__result = [{'x': 1}]",
+            "intent_signature": "rc.read.vals",
+            "no_replay": False,
+        })
+
+        # Now install fake router — crystallize must still write locally
         daemon._runner_router = _FakeRouter()
 
         result = daemon.call_tool("icc_crystallize", {
@@ -143,12 +117,12 @@ def test_daemon_crystallize_routes_to_runner_client(tmp_path, monkeypatch):
             "connector": "rc",
             "pipeline_name": "vals",
             "mode": "read",
-            "target_profile": "gpu-worker",
         })
 
-        assert result.get("routed") is True
-        assert len(calls) == 1
-        assert calls[0][0] == "icc_crystallize"
+        # Must succeed locally — runner not called for crystallize
+        assert result.get("ok") is True, result
+        assert "icc_crystallize" not in routed_calls
+        assert Path(result["py_path"]).exists()
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)

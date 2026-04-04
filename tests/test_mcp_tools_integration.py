@@ -708,6 +708,63 @@ def test_icc_reconcile_correct_increments_human_fixes(tmp_path):
         os.environ.pop("EMERGE_SESSION_ID", None)
 
 
+def test_increment_human_fix_targets_most_recent_candidate_only(tmp_path):
+    """A single icc_reconcile(correct) must increment human_fixes on exactly ONE
+    candidate — the most recently used one (highest last_ts_ms) — even when multiple
+    candidates share the same intent_signature (exec, pipeline::, flywheel:: entries).
+    Incrementing all would inflate human_fix_rate for unrelated candidates."""
+    import json, os, time
+    from pathlib import Path
+    from scripts.emerge_daemon import EmergeDaemon
+
+    ROOT = Path(__file__).resolve().parents[1]
+    state_root = tmp_path / "state"
+    os.environ["EMERGE_STATE_ROOT"] = str(state_root)
+    os.environ["EMERGE_SESSION_ID"] = "multi-cand-fix-test"
+    try:
+        session_id = "multi-cand-fix-test"
+        session_dir = state_root / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        now = int(time.time() * 1000)
+        # Three candidates sharing the same intent_signature: exec, pipeline, bridge.
+        # The pipeline:: entry has the highest last_ts_ms — it is the "most recent".
+        candidates = {
+            "candidates": {
+                "default::zwcad.read.state::<inline>": {
+                    "intent_signature": "zwcad.read.state",
+                    "attempts": 10, "successes": 9, "verify_passes": 9,
+                    "human_fixes": 0, "last_ts_ms": now - 2000,
+                },
+                "pipeline::zwcad.read.state": {
+                    "intent_signature": "zwcad.read.state",
+                    "attempts": 5, "successes": 5, "verify_passes": 5,
+                    "human_fixes": 0, "last_ts_ms": now - 500,  # most recent
+                },
+                "flywheel::zwcad.read.state::zwcad.read.state::script.py": {
+                    "intent_signature": "zwcad.read.state",
+                    "attempts": 3, "successes": 3, "verify_passes": 3,
+                    "human_fixes": 0, "last_ts_ms": now - 1500,
+                },
+            }
+        }
+        (session_dir / "candidates.json").write_text(json.dumps(candidates))
+
+        daemon = EmergeDaemon(root=ROOT)
+        daemon._increment_human_fix("zwcad.read.state")
+
+        updated = json.loads((session_dir / "candidates.json").read_text())["candidates"]
+
+        # Only the pipeline:: entry (most recent) must be incremented
+        assert updated["pipeline::zwcad.read.state"]["human_fixes"] == 1
+        # The other two must be untouched
+        assert updated["default::zwcad.read.state::<inline>"]["human_fixes"] == 0
+        assert updated["flywheel::zwcad.read.state::zwcad.read.state::script.py"]["human_fixes"] == 0
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
 def test_icc_write_pipeline_missing_returns_structured_fallback(tmp_path):
     import os
     from pathlib import Path
@@ -730,23 +787,170 @@ def test_icc_write_pipeline_missing_returns_structured_fallback(tmp_path):
         os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
 
 
-def test_runner_pipeline_missing_propagates_as_structured_response(tmp_path):
-    """PipelineMissingError from remote runner must reach caller as pipeline_missing, not isError."""
+def test_runner_only_handles_icc_exec(tmp_path):
+    """Runner is a pure executor — icc_read/icc_write/icc_crystallize return unknown tool."""
     from scripts.remote_runner import RunnerExecutor
-    os.environ["EMERGE_SESSION_ID"] = "runner-pm-test"
-    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path / "connectors")
+    os.environ["EMERGE_SESSION_ID"] = "runner-pure-test"
     try:
         executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
-        result = executor.run("icc_read", {"connector": "missing", "pipeline": "nope"})
-        assert result.get("isError") is not True
-        assert result.get("pipeline_missing") is True
-        assert result.get("connector") == "missing"
-        assert result.get("pipeline") == "nope"
-
-        result_w = executor.run("icc_write", {"connector": "missing", "pipeline": "nope"})
-        assert result_w.get("isError") is not True
-        assert result_w.get("pipeline_missing") is True
+        for tool in ("icc_read", "icc_write", "icc_crystallize"):
+            result = executor.run(tool, {"connector": "x", "pipeline": "y"})
+            assert result.get("isError") is True
+            assert "Unknown tool" in result["content"][0]["text"]
     finally:
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_run_pipeline_remotely_sends_pipeline_source_as_icc_exec(tmp_path):
+    """_run_pipeline_remotely loads local pipeline .py and sends it to runner as icc_exec."""
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "rpr-test"
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path / "connectors")
+    try:
+        from scripts.emerge_daemon import EmergeDaemon
+
+        # Create a local pipeline
+        pipeline_dir = tmp_path / "connectors" / "myconn" / "pipelines" / "read"
+        pipeline_dir.mkdir(parents=True)
+        (pipeline_dir / "mydata.yaml").write_text(
+            "intent_signature: myconn.read.mydata\n"
+            "rollback_or_stop_policy: stop\n"
+            "read_steps:\n  - run_read\n"
+            "verify_steps:\n  - verify_read\n"
+        )
+        (pipeline_dir / "mydata.py").write_text(
+            "def run_read(metadata, args):\n"
+            "    return [{'val': 99}]\n\n"
+            "def verify_read(metadata, args, rows):\n"
+            "    return {'ok': bool(rows)}\n"
+        )
+
+        exec_calls: list[dict] = []
+
+        class _FakeClient:
+            def call_tool(self, name, arguments):
+                exec_calls.append({"name": name, "arguments": arguments})
+                # Simulate runner executing the inline code and printing JSON result
+                code = arguments.get("code", "")
+                globs: dict = {}
+                import sys as _sys, io
+                buf = io.StringIO()
+                old = _sys.stdout
+                _sys.stdout = buf
+                try:
+                    exec(code, globs)
+                finally:
+                    _sys.stdout = old
+                return {"isError": False, "content": [{"type": "text", "text": f"stdout:\n{buf.getvalue()}"}]}
+
+        daemon = EmergeDaemon(root=ROOT)
+        result = daemon._run_pipeline_remotely("read", {"connector": "myconn", "pipeline": "mydata"}, _FakeClient())
+
+        assert len(exec_calls) == 1
+        assert exec_calls[0]["name"] == "icc_exec"
+        assert "run_read" in exec_calls[0]["arguments"]["code"]
+        assert result["pipeline_id"] == "myconn.read.mydata"
+        assert result["rows"] == [{"val": 99}]
+        assert result["verification_state"] == "verified"
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+        os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+
+
+def test_run_pipeline_remotely_strips_future_imports(tmp_path):
+    """Pipeline files with `from __future__ import annotations` must not SyntaxError
+    when injected into exec code — __future__ imports must be stripped first."""
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "rpr-future-test"
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path / "connectors")
+    try:
+        from scripts.emerge_daemon import EmergeDaemon
+
+        pipeline_dir = tmp_path / "connectors" / "fc" / "pipelines" / "read"
+        pipeline_dir.mkdir(parents=True)
+        (pipeline_dir / "items.yaml").write_text(
+            "intent_signature: fc.read.items\n"
+            "rollback_or_stop_policy: stop\n"
+            "read_steps:\n  - run_read\n"
+            "verify_steps:\n  - verify_read\n"
+        )
+        # Pipeline file starts with __future__ and typing imports — as in real pipelines
+        (pipeline_dir / "items.py").write_text(
+            "from __future__ import annotations\n"
+            "from typing import Any\n\n"
+            "def run_read(metadata: dict[str, Any], args: dict[str, Any]) -> list[dict[str, Any]]:\n"
+            "    return [{'id': 1}]\n\n"
+            "def verify_read(metadata: dict[str, Any], args: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:\n"
+            "    return {'ok': bool(rows)}\n"
+        )
+
+        class _FakeClient:
+            def call_tool(self, name, arguments):
+                import sys as _sys, io
+                buf = io.StringIO()
+                old = _sys.stdout
+                _sys.stdout = buf
+                try:
+                    exec(arguments.get("code", ""), {})
+                finally:
+                    _sys.stdout = old
+                return {"isError": False, "content": [{"type": "text", "text": f"stdout:\n{buf.getvalue()}"}]}
+
+        daemon = EmergeDaemon(root=ROOT)
+        result = daemon._run_pipeline_remotely("read", {"connector": "fc", "pipeline": "items"}, _FakeClient())
+        assert result["rows"] == [{"id": 1}]
+        assert result["verification_state"] == "verified"
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+        os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+
+
+def test_run_pipeline_remotely_write_verified(tmp_path):
+    """_run_pipeline_remotely write path assembles action/verify/policy result correctly."""
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "rpr-write-test"
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path / "connectors")
+    try:
+        from scripts.emerge_daemon import EmergeDaemon
+
+        pipeline_dir = tmp_path / "connectors" / "wc" / "pipelines" / "write"
+        pipeline_dir.mkdir(parents=True)
+        (pipeline_dir / "do-thing.yaml").write_text(
+            "intent_signature: wc.write.do-thing\n"
+            "rollback_or_stop_policy: stop\n"
+            "write_steps:\n  - run_write\n"
+            "verify_steps:\n  - verify_write\n"
+        )
+        (pipeline_dir / "do-thing.py").write_text(
+            "from __future__ import annotations\n\n"
+            "def run_write(metadata, args):\n"
+            "    return {'ok': True, 'id': 'w42'}\n\n"
+            "def verify_write(metadata, args, action_result):\n"
+            "    return {'ok': bool(action_result.get('ok'))}\n"
+        )
+
+        class _FakeClient:
+            def call_tool(self, name, arguments):
+                import sys as _sys, io
+                buf = io.StringIO()
+                old = _sys.stdout
+                _sys.stdout = buf
+                try:
+                    exec(arguments.get("code", ""), {})
+                finally:
+                    _sys.stdout = old
+                return {"isError": False, "content": [{"type": "text", "text": f"stdout:\n{buf.getvalue()}"}]}
+
+        daemon = EmergeDaemon(root=ROOT)
+        result = daemon._run_pipeline_remotely("write", {"connector": "wc", "pipeline": "do-thing"}, _FakeClient())
+        assert result["action_result"] == {"ok": True, "id": "w42"}
+        assert result["verification_state"] == "verified"
+        assert result["stop_triggered"] is False
+        assert result["rollback_executed"] is False
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
         os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
 

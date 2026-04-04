@@ -76,11 +76,15 @@ class EmergeDaemon:
         if len(parts) != 3:
             return None
         connector, mode, name = parts
+        pipeline_args = {**arguments, "connector": connector, "pipeline": name}
         try:
-            if mode == "write":
-                result = self.pipeline.run_write({**arguments, "connector": connector, "pipeline": name})
+            _client = self._runner_router.find_client(arguments) if self._runner_router else None
+            if _client is not None:
+                result = self._run_pipeline_remotely(mode, pipeline_args, _client)
+            elif mode == "write":
+                result = self.pipeline.run_write(pipeline_args)
             else:
-                result = self.pipeline.run_read({**arguments, "connector": connector, "pipeline": name})
+                result = self.pipeline.run_read(pipeline_args)
         except Exception:
             return None
         result["bridge_promoted"] = True
@@ -298,19 +302,7 @@ class EmergeDaemon:
             try:
                 _read_client = self._runner_router.find_client(arguments) if self._runner_router else None
                 if _read_client is not None:
-                    _runner_result = _read_client.call_tool("icc_read", arguments)
-                    if _runner_result.get("pipeline_missing"):
-                        raise PipelineMissingError(
-                            connector=str(_runner_result.get("connector", "")),
-                            mode=str(_runner_result.get("mode", "read")),
-                            pipeline=str(_runner_result.get("pipeline", "")),
-                            searched="remote runner",
-                        )
-                    text = str(_runner_result.get("content", [{}])[0].get("text", ""))
-                    payload = json.loads(text)
-                    if not isinstance(payload, dict):
-                        raise ValueError("runner icc_read payload must be an object")
-                    result = payload
+                    result = self._run_pipeline_remotely("read", arguments, _read_client)
                 else:
                     result = self.pipeline.run_read(arguments)
                 response = {
@@ -364,19 +356,7 @@ class EmergeDaemon:
             try:
                 _write_client = self._runner_router.find_client(arguments) if self._runner_router else None
                 if _write_client is not None:
-                    _runner_result = _write_client.call_tool("icc_write", arguments)
-                    if _runner_result.get("pipeline_missing"):
-                        raise PipelineMissingError(
-                            connector=str(_runner_result.get("connector", "")),
-                            mode=str(_runner_result.get("mode", "write")),
-                            pipeline=str(_runner_result.get("pipeline", "")),
-                            searched="remote runner",
-                        )
-                    text = str(_runner_result.get("content", [{}])[0].get("text", ""))
-                    payload = json.loads(text)
-                    if not isinstance(payload, dict):
-                        raise ValueError("runner icc_write payload must be an object")
-                    result = payload
+                    result = self._run_pipeline_remotely("write", arguments, _write_client)
                 else:
                     result = self.pipeline.run_write(arguments)
                 response = {
@@ -443,9 +423,6 @@ class EmergeDaemon:
                         "isError": True,
                         "content": [{"type": "text", "text": f"icc_crystallize: mode must be 'read' or 'write', got {mode!r}"}],
                     }
-                _crystallize_client = self._runner_router.find_client(arguments) if self._runner_router else None
-                if _crystallize_client is not None:
-                    return _crystallize_client.call_tool("icc_crystallize", arguments)
                 return self._crystallize(
                     intent_signature=intent_signature,
                     connector=connector,
@@ -1137,6 +1114,139 @@ class EmergeDaemon:
         registry["pipelines"][candidate_key] = pipeline
         self._atomic_write_json(registry_path, registry)
 
+    def _run_pipeline_remotely(
+        self,
+        mode: str,
+        arguments: dict[str, Any],
+        client: Any,
+    ) -> dict[str, Any]:
+        """Execute a pipeline on a remote runner as inline icc_exec code.
+
+        The daemon loads connector assets (YAML + .py) locally, builds a
+        self-contained exec payload, sends it to the runner via icc_exec, and
+        assembles the response in the same format as PipelineEngine.run_read/write.
+        The runner stays a pure Python executor — it never needs connector files.
+        """
+        connector = str(arguments.get("connector", "")).strip()
+        pipeline_name = str(arguments.get("pipeline", "")).strip()
+        target_profile = str(arguments.get("target_profile", "default")).strip()
+
+        # Raises PipelineMissingError if not found locally — propagates to structured hint.
+        metadata, py_source = self.pipeline._load_pipeline_source(connector, mode, pipeline_name)
+
+        # Strip `from __future__` lines — they are only valid as the first statement of a
+        # module, and exec() raises SyntaxError when they appear mid-string.
+        py_source = "\n".join(
+            line for line in py_source.splitlines()
+            if not line.strip().startswith("from __future__")
+        )
+
+        meta_repr = repr(json.dumps(metadata, ensure_ascii=True))
+        args_repr = repr(json.dumps(arguments, ensure_ascii=True))
+
+        if mode == "read":
+            dispatch = (
+                "_rows = run_read(metadata=_m, args=_a)\n"
+                "_vfn = globals().get('verify_read')\n"
+                "_v = _vfn(metadata=_m, args=_a, rows=_rows) if callable(_vfn) else {'ok': bool(_rows)}\n"
+                "_out = {'rows': _rows, 'verify': _v}\n"
+            )
+        else:
+            dispatch = (
+                "_act = run_write(metadata=_m, args=_a)\n"
+                "_vfn = globals().get('verify_write')\n"
+                "if not callable(_vfn): raise ValueError('verify_write is required')\n"
+                "_v = _vfn(metadata=_m, args=_a, action_result=_act)\n"
+                "_ok = bool(_v.get('ok', False))\n"
+                "_pol = _m.get('rollback_or_stop_policy', 'stop')\n"
+                "_rb, _rr, _st = False, None, False\n"
+                "if not _ok:\n"
+                "    if _pol == 'rollback':\n"
+                "        _rfn = globals().get('rollback_write')\n"
+                "        if callable(_rfn):\n"
+                "            try:\n"
+                "                _rr = _rfn(metadata=_m, args=_a, action_result=_act)\n"
+                "                if not isinstance(_rr, dict): _rr = {'ok': False, 'error': 'must return object'}\n"
+                "            except Exception as _re: _rr = {'ok': False, 'error': str(_re)}\n"
+                "            _rb = True\n"
+                "        else:\n"
+                "            _rr = {'ok': False, 'error': 'rollback_write not implemented'}; _st = True\n"
+                "    else:\n"
+                "        _st = True\n"
+                "_out = {'action_result': _act, 'verify': _v, 'rollback_executed': _rb, 'rollback_result': _rr, 'stop_triggered': _st}\n"
+            )
+
+        exec_code = (
+            "import json as _j, sys as _s\n"
+            f"_m = _j.loads({meta_repr})\n"
+            f"_a = _j.loads({args_repr})\n"
+            f"{py_source}\n"
+            f"{dispatch}"
+            "_s.stdout.write(_j.dumps(_out))\n"
+        )
+
+        exec_result = client.call_tool("icc_exec", {
+            "code": exec_code,
+            "no_replay": True,
+            "target_profile": target_profile,
+        })
+
+        if exec_result.get("isError"):
+            text = str(exec_result.get("content", [{}])[0].get("text", "remote pipeline exec failed"))
+            raise RuntimeError(text)
+
+        content_text = str(exec_result.get("content", [{}])[0].get("text", ""))
+        output = self._parse_pipeline_exec_output(content_text)
+
+        pid = f"{connector}.{mode}.{pipeline_name}"
+        intent_sig = metadata.get("intent_signature", "")
+        if mode == "read":
+            rows = output.get("rows", [])
+            verify = output.get("verify", {"ok": bool(rows)})
+            verification_state = "verified" if bool(verify.get("ok", False)) else "degraded"
+            return {
+                "pipeline_id": pid,
+                "intent_signature": intent_sig,
+                "rows": rows,
+                "verify_result": verify,
+                "verification_state": verification_state,
+            }
+        else:
+            act = output.get("action_result", {})
+            verify = output.get("verify", {})
+            rb = bool(output.get("rollback_executed", False))
+            st = bool(output.get("stop_triggered", False))
+            rr = output.get("rollback_result")
+            pol = str(metadata.get("rollback_or_stop_policy", "stop"))
+            verification_state = "verified" if bool(verify.get("ok", False)) else "degraded"
+            return {
+                "pipeline_id": pid,
+                "intent_signature": intent_sig,
+                "action_result": act,
+                "verify_result": verify,
+                "verification_state": verification_state,
+                "rollback_or_stop_policy": pol,
+                "policy_enforced": verification_state == "degraded",
+                "stop_triggered": st,
+                "rollback_executed": rb,
+                "rollback_result": rr,
+            }
+
+    @staticmethod
+    def _parse_pipeline_exec_output(content_text: str) -> dict[str, Any]:
+        """Extract the JSON dict written to stdout by a remote pipeline exec call."""
+        prefix = "stdout:\n"
+        if prefix in content_text:
+            stdout_part = content_text.split(prefix, 1)[1]
+            # Trim trailing stderr/error sections
+            for sep in ("\n\nstderr:", "\n\nerror:"):
+                if sep in stdout_part:
+                    stdout_part = stdout_part.split(sep, 1)[0]
+            stdout_part = stdout_part.strip()
+        else:
+            stdout_part = content_text.strip()
+        return json.loads(stdout_part)
+
     @staticmethod
     def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
         fd, tmp_path = tempfile.mkstemp(prefix=f"{path.stem}-", suffix=".json", dir=str(path.parent))
@@ -1152,26 +1262,45 @@ class EmergeDaemon:
                 os.unlink(tmp_path)
 
     def _increment_human_fix(self, intent_signature: str) -> None:
-        """Increment human_fixes on the most recent candidate matching intent_signature.
+        """Increment human_fixes on the single most-recently-used candidate matching intent_signature.
 
-        Searches all candidate entries in the current session's candidates.json.
-        Updates candidates.json so human_fix_rate flows into the next policy evaluation.
+        Multiple candidate types (exec, pipeline::, flywheel::) can share the same
+        intent_signature. Incrementing all of them from one human correction would inflate
+        human_fix_rate across unrelated candidates and block promotion. We select only the
+        entry with the highest last_ts_ms — the one actually active when the correction occurred.
         """
         session_dir = self._state_root / self._base_session_id
         candidates_path = session_dir / "candidates.json"
         if not candidates_path.exists():
             return
         registry = self._load_json_object(candidates_path, root_key="candidates")
-        updated = False
+
+        # Find the single most-recently-used candidate matching intent_signature.
+        best_key: str | None = None
+        best_ts: int = -1
         for key, entry in registry["candidates"].items():
             if not isinstance(entry, dict):
                 continue
-            if str(entry.get("intent_signature", "")) == intent_signature:
-                entry["human_fixes"] = int(entry.get("human_fixes", 0)) + 1
-                registry["candidates"][key] = entry
-                updated = True
-        if updated:
-            self._atomic_write_json(candidates_path, registry)
+            if str(entry.get("intent_signature", "")) != intent_signature:
+                continue
+            ts = int(entry.get("last_ts_ms", 0))
+            if ts > best_ts:
+                best_ts = ts
+                best_key = key
+
+        if best_key is None:
+            return
+
+        entry = registry["candidates"][best_key]
+        entry["human_fixes"] = int(entry.get("human_fixes", 0)) + 1
+        registry["candidates"][best_key] = entry
+        self._atomic_write_json(candidates_path, registry)
+        # Propagate updated human_fix_rate to pipelines-registry.json immediately
+        # so the flywheel reflects the correction without waiting for the next exec.
+        try:
+            self._update_pipeline_registry(candidate_key=best_key, entry=entry)
+        except Exception:
+            pass
 
     def _resolve_script_roots(self) -> list[Path]:
         raw = os.environ.get("EMERGE_SCRIPT_ROOTS", "").strip()

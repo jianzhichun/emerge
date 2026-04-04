@@ -50,15 +50,16 @@ def test_runner_client_exec_persists_state(tmp_path: Path):
         assert "42" in out2["content"][0]["text"]
 
 
-def test_runner_client_read_and_write(tmp_path: Path):
+def test_runner_rejects_pipeline_tools(tmp_path: Path):
+    """Runner is a pure executor — icc_read/icc_write must be rejected (daemon handles them)."""
     with _RunnerServer(tmp_path / "runner-state") as server:
         client = RunnerClient(base_url=server.url, timeout_s=5.0)
         read = client.call_tool("icc_read", {"connector": "mock", "pipeline": "layers"})
-        assert read["isError"] is False
+        assert read.get("isError") is True
         write = client.call_tool(
             "icc_write", {"connector": "mock", "pipeline": "add-wall", "length": 1200}
         )
-        assert write["isError"] is False
+        assert write.get("isError") is True
 
 
 def test_get_session_is_thread_safe(tmp_path: Path):

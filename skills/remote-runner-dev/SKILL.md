@@ -33,7 +33,7 @@ The runner executes code in its **own process environment** — not in the SSH s
 
 | File | Role |
 |---|---|
-| `scripts/remote_runner.py` | HTTP server; executes `icc_exec`, `icc_read`, `icc_write` |
+| `scripts/remote_runner.py` | HTTP server; executes `icc_exec` only (pipeline tools handled by daemon) |
 | `scripts/runner_watchdog.py` | Keeps runner alive; restarts on crash or `.watchdog-restart` signal |
 | `scripts/repl_admin.py` | CLI: `runner-bootstrap`, `runner-deploy`, `runner-status` |
 | `scripts/runner_client.py` | Routes requests to runner by `target_profile` |
@@ -150,7 +150,16 @@ if str(_ROOT) not in sys.path:
 GET  /health        # {"ok": true, "status": "ready", "uptime_s": N}
 GET  /status        # pid, python, root, uptime_s
 GET  /logs?n=100    # last N lines of .runner.log
-POST /run           # {"tool_name": "icc_exec|icc_read|icc_write", "arguments": {...}}
+POST /run           # {"tool_name": "icc_exec", "arguments": {...}}
+```
+
+The runner accepts **only `icc_exec`** requests. Pipeline operations (`icc_read`, `icc_write`) are handled by the daemon: it loads pipeline `.py` + `.yaml` locally, builds self-contained inline code, and sends it as `icc_exec`. Connector files never need to exist on the runner machine.
+
+Request / response shape:
+```json
+{"tool_name": "icc_exec", "arguments": {"code": "...", "target_profile": "default", "no_replay": false}}
+{"ok": true,  "result": {"isError": false, "content": [{"type": "text", "text": "..."}]}}
+{"ok": false, "error": "string message"}
 ```
 
 ## Common Mistakes
