@@ -129,12 +129,7 @@ def test_auto_promotes_candidate_to_canary_when_thresholds_met(tmp_path: Path):
             )
             assert out.get("isError") is not True
 
-        reg = (
-            tmp_path
-            / "state"
-            / "flywheel"
-            / "pipelines-registry.json"
-        )
+        reg = tmp_path / "state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
         key = "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py"
         assert data["pipelines"][key]["status"] == "canary"
@@ -183,12 +178,7 @@ def test_auto_rolls_back_canary_on_two_consecutive_failures(tmp_path: Path):
             },
         )
 
-        reg = (
-            tmp_path
-            / "state"
-            / "flywheel"
-            / "pipelines-registry.json"
-        )
+        reg = tmp_path / "state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
         key = "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py"
         assert data["pipelines"][key]["status"] == "explore"
@@ -227,7 +217,7 @@ def test_canary_sampling_progresses_to_stable(tmp_path: Path):
                     "verify_passed": True,
                 },
             )
-        reg = tmp_path / "state" / "flywheel" / "pipelines-registry.json"
+        reg = tmp_path / "state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
         key = "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py"
         assert data["pipelines"][key]["status"] == "stable"
@@ -260,7 +250,7 @@ def test_stable_rolls_back_on_window_failure_rate(tmp_path: Path):
             else:
                 daemon.call_tool("icc_exec", {**common, "code": "raise RuntimeError('window-fail')"})
 
-        reg = tmp_path / "state" / "flywheel" / "pipelines-registry.json"
+        reg = tmp_path / "state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
         key = "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py"
         assert data["pipelines"][key]["status"] == "explore"

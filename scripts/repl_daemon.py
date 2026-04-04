@@ -70,7 +70,7 @@ class ReplDaemon:
         if str(candidate.get("status", "explore")) != "stable":
             return None
 
-        pipelines_path = session_dir / "pipelines-registry.json"
+        pipelines_path = self._state_root / "pipelines-registry.json"
         pipelines_data = self._load_json_object(pipelines_path, root_key="pipelines")
         pipeline_entry = pipelines_data.get("pipelines", {}).get(f"pipeline::{base_pipeline_id}")
         if not isinstance(pipeline_entry, dict):
@@ -471,8 +471,7 @@ class ReplDaemon:
 
     def _read_resource(self, uri: str) -> dict[str, Any]:
         if uri == "policy://current":
-            session_dir = self._state_root / self._base_session_id
-            path = session_dir / "pipelines-registry.json"
+            path = self._state_root / "pipelines-registry.json"
             data = self._load_json_object(path, root_key="pipelines")
             return {"uri": uri, "mimeType": "application/json", "text": json.dumps(data)}
         if uri == "runner://status":
@@ -679,7 +678,7 @@ class ReplDaemon:
         registry["candidates"][key] = entry
 
         self._atomic_write_json(registry_path, registry)
-        self._update_pipeline_registry(session_dir=session_dir, candidate_key=key, entry=entry)
+        self._update_pipeline_registry(candidate_key=key, entry=entry)
 
     def _record_pipeline_event(
         self,
@@ -804,16 +803,15 @@ class ReplDaemon:
         registry["candidates"][key] = entry
 
         self._atomic_write_json(registry_path, registry)
-        self._update_pipeline_registry(session_dir=session_dir, candidate_key=key, entry=entry)
+        self._update_pipeline_registry(candidate_key=key, entry=entry)
 
     def _update_pipeline_registry(
         self,
         *,
-        session_dir: Path,
         candidate_key: str,
         entry: dict[str, Any],
     ) -> None:
-        registry_path = session_dir / "pipelines-registry.json"
+        registry_path = self._state_root / "pipelines-registry.json"
         registry = self._load_json_object(registry_path, root_key="pipelines")
         pipeline = registry["pipelines"].get(
             candidate_key,
@@ -979,8 +977,7 @@ class ReplDaemon:
     def _should_sample(self, candidate_key: str) -> bool:
         if "::" not in candidate_key:
             return True
-        session_dir = self._state_root / self._base_session_id
-        path = session_dir / "pipelines-registry.json"
+        path = self._state_root / "pipelines-registry.json"
         if not path.exists():
             return True
         data = self._load_json_object(path, root_key="pipelines")
@@ -998,7 +995,7 @@ class ReplDaemon:
         if rollout_pct <= 0:
             return False
 
-        candidates_path = session_dir / "candidates.json"
+        candidates_path = (self._state_root / self._base_session_id) / "candidates.json"
         total_calls = 0
         if candidates_path.exists():
             cand = self._load_json_object(candidates_path, root_key="candidates")
@@ -1010,10 +1007,12 @@ class ReplDaemon:
 
     @staticmethod
     def _append_warning_text(result: dict[str, Any], warning: str) -> None:
+        # Append as a separate content item so existing JSON text fields are not corrupted.
+        # content[0]["text"] may already be json.dumps(...); appending plaintext there breaks
+        # json.loads() for any downstream consumer.
         content = result.get("content")
-        if isinstance(content, list) and content and isinstance(content[0], dict):
-            current = str(content[0].get("text", ""))
-            content[0]["text"] = f"{current}\n\nwarning:\n{warning}".strip()
+        if isinstance(content, list):
+            content.append({"type": "text", "text": f"warning:\n{warning}"})
             return
         result["content"] = [{"type": "text", "text": f"warning:\n{warning}"}]
 

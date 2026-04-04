@@ -173,9 +173,8 @@ def test_repl_admin_policy_status_handles_corrupt_registry(tmp_path: Path):
     env = os.environ.copy()
     env["REPL_STATE_ROOT"] = str(tmp_path)
     env["REPL_SESSION_ID"] = "corrupt"
-    session_dir = tmp_path / "corrupt"
-    session_dir.mkdir(parents=True, exist_ok=True)
-    (session_dir / "pipelines-registry.json").write_text("{bad json", encoding="utf-8")
+    # registry lives at state_root level (not under session_dir)
+    (tmp_path / "pipelines-registry.json").write_text("{bad json", encoding="utf-8")
     out = _run_admin(["policy-status"], env)
     assert out["registry_exists"] is True
     assert out["registry_corrupt"] is True

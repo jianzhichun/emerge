@@ -169,7 +169,9 @@ def test_exec_success_not_reversed_by_policy_bookkeeping_failure(tmp_path: Path)
         out = daemon.call_tool("icc_exec", {"code": "print('ok')"})
         assert out.get("isError") is not True
         assert "ok" in out["content"][0]["text"]
-        assert "policy bookkeeping failed: registry broken" in out["content"][0]["text"]
+        # Warning goes in a separate content item so content[0] stays parseable
+        warning_texts = [item.get("text", "") for item in out["content"][1:]]
+        assert any("policy bookkeeping failed: registry broken" in t for t in warning_texts)
     finally:
         os.environ.pop("REPL_STATE_ROOT", None)
         os.environ.pop("REPL_SESSION_ID", None)

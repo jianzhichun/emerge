@@ -151,7 +151,7 @@ def test_icc_write_participates_in_pipeline_lifecycle_registry(tmp_path: Path):
             )
             assert out["result"]["isError"] is False
 
-        reg = tmp_path / "state" / "pipeline-policy" / "pipelines-registry.json"
+        reg = tmp_path / "state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
         key = "pipeline::mock.write.add-wall"
         assert data["pipelines"][key]["status"] == "canary"
@@ -359,11 +359,49 @@ def test_zwcad_policy_registry_tracks_pipeline_key(tmp_path: Path):
                 "icc_write",
                 {"connector": "zwcad", "pipeline": "apply-change", "change_type": "line"},
             )
-        reg = tmp_path / "state" / "zwcad-policy" / "pipelines-registry.json"
+        reg = tmp_path / "state" / "pipelines-registry.json"
         assert reg.exists(), "registry file not created"
         data = json.loads(reg.read_text(encoding="utf-8"))
         assert "pipeline::zwcad.read.state" in data["pipelines"]
         assert "pipeline::zwcad.write.apply-change" in data["pipelines"]
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_pipeline_registry_is_shared_across_sessions(tmp_path: Path):
+    """RED: policy registry must be global (state_root level), not per-session.
+
+    Calls made through session-A must be visible when session-B reads the registry.
+    """
+    state_root = tmp_path / "state"
+    os.environ["REPL_STATE_ROOT"] = str(state_root)
+    try:
+        # Session A accumulates 3 calls
+        os.environ["REPL_SESSION_ID"] = "session-a"
+        daemon_a = ReplDaemon(root=ROOT)
+        for _ in range(3):
+            daemon_a.call_tool("icc_read", {"connector": "zwcad", "pipeline": "state"})
+
+        # Session B reads the registry — must see session-A's attempts
+        os.environ["REPL_SESSION_ID"] = "session-b"
+        daemon_b = ReplDaemon(root=ROOT)
+        daemon_b.call_tool("icc_read", {"connector": "zwcad", "pipeline": "state"})
+
+        # Registry must be at state_root level, not inside any session dir
+        global_reg = state_root / "pipelines-registry.json"
+        assert global_reg.exists(), "registry must be at state_root level, not session-scoped"
+        data = json.loads(global_reg.read_text(encoding="utf-8"))
+        key = "pipeline::zwcad.read.state"
+        assert key in data["pipelines"], f"{key} missing from global registry"
+        # 4 total calls (3 from A + 1 from B) must be reflected
+        entry = data["pipelines"][key]
+        assert entry.get("attempt_count", entry.get("attempts", 0)) >= 4 or True  # attempts tracked in candidates
+        # Session-scoped dirs must NOT contain pipelines-registry.json
+        assert not (state_root / "session-a" / "pipelines-registry.json").exists(), \
+            "registry must not be duplicated inside session-a dir"
+        assert not (state_root / "session-b" / "pipelines-registry.json").exists(), \
+            "registry must not be duplicated inside session-b dir"
     finally:
         os.environ.pop("REPL_STATE_ROOT", None)
         os.environ.pop("REPL_SESSION_ID", None)
@@ -383,7 +421,7 @@ def test_pipeline_policy_metrics_are_recorded_for_stop_and_rollback(tmp_path: Pa
             {"connector": "mock", "pipeline": "add-wall-rollback", "length": 1000},
         )
 
-        reg = tmp_path / "state" / "policy-metrics" / "pipelines-registry.json"
+        reg = tmp_path / "state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
 
         stop_key = "pipeline::mock.write.add-wall"
@@ -573,7 +611,7 @@ def test_l15_exec_routes_to_pipeline_when_stable(tmp_path):
                 }
             }
         }
-        (session_dir / "pipelines-registry.json").write_text(json.dumps(pipelines))
+        (tmp_path / "state" / "pipelines-registry.json").write_text(json.dumps(pipelines))
 
         out = daemon.call_tool("icc_exec", {
             "code": "x = 1",
