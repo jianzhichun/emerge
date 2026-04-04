@@ -73,7 +73,7 @@ flowchart TB
 | **StateTracker** | Maintains `Goal` / `Delta` / `Open Risks` session state. Exposed via `state://deltas` resource and hook `additionalContext`. |
 | **RunnerRouter** | Selects a `RunnerClient` by `target_profile` / `runner_id` (map), consistent hash (pool), or default URL. Returns `None` when no runner is configured → local execution. |
 | **Flywheel bridge** | Short-circuit inside `icc_exec`: when the matching candidate is `stable`, execution is redirected to the pipeline result without LLM inference. Zero overhead path once a pattern is trusted. |
-| **Hooks** | Inject minimal context at session/prompt boundaries; record `Delta` after each `icc_*` call; preserve critical state across **PreCompact**. Not a second MCP server. |
+| **Hooks** | Inject minimal context at session/prompt boundaries; record `Delta` after each `icc_*` call; preserve critical state across **PreCompact**. `PreToolUse` enforces `intent_signature` required on `icc_exec` and blocks calls that violate exec conventions. Not a second MCP server. |
 
 ## Flows
 
@@ -206,7 +206,7 @@ flowchart LR
   end
 
   subgraph percall [Per tool call]
-    PTU[PreToolUse — validate args]
+    PTU[PreToolUse — enforce conventions + validate args]
     EX[Tool executes]
     POTU[PostToolUse — record Delta]
   end
@@ -249,7 +249,7 @@ flowchart LR
 | Ops / bootstrap | `scripts/repl_admin.py` |
 | Test connector (mock) | `tests/connectors/mock/pipelines/` |
 | Slash commands | `commands/` (`init`, `policy`, `runner-status`) |
-| Skills | `skills/` (`initializing-vertical-flywheel`, `muscle-memory-flywheel`, `remote-runner-dev`) |
+| Skills | `skills/` (`initializing-vertical-flywheel`, `remote-runner-dev`) |
 | Reference (submodule) | `references/claude-code` |
 
 ## Requirements
