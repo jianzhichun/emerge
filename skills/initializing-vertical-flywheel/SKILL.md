@@ -172,3 +172,18 @@ Minimum expectation:
 - "I added files but did not run `icc_read/icc_write` integration tests."
 
 Any red flag means stop and return to RED.
+
+## Reverse Flywheel Integration
+
+When any `intent_signature` for this vertical reaches `stable` status in
+`policy://current`, prompt the operator:
+
+> "`<vertical>.*` 管道飞轮已稳定。是否也建立反向飞轮来观察操作者行为，
+> 让 AI 主动识别并接管重复操作？如需要，请调用
+> `writing-vertical-adapter` skill。"
+
+This connects the forward flywheel (AI learns to DO tasks) to the reverse
+flywheel (AI learns to RECOGNIZE when humans are doing those tasks repeatedly).
+The vertical adapter shares the same `intent_signature` namespace and feeds the
+same policy registry — a confirmed operator intent goes through Distiller and
+enters the flywheel as a new candidate at the explore stage.
