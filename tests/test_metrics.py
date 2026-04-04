@@ -55,8 +55,8 @@ def test_daemon_emits_pipeline_read_metric(tmp_path):
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
 
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "metric-test"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "metric-test"
     os.environ["EMERGE_SETTINGS_PATH"] = str(tmp_path / "settings.json")
     metrics_path = tmp_path / "metrics.jsonl"
     (tmp_path / "settings.json").write_text('{"metrics_sink": "local_jsonl"}')
@@ -73,8 +73,8 @@ def test_daemon_emits_pipeline_read_metric(tmp_path):
         types = [e["event_type"] for e in events]
         assert "pipeline.read" in types
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
         os.environ.pop("EMERGE_SETTINGS_PATH", None)
         from scripts.policy_config import _reset_settings_cache
         _reset_settings_cache()

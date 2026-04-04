@@ -27,7 +27,7 @@ from scripts.policy_config import (
     derive_profile_token,
     derive_session_id,
     default_hook_state_root,
-    default_repl_root,
+    default_exec_root,
 )
 from scripts.runner_client import RunnerClient, RunnerRouter
 
@@ -41,11 +41,11 @@ def _local_plugin_version() -> str:
 
 
 def _resolve_state_root() -> Path:
-    return Path(os.environ.get("REPL_STATE_ROOT", str(default_repl_root()))).expanduser().resolve()
+    return Path(os.environ.get("EMERGE_STATE_ROOT", str(default_exec_root()))).expanduser().resolve()
 
 
 def _resolve_session_id() -> str:
-    return derive_session_id(os.environ.get("REPL_SESSION_ID"), ROOT)
+    return derive_session_id(os.environ.get("EMERGE_SESSION_ID"), ROOT)
 
 
 def _session_paths() -> tuple[Path, Path, Path]:

@@ -19,7 +19,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from scripts.pipeline_engine import PipelineEngine
-from scripts.policy_config import derive_profile_token, derive_session_id, default_repl_root
+from scripts.policy_config import derive_profile_token, derive_session_id, default_exec_root
 from scripts.exec_session import ExecSession
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,8 +41,8 @@ class RunnerExecutor:
     def __init__(self, root: Path | None = None, state_root: Path | None = None) -> None:
         resolved_root = root or ROOT
         self._root = resolved_root
-        self._state_root = (state_root or default_repl_root()).expanduser().resolve()
-        self._base_session_id = derive_session_id(os.environ.get("REPL_SESSION_ID"), resolved_root)
+        self._state_root = (state_root or default_exec_root()).expanduser().resolve()
+        self._base_session_id = derive_session_id(os.environ.get("EMERGE_SESSION_ID"), resolved_root)
         self._sessions_by_profile: dict[str, ExecSession] = {}
         self._repl_lock = threading.Lock()
         self.pipeline = PipelineEngine(root=resolved_root)

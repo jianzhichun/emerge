@@ -68,9 +68,10 @@ def test_load_settings_rejects_invalid_policy_value(tmp_path, monkeypatch):
         load_settings()
 
 
-def test_default_exec_root_matches_repl_root():
-    from scripts.policy_config import default_exec_root, default_repl_root
-    assert default_exec_root() == default_repl_root()
+def test_default_exec_root_is_emerge_repl():
+    from scripts.policy_config import default_exec_root
+    from pathlib import Path
+    assert default_exec_root() == Path.home() / ".emerge" / "repl"
 
 
 def test_default_exec_root_path():

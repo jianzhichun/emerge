@@ -32,11 +32,6 @@ def default_exec_root() -> Path:
     return default_emerge_home() / "repl"
 
 
-def default_repl_root() -> Path:
-    """Backward-compat alias for default_exec_root()."""
-    return default_exec_root()
-
-
 def default_hook_state_root() -> Path:
     return default_emerge_home() / "hook-state"
 

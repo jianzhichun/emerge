@@ -70,11 +70,11 @@ class _RunnerServer:
 
 def test_repl_admin_status_and_clear(tmp_path: Path):
     env = os.environ.copy()
-    env["REPL_STATE_ROOT"] = str(tmp_path)
-    env["REPL_SESSION_ID"] = "admin-session"
+    env["EMERGE_STATE_ROOT"] = str(tmp_path)
+    env["EMERGE_SESSION_ID"] = "admin-session"
 
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
-    os.environ["REPL_SESSION_ID"] = "admin-session"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
+    os.environ["EMERGE_SESSION_ID"] = "admin-session"
     try:
         daemon = ReplDaemon(root=ROOT)
         daemon.call_tool("icc_exec", {"code": "x = 12\nprint(x)"})
@@ -91,17 +91,17 @@ def test_repl_admin_status_and_clear(tmp_path: Path):
         assert status_after["wal_entries"] == 0
         assert status_after["checkpoint_exists"] is False
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_repl_admin_policy_status_reports_pipeline_registry(tmp_path: Path):
     env = os.environ.copy()
-    env["REPL_STATE_ROOT"] = str(tmp_path)
-    env["REPL_SESSION_ID"] = "admin-session"
+    env["EMERGE_STATE_ROOT"] = str(tmp_path)
+    env["EMERGE_SESSION_ID"] = "admin-session"
 
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
-    os.environ["REPL_SESSION_ID"] = "admin-session"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
+    os.environ["EMERGE_SESSION_ID"] = "admin-session"
     try:
         daemon = ReplDaemon(root=ROOT)
         for _ in range(20):
@@ -124,17 +124,17 @@ def test_repl_admin_policy_status_reports_pipeline_registry(tmp_path: Path):
         keys = [item["key"] for item in policy["pipelines"]]
         assert "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py" in keys
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_repl_admin_policy_status_pretty_output(tmp_path: Path):
     env = os.environ.copy()
-    env["REPL_STATE_ROOT"] = str(tmp_path)
-    env["REPL_SESSION_ID"] = "admin-session"
+    env["EMERGE_STATE_ROOT"] = str(tmp_path)
+    env["EMERGE_SESSION_ID"] = "admin-session"
 
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
-    os.environ["REPL_SESSION_ID"] = "admin-session"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
+    os.environ["EMERGE_SESSION_ID"] = "admin-session"
     try:
         daemon = ReplDaemon(root=ROOT)
         for _ in range(20):
@@ -156,23 +156,23 @@ def test_repl_admin_policy_status_pretty_output(tmp_path: Path):
         assert "Pipelines:" in pretty
         assert "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py" in pretty
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_repl_admin_default_root_is_home_emerge(tmp_path: Path):
     env = os.environ.copy()
     env["HOME"] = str(tmp_path)
-    env.pop("REPL_STATE_ROOT", None)
-    env["REPL_SESSION_ID"] = "default-check"
+    env.pop("EMERGE_STATE_ROOT", None)
+    env["EMERGE_SESSION_ID"] = "default-check"
     out = _run_admin(["status"], env)
     assert out["state_root"] == str(tmp_path / ".emerge" / "repl")
 
 
 def test_repl_admin_policy_status_handles_corrupt_registry(tmp_path: Path):
     env = os.environ.copy()
-    env["REPL_STATE_ROOT"] = str(tmp_path)
-    env["REPL_SESSION_ID"] = "corrupt"
+    env["EMERGE_STATE_ROOT"] = str(tmp_path)
+    env["EMERGE_SESSION_ID"] = "corrupt"
     # registry lives at state_root level (not under session_dir)
     (tmp_path / "pipelines-registry.json").write_text("{bad json", encoding="utf-8")
     out = _run_admin(["policy-status"], env)
@@ -183,11 +183,11 @@ def test_repl_admin_policy_status_handles_corrupt_registry(tmp_path: Path):
 
 def test_repl_admin_policy_status_includes_policy_execution_metrics(tmp_path: Path):
     env = os.environ.copy()
-    env["REPL_STATE_ROOT"] = str(tmp_path)
-    env["REPL_SESSION_ID"] = "policy-exec"
+    env["EMERGE_STATE_ROOT"] = str(tmp_path)
+    env["EMERGE_SESSION_ID"] = "policy-exec"
 
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
-    os.environ["REPL_SESSION_ID"] = "policy-exec"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
+    os.environ["EMERGE_SESSION_ID"] = "policy-exec"
     try:
         daemon = ReplDaemon(root=ROOT)
         daemon.call_tool("icc_write", {"connector": "mock", "pipeline": "add-wall", "length": 0})
@@ -210,14 +210,14 @@ def test_repl_admin_policy_status_includes_policy_execution_metrics(tmp_path: Pa
         assert "policy_enforced_count" in pretty
         assert "rollback_executed_count" in pretty
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_repl_admin_policy_status_includes_goal_source_from_hook_state(tmp_path: Path):
     env = os.environ.copy()
-    env["REPL_STATE_ROOT"] = str(tmp_path / "repl")
-    env["REPL_SESSION_ID"] = "goal-source"
+    env["EMERGE_STATE_ROOT"] = str(tmp_path / "repl")
+    env["EMERGE_SESSION_ID"] = "goal-source"
     env["CLAUDE_PLUGIN_DATA"] = str(tmp_path / "hook-state")
 
     hook_dir = tmp_path / "hook-state"
@@ -238,15 +238,15 @@ def test_repl_admin_policy_status_includes_goal_source_from_hook_state(tmp_path:
 
 def test_repl_admin_status_supports_target_profile_session_dir(tmp_path: Path):
     env = os.environ.copy()
-    env["REPL_STATE_ROOT"] = str(tmp_path)
-    env["REPL_SESSION_ID"] = "profiled"
+    env["EMERGE_STATE_ROOT"] = str(tmp_path)
+    env["EMERGE_SESSION_ID"] = "profiled"
     env["REPL_TARGET_PROFILE"] = "mycader-1.zwcad"
     # Isolate from global runner config so exec runs locally and writes local WAL
     empty_runner_cfg = tmp_path / "runner-map.json"
     env["EMERGE_RUNNER_CONFIG_PATH"] = str(empty_runner_cfg)
 
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
-    os.environ["REPL_SESSION_ID"] = "profiled"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
+    os.environ["EMERGE_SESSION_ID"] = "profiled"
     os.environ["EMERGE_RUNNER_CONFIG_PATH"] = str(empty_runner_cfg)
     try:
         daemon = ReplDaemon(root=ROOT)
@@ -255,8 +255,8 @@ def test_repl_admin_status_supports_target_profile_session_dir(tmp_path: Path):
         assert status["wal_exists"] is True
         assert "__" in status["session_dir"]
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
         os.environ.pop("EMERGE_RUNNER_CONFIG_PATH", None)
 
 

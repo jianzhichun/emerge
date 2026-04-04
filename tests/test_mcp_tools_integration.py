@@ -135,8 +135,8 @@ def test_tools_call_returns_error_payload_for_missing_pipeline_and_script(tmp_pa
 
 
 def test_icc_write_participates_in_pipeline_lifecycle_registry(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "pipeline-policy"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "pipeline-policy"
     try:
         daemon = ReplDaemon(root=ROOT)
         for _ in range(20):
@@ -158,13 +158,13 @@ def test_icc_write_participates_in_pipeline_lifecycle_registry(tmp_path: Path):
         key = "pipeline::mock.write.add-wall"
         assert data["pipelines"][key]["status"] == "canary"
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_l15_composed_key_can_be_shared_by_exec_and_pipeline(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "compose"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "compose"
     try:
         daemon = ReplDaemon(root=ROOT)
         daemon.call_tool(
@@ -193,8 +193,8 @@ def test_l15_composed_key_can_be_shared_by_exec_and_pipeline(tmp_path: Path):
         key = "l15::mock.write.add-wall::zwcad.plan.wall::connectors/zwcad/actions/plan_wall.py"
         assert data["candidates"][key]["total_calls"] == 2
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_tools_call_handles_null_params_without_crash():
@@ -207,8 +207,8 @@ def test_tools_call_handles_null_params_without_crash():
 
 
 def test_daemon_can_dispatch_tools_via_remote_runner(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "daemon-state")
-    os.environ["REPL_SESSION_ID"] = "runner-dispatch"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "daemon-state")
+    os.environ["EMERGE_SESSION_ID"] = "runner-dispatch"
     try:
         with _RunnerServer(tmp_path / "remote-state") as server:
             os.environ["EMERGE_RUNNER_URL"] = server.url
@@ -224,13 +224,13 @@ def test_daemon_can_dispatch_tools_via_remote_runner(tmp_path: Path):
             assert "9" in out["result"]["content"][0]["text"]
     finally:
         os.environ.pop("EMERGE_RUNNER_URL", None)
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_daemon_can_route_to_multiple_runners_by_target_profile(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "daemon-state")
-    os.environ["REPL_SESSION_ID"] = "multi-runner"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "daemon-state")
+    os.environ["EMERGE_SESSION_ID"] = "multi-runner"
     try:
         with _RunnerServer(tmp_path / "remote-a") as a, _RunnerServer(tmp_path / "remote-b") as b:
             os.environ["EMERGE_RUNNER_MAP"] = json.dumps(
@@ -255,13 +255,13 @@ def test_daemon_can_route_to_multiple_runners_by_target_profile(tmp_path: Path):
             assert wal_b
     finally:
         os.environ.pop("EMERGE_RUNNER_MAP", None)
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_daemon_can_use_persisted_runner_config_without_env_url(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "daemon-state")
-    os.environ["REPL_SESSION_ID"] = "persisted-runner"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "daemon-state")
+    os.environ["EMERGE_SESSION_ID"] = "persisted-runner"
     cfg_path = tmp_path / "runner-map.json"
     os.environ["EMERGE_RUNNER_CONFIG_PATH"] = str(cfg_path)
     try:
@@ -283,14 +283,14 @@ def test_daemon_can_use_persisted_runner_config_without_env_url(tmp_path: Path):
             assert "7" in out["result"]["content"][0]["text"]
     finally:
         os.environ.pop("EMERGE_RUNNER_CONFIG_PATH", None)
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_zwcad_read_state_pipeline_returns_structured_rows(tmp_path: Path):
     """RED→GREEN: zwcad read/state pipeline must return structured rows with id+name."""
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "zwcad-read"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "zwcad-read"
     try:
         daemon = ReplDaemon(root=ROOT)
         out = daemon.handle_jsonrpc(
@@ -309,14 +309,14 @@ def test_zwcad_read_state_pipeline_returns_structured_rows(tmp_path: Path):
         assert isinstance(rows, list) and len(rows) > 0
         assert all("id" in r and "name" in r for r in rows)
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_zwcad_write_apply_change_pipeline_enforces_policy(tmp_path: Path):
     """RED→GREEN: zwcad write/apply-change pipeline must return verification_state and policy fields."""
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "zwcad-write"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "zwcad-write"
     try:
         daemon = ReplDaemon(root=ROOT)
         out = daemon.handle_jsonrpc(
@@ -345,14 +345,14 @@ def test_zwcad_write_apply_change_pipeline_enforces_policy(tmp_path: Path):
         assert "stop_triggered" in body
         assert "rollback_executed" in body
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_zwcad_policy_registry_tracks_pipeline_key(tmp_path: Path):
     """RED→GREEN: zwcad pipeline key must appear in policy registry after icc_read+icc_write."""
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "zwcad-policy"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "zwcad-policy"
     try:
         daemon = ReplDaemon(root=ROOT)
         for _ in range(3):
@@ -367,8 +367,8 @@ def test_zwcad_policy_registry_tracks_pipeline_key(tmp_path: Path):
         assert "pipeline::zwcad.read.state" in data["pipelines"]
         assert "pipeline::zwcad.write.apply-change" in data["pipelines"]
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_pipeline_registry_is_shared_across_sessions(tmp_path: Path):
@@ -377,16 +377,16 @@ def test_pipeline_registry_is_shared_across_sessions(tmp_path: Path):
     Calls made through session-A must be visible when session-B reads the registry.
     """
     state_root = tmp_path / "state"
-    os.environ["REPL_STATE_ROOT"] = str(state_root)
+    os.environ["EMERGE_STATE_ROOT"] = str(state_root)
     try:
         # Session A accumulates 3 calls
-        os.environ["REPL_SESSION_ID"] = "session-a"
+        os.environ["EMERGE_SESSION_ID"] = "session-a"
         daemon_a = ReplDaemon(root=ROOT)
         for _ in range(3):
             daemon_a.call_tool("icc_read", {"connector": "zwcad", "pipeline": "state"})
 
         # Session B reads the registry — must see session-A's attempts
-        os.environ["REPL_SESSION_ID"] = "session-b"
+        os.environ["EMERGE_SESSION_ID"] = "session-b"
         daemon_b = ReplDaemon(root=ROOT)
         daemon_b.call_tool("icc_read", {"connector": "zwcad", "pipeline": "state"})
 
@@ -405,13 +405,13 @@ def test_pipeline_registry_is_shared_across_sessions(tmp_path: Path):
         assert not (state_root / "session-b" / "pipelines-registry.json").exists(), \
             "registry must not be duplicated inside session-b dir"
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_pipeline_policy_metrics_are_recorded_for_stop_and_rollback(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "policy-metrics"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "policy-metrics"
     try:
         daemon = ReplDaemon(root=ROOT)
         daemon.call_tool(
@@ -435,8 +435,8 @@ def test_pipeline_policy_metrics_are_recorded_for_stop_and_rollback(tmp_path: Pa
         assert data["pipelines"][rb_key]["rollback_executed_count"] >= 1
         assert data["pipelines"][rb_key]["last_policy_action"] == "rollback"
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 # ── Task 6: MCP resources ────────────────────────────────────────────────────
@@ -452,8 +452,8 @@ def test_resources_list_returns_static_and_pipeline_uris():
 
 
 def test_resources_read_policy_current(tmp_path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "res-test"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "res-test"
     try:
         daemon = ReplDaemon(root=ROOT)
         daemon.call_tool("icc_read", {"connector": "mock", "pipeline": "layers"})
@@ -465,8 +465,8 @@ def test_resources_read_policy_current(tmp_path):
         data = json.loads(resource["text"])
         assert "pipelines" in data
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_resources_read_pipeline_uri():
@@ -570,8 +570,8 @@ def test_icc_reconcile_in_tools_list():
 
 def test_l15_exec_routes_to_pipeline_when_stable(tmp_path):
     """When L1.5 candidate is stable AND pipeline is canary/stable, icc_exec is redirected."""
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "l15-promote-test"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "l15-promote-test"
     try:
         daemon = ReplDaemon(root=ROOT)
         session_dir = tmp_path / "state" / daemon._base_session_id
@@ -613,14 +613,14 @@ def test_l15_exec_routes_to_pipeline_when_stable(tmp_path):
         assert body.get("bridge_promoted") is True
         assert body.get("pipeline_id") == "mock.read.layers"
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_l15_exec_does_not_promote_when_candidate_is_canary(tmp_path):
     """When L1.5 candidate is only canary, exec runs normally (no promotion)."""
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "l15-canary-test"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "l15-canary-test"
     try:
         daemon = ReplDaemon(root=ROOT)
         session_dir = tmp_path / "state" / daemon._base_session_id
@@ -653,8 +653,8 @@ def test_l15_exec_does_not_promote_when_candidate_is_canary(tmp_path):
         except Exception:
             pass  # non-JSON output is fine for normal exec
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_icc_read_pipeline_missing_returns_structured_fallback(tmp_path):

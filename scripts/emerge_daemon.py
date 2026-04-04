@@ -35,12 +35,10 @@ class EmergeDaemon:
     def __init__(self, root: Path | None = None) -> None:
         resolved_root = root or ROOT
         state_root = Path(
-            os.environ.get("EMERGE_STATE_ROOT")
-            or os.environ.get("REPL_STATE_ROOT")
-            or str(default_exec_root())
+            os.environ.get("EMERGE_STATE_ROOT") or str(default_exec_root())
         ).expanduser().resolve()
         self._base_session_id = derive_session_id(
-            os.environ.get("EMERGE_SESSION_ID") or os.environ.get("REPL_SESSION_ID"),
+            os.environ.get("EMERGE_SESSION_ID"),
             resolved_root,
         )
         self._state_root = state_root

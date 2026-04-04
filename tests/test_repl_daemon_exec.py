@@ -27,8 +27,8 @@ def test_icc_exec_returns_explicit_error_payload():
 
 
 def test_icc_exec_restores_state_after_daemon_restart(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
-    os.environ["REPL_SESSION_ID"] = "session-a"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
+    os.environ["EMERGE_SESSION_ID"] = "session-a"
     try:
         daemon1 = ReplDaemon(root=ROOT)
         first = daemon1.call_tool("icc_exec", {"code": "x = 99\nprint('saved')"})
@@ -38,13 +38,13 @@ def test_icc_exec_restores_state_after_daemon_restart(tmp_path: Path):
         second = daemon2.call_tool("icc_exec", {"code": "print(x + 1)"})
         assert "100" in second["content"][0]["text"]
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_default_session_id_is_project_scoped_not_literal_default(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
-    os.environ.pop("REPL_SESSION_ID", None)
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
+    os.environ.pop("EMERGE_SESSION_ID", None)
     try:
         daemon = ReplDaemon(root=ROOT)
         daemon.call_tool("icc_exec", {"code": "x = 1"})
@@ -53,12 +53,12 @@ def test_default_session_id_is_project_scoped_not_literal_default(tmp_path: Path
         assert "default" not in dirs
         assert any(name.startswith("emerge-") for name in dirs)
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
 
 
 def test_wal_replay_tolerates_broken_entries(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
-    os.environ["REPL_SESSION_ID"] = "recover"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
+    os.environ["EMERGE_SESSION_ID"] = "recover"
     try:
         daemon1 = ReplDaemon(root=ROOT)
         daemon1.call_tool("icc_exec", {"code": "x = 7"})
@@ -77,13 +77,13 @@ def test_wal_replay_tolerates_broken_entries(tmp_path: Path):
         recovery = session_dir / "recovery.json"
         assert recovery.exists()
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_wal_replay_tolerates_invalid_json_lines(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
-    os.environ["REPL_SESSION_ID"] = "recover-json"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
+    os.environ["EMERGE_SESSION_ID"] = "recover-json"
     try:
         daemon1 = ReplDaemon(root=ROOT)
         daemon1.call_tool("icc_exec", {"code": "x = 8"})
@@ -99,13 +99,13 @@ def test_wal_replay_tolerates_invalid_json_lines(tmp_path: Path):
         assert recovery.exists()
         assert "invalid_wal_json" in recovery.read_text(encoding="utf-8")
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_explicit_session_id_is_contained_under_state_root(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "../../etc/passwd"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "../../etc/passwd"
     try:
         daemon = ReplDaemon(root=ROOT)
         daemon.call_tool("icc_exec", {"code": "x = 1"})
@@ -115,13 +115,13 @@ def test_explicit_session_id_is_contained_under_state_root(tmp_path: Path):
         assert ".." not in dirs[0].name
         assert "/" not in dirs[0].name
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_explicit_dot_session_id_is_sanitized(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "."
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "."
     try:
         daemon = ReplDaemon(root=ROOT)
         daemon.call_tool("icc_exec", {"code": "x = 1"})
@@ -130,13 +130,13 @@ def test_explicit_dot_session_id_is_sanitized(tmp_path: Path):
         assert dirs[0].name != "."
         assert dirs[0].resolve() != (tmp_path / "state").resolve()
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_corrupt_checkpoint_falls_back_to_wal_replay(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
-    os.environ["REPL_SESSION_ID"] = "checkpoint-corrupt"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
+    os.environ["EMERGE_SESSION_ID"] = "checkpoint-corrupt"
     try:
         daemon1 = ReplDaemon(root=ROOT)
         daemon1.call_tool("icc_exec", {"code": "x = 21"})
@@ -152,13 +152,13 @@ def test_corrupt_checkpoint_falls_back_to_wal_replay(tmp_path: Path):
         assert recovery.exists()
         assert "invalid_checkpoint" in recovery.read_text(encoding="utf-8")
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_exec_success_not_reversed_by_policy_bookkeeping_failure(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
-    os.environ["REPL_SESSION_ID"] = "bookkeeping"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
+    os.environ["EMERGE_SESSION_ID"] = "bookkeeping"
     try:
         daemon = ReplDaemon(root=ROOT)
 
@@ -173,8 +173,8 @@ def test_exec_success_not_reversed_by_policy_bookkeeping_failure(tmp_path: Path)
         warning_texts = [item.get("text", "") for item in out["content"][1:]]
         assert any("policy bookkeeping failed: registry broken" in t for t in warning_texts)
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_icc_exec_structured_error_fields(tmp_path: Path):

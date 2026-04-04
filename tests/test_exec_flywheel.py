@@ -14,8 +14,8 @@ def test_icc_exec_script_ref_mode_runs_file_with_args(tmp_path: Path):
     script = tmp_path / "double.py"
     script.write_text("print(__args['n'] * 2)\n", encoding="utf-8")
 
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "flywheel"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "flywheel"
     os.environ["REPL_SCRIPT_ROOTS"] = str(tmp_path)
     try:
         daemon = ReplDaemon(root=ROOT)
@@ -30,16 +30,16 @@ def test_icc_exec_script_ref_mode_runs_file_with_args(tmp_path: Path):
         assert out.get("isError") is not True
         assert "8" in out["content"][0]["text"]
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
         os.environ.pop("REPL_SCRIPT_ROOTS", None)
 
 
 def test_icc_exec_script_ref_rejects_path_outside_allowlist(tmp_path: Path):
     outside = tmp_path / "outside.py"
     outside.write_text("print('x')\n", encoding="utf-8")
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "flywheel"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "flywheel"
     os.environ["REPL_SCRIPT_ROOTS"] = str(tmp_path / "allowed")
     try:
         daemon = ReplDaemon(root=ROOT)
@@ -50,14 +50,14 @@ def test_icc_exec_script_ref_rejects_path_outside_allowlist(tmp_path: Path):
         assert out["isError"] is True
         assert "outside allowed roots" in out["content"][0]["text"]
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
         os.environ.pop("REPL_SCRIPT_ROOTS", None)
 
 
 def test_icc_exec_target_profiles_are_isolated(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "flywheel"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
         daemon = ReplDaemon(root=ROOT)
         daemon.call_tool(
@@ -71,13 +71,13 @@ def test_icc_exec_target_profiles_are_isolated(tmp_path: Path):
         assert isolated["isError"] is True
         assert "NameError" in isolated["content"][0]["text"]
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_icc_exec_success_updates_candidate_registry(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "flywheel"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
         daemon = ReplDaemon(root=ROOT)
         out = daemon.call_tool(
@@ -106,13 +106,13 @@ def test_icc_exec_success_updates_candidate_registry(tmp_path: Path):
         assert data["candidates"][key]["successes"] == 1
         assert data["candidates"][key]["verify_passes"] == 1
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_auto_promotes_candidate_to_canary_when_thresholds_met(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "flywheel"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
         daemon = ReplDaemon(root=ROOT)
         for _ in range(20):
@@ -135,13 +135,13 @@ def test_auto_promotes_candidate_to_canary_when_thresholds_met(tmp_path: Path):
         assert data["pipelines"][key]["status"] == "canary"
         assert data["pipelines"][key]["rollout_pct"] == 20
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_auto_rolls_back_canary_on_two_consecutive_failures(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "flywheel"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
         daemon = ReplDaemon(root=ROOT)
         for _ in range(20):
@@ -184,13 +184,13 @@ def test_auto_rolls_back_canary_on_two_consecutive_failures(tmp_path: Path):
         assert data["pipelines"][key]["status"] == "explore"
         assert data["pipelines"][key]["last_transition_reason"] == "two_consecutive_failures"
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_canary_sampling_progresses_to_stable(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "flywheel"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
         daemon = ReplDaemon(root=ROOT)
         for _ in range(20):
@@ -223,13 +223,13 @@ def test_canary_sampling_progresses_to_stable(tmp_path: Path):
         assert data["pipelines"][key]["status"] == "stable"
         assert data["pipelines"][key]["rollout_pct"] == 100
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_stable_rolls_back_on_window_failure_rate(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "flywheel"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
         daemon = ReplDaemon(root=ROOT)
         common = {
@@ -256,8 +256,8 @@ def test_stable_rolls_back_on_window_failure_rate(tmp_path: Path):
         assert data["pipelines"][key]["status"] == "explore"
         assert data["pipelines"][key]["last_transition_reason"] == "window_failure_rate"
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
 
 
 def test_synthesis_ready_flag_set_on_canary_promotion(tmp_path):
@@ -296,8 +296,8 @@ def test_synthesis_ready_flag_set_on_canary_promotion(tmp_path):
 
 
 def test_exec_degraded_argument_is_not_trusted_for_policy_counters(tmp_path: Path):
-    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["REPL_SESSION_ID"] = "flywheel"
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
         daemon = ReplDaemon(root=ROOT)
         key = "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py"
@@ -318,5 +318,5 @@ def test_exec_degraded_argument_is_not_trusted_for_policy_counters(tmp_path: Pat
         assert data["candidates"][key]["degraded_count"] == 0
         assert data["candidates"][key]["consecutive_failures"] == 0
     finally:
-        os.environ.pop("REPL_STATE_ROOT", None)
-        os.environ.pop("REPL_SESSION_ID", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)

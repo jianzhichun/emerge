@@ -26,7 +26,7 @@ def test_mcp_config_has_core_stdio_and_expected_tools_path():
     assert "core" in data["mcpServers"]
     server = data["mcpServers"]["core"]
     assert server["type"] == "stdio"
-    assert "scripts/repl_daemon.py" in server["args"]
+    assert "scripts/emerge_daemon.py" in server["args"]
 
 
 def test_hooks_json_has_required_events_and_post_tool_matcher():
