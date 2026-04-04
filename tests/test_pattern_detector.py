@@ -88,3 +88,11 @@ def test_error_rate_detector_fires_on_high_undo():
         events.append(_event("zwcad", "undo", ts_delta_ms=(5 + i) * 10_000))
     summaries = detector.ingest(events)
     assert any("error_rate" in s.detector_signals for s in summaries)
+
+
+def test_frequency_detector_ignores_old_events():
+    detector = PatternDetector()
+    # 3 events 25 minutes in the past — outside the 20-minute window
+    events = [_event("zwcad", "entity_added", ts_delta_ms=-(25 * 60_000 + i * 1000)) for i in range(3)]
+    summaries = detector.ingest(events)
+    assert summaries == []
