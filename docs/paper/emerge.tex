@@ -1,23 +1,31 @@
-\documentclass{article}
+\documentclass[11pt,a4paper]{article}
 
-\PassOptionsToPackage{numbers,compress}{natbib}
-\usepackage[preprint]{neurips_2024}
-
+\usepackage[margin=1in]{geometry}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{nicefrac}
+\usepackage{xcolor}
 \usepackage{hyperref}
 \usepackage{url}
-\usepackage{booktabs}
-\usepackage{amsfonts}
-\usepackage{nicefrac}
-\usepackage{microtype}
-\usepackage{xcolor}
-\usepackage{amsmath}
+\usepackage[numbers,compress]{natbib}
 \usepackage{listings}
 \usepackage{tikz}
 \usetikzlibrary{fit}
 \usepackage{pgfplots}
 \pgfplotsset{compat=1.18}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!70!black,
+  citecolor=blue!70!black,
+  urlcolor=blue!70!black,
+}
 
 \lstset{
   basicstyle=\ttfamily\small,
@@ -27,31 +35,40 @@
   backgroundcolor=\color{gray!5},
 }
 
-\title{Emerge: A Muscle-Memory Flywheel for\\Crystallizing AI Agent Execution Patterns}
+\title{\textbf{Emerge: A Muscle-Memory Flywheel for\\[4pt]
+       Crystallizing AI Agent Execution Patterns}}
 
-\author{%
-  Zao Zhang \\
+\author{
+  Zao Zhang \\[2pt]
   School of Electronic and Information Engineering \\
-  Beihang University, Beijing 100191, China \\
+  Beihang University, Beijing 100191, China \\[2pt]
   \texttt{zzchun12826@buaa.edu.cn}
 }
+
+\date{April 2025}
 
 \begin{document}
 
 \maketitle
+\thispagestyle{empty}
 
 \begin{abstract}
-We present \textbf{Emerge}, a plugin for Claude Code that implements a \emph{muscle-memory flywheel} for AI agents.
-Repeated tool invocations are tracked by semantic intent (\texttt{intent\_signature}), promoted through a
-three-stage policy lifecycle (\textsc{explore} $\to$ \textsc{canary} $\to$ \textsc{stable}),
-and eventually \emph{crystallized} into deterministic connector pipelines.
-Once a pattern reaches the \textsc{stable} stage, a \emph{flywheel bridge} short-circuits future calls
-at the tool layer with zero LLM inference overhead.
-We further introduce the \textbf{Operator Intelligence Loop}---a reverse flywheel that observes human operator
-behavior, identifies repetitive patterns, and progressively offloads mechanical work to the AI layer.
-Together, these mechanisms form a self-improving execution substrate: the agent grows faster and more autonomous
-over time, while human operators are progressively freed from work that code can replace.
-Emerge is implemented as an open-source Claude Code plugin with 134 passing tests.
+AI agents today pay full inference cost on every invocation---even for tasks performed identically hundreds
+of times before.
+We propose \emph{policy-driven crystallization}: a mechanism by which repeated agent actions are tracked by
+semantic intent, promoted through a three-stage reliability lifecycle
+(\textsc{explore} $\to$ \textsc{canary} $\to$ \textsc{stable}), and ultimately \emph{crystallized} into
+deterministic, verifiable pipelines that execute with zero LLM overhead.
+We instantiate this idea in \textbf{Emerge}, a Claude Code plugin, and introduce two complementary flywheels:
+a \emph{forward flywheel} that crystallizes AI reasoning into code,
+and an \emph{Operator Intelligence Loop}---a reverse flywheel that observes human operators,
+detects high-frequency behavioral patterns, and hands them off to the AI layer.
+As both flywheels accumulate stable patterns, the system converges toward a state where neither the AI
+nor the human needs to perform mechanical, repetitive work:
+reasoning is replaced by pipelines, and human execution is replaced by learned automation.
+We present the design, the policy framework with its formal promotion thresholds,
+and the architectural invariant that keeps all policy state local while delegating execution to
+arbitrary remote environments.
 \end{abstract}
 
 % ─────────────────────────────────────────────
@@ -115,12 +132,10 @@ agent sessions rather than in a single batch pass.
 
 \subsection{Canary Deployment as a Reliability Primitive}
 
-Progressive delivery systems~\cite{limoncelli2018progdelivery} gradually shift traffic to new software versions
-while monitoring for regressions.
-We adapt this to AI-generated patterns: a candidate pattern enters canary rollout at 20\% before earning full
-trust at stable (100\%).
-This limits the blast radius of a pattern that appeared reliable in exploration but degrades under production
-distribution.
+Canary deployment gradually shifts traffic to new software versions while monitoring for regressions,
+limiting the blast radius of changes that appear reliable in staging but degrade in production.
+We adapt this pattern to AI-generated execution candidates: a candidate enters canary rollout at 20\%
+volume before earning full trust at stable (100\%).
 To our knowledge, this is the first application of canary rollout semantics to AI agent execution patterns.
 
 % ─────────────────────────────────────────────
@@ -381,9 +396,10 @@ abstractions.
 Emerge performs continuous online synthesis from live execution traces rather than offline batch synthesis,
 and targets operational reliability (canary/stable thresholds) rather than expressiveness.
 
-\paragraph{Canary and progressive delivery.}
-Limoncelli~\cite{limoncelli2018progdelivery} surveys progressive delivery in software systems.
-We apply canary rollout semantics to AI-generated code patterns---to our knowledge the first such application.
+\paragraph{Canary deployment.}
+Canary releases are standard practice in large-scale software delivery~\cite{humble2010continuous},
+gradually shifting traffic to new versions while monitoring for regressions.
+We apply the same rollout semantics to AI-generated execution patterns---to our knowledge the first such application.
 
 \paragraph{Human-in-the-loop and interactive teaching.}
 Interactive machine teaching~\cite{simard2017imt} uses human signals to correct model behavior.
@@ -433,7 +449,7 @@ patterns through staged promotion---we believe generalizes beyond any single age
 that performs repeated structured work.
 
 % ─────────────────────────────────────────────
-\bibliographystyle{plain}
+\bibliographystyle{abbrvnat}
 \begin{thebibliography}{99}
 
 \bibitem{yao2022react}
@@ -452,10 +468,9 @@ H. Chase.
 \newblock \url{https://github.com/langchain-ai/langchain}, 2022.
 
 \bibitem{bang2023gptcache}
-Y. Bang, S. Cahyawijaya, N. Lee, W. Dai, D. Su, B. Wilie, H. Lovenia, Z. Ji, T. Yu, W. Chung, Q. Do,
-Y. Xu, and P. Fung.
-\newblock {GPTCache}: A Data or Model Infrastructure for Large Language Models.
-\newblock \emph{arXiv:2306.05212}, 2023.
+F. Bang.
+\newblock {GPTCache}: An Open-Source Semantic Cache for {LLM} Applications Enabling Faster Answers and Cost Savings.
+\newblock In \emph{Proc.\ 3rd Workshop for NLP Open Source Software (NLP-OSS)}, pp.\ 212--218. ACL, 2023.
 
 \bibitem{ellis2021dreamcoder}
 K. Ellis, C. Wong, M. Nye, M. Sable-Meyer, L. Morales, L. Hewitt, L. Cary, A. Solar-Lezama, and J. B. Tenenbaum.
@@ -472,16 +487,16 @@ L. De Raedt.
 \newblock \emph{Logical and Relational Learning}.
 \newblock Springer, 2008.
 
-\bibitem{limoncelli2018progdelivery}
-T. Limoncelli.
-\newblock Progressive Delivery: How to Ship Software.
-\newblock \emph{Queue}, 16(4), 2018.
+\bibitem{humble2010continuous}
+J. Humble and D. Farley.
+\newblock \emph{Continuous Delivery: Reliable Software Releases through Build, Test, and Deployment Automation}.
+\newblock Addison-Wesley, 2010.
 
 \bibitem{simard2017imt}
 P. Y. Simard, S. Amershi, D. M. Chickering, A. E. Pelton, S. Ghorashi, C. Meek, G. Ramos, J. Suh,
 J. Verwey, M. Wang, and J. Wernsing.
 \newblock Machine Teaching: A New Paradigm for Building Machine Learning Systems.
-\newblock \emph{arXiv:1709.01885}, 2017.
+\newblock \emph{arXiv:1707.06742}, 2017.
 
 \end{thebibliography}
 
