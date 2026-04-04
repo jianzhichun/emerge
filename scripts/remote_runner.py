@@ -66,6 +66,16 @@ class RunnerExecutor:
             with events_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
+    def show_notify(self, params: dict) -> dict:
+        """Show OS-native notification dialog. Blocks until user responds."""
+        from scripts.operator_popup import show_notify
+        return show_notify(
+            stage=str(params.get("stage", "canary")),
+            message=str(params.get("message", "")),
+            intent_draft=str(params.get("intent_draft", "")),
+            timeout_s=int(params.get("timeout_s", 0)),
+        )
+
     def read_operator_events(self, machine_id: str, since_ms: int = 0, limit: int = 200) -> list[dict]:
         _validate_machine_id(machine_id)
         machine_dir = self._event_root / machine_id
@@ -151,6 +161,18 @@ class RunnerHTTPHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/notify":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length).decode("utf-8")
+                body = json.loads(raw) if raw else {}
+                if not isinstance(body, dict):
+                    raise ValueError("notify body must be an object")
+                result = self.executor.show_notify(body)
+                self._send_json(200, {"ok": True, "result": result})
+            except Exception as exc:
+                self._send_json(400, {"ok": False, "error": str(exc)})
+            return
         if self.path == "/operator-event":
             try:
                 content_length = int(self.headers.get("Content-Length", "0"))

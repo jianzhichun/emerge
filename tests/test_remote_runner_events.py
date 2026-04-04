@@ -160,3 +160,48 @@ def test_get_events_rejects_path_traversal_machine_id(tmp_path):
             assert False, "should have raised"
         except urllib.error.HTTPError as e:
             assert e.code == 400
+
+
+def test_runner_notify_endpoint_returns_action(tmp_path, monkeypatch):
+    """POST /notify calls show_notify and returns {ok, result}."""
+    import scripts.operator_popup as popup_mod
+    monkeypatch.setattr(
+        popup_mod, "show_notify",
+        lambda stage, message, intent_draft="", timeout_s=0: {
+            "action": "takeover", "intent": intent_draft
+        }
+    )
+
+    with _RunnerServer(tmp_path / "state") as server:
+        body = json.dumps({
+            "stage": "canary",
+            "message": "要接管吗？",
+            "intent_draft": "",
+            "timeout_s": 0,
+        }).encode()
+        req = urllib.request.Request(
+            f"{server.url}/notify", data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read())
+        assert data["ok"] is True
+        assert data["result"]["action"] == "takeover"
+
+
+def test_runner_notify_endpoint_invalid_stage(tmp_path, monkeypatch):
+    """POST /notify with unknown stage returns ok=True with action=skip."""
+    import scripts.operator_popup as popup_mod
+    monkeypatch.setattr(popup_mod, "show_notify",
+        lambda stage, message, intent_draft="", timeout_s=0: {"action": "skip", "intent": ""})
+
+    with _RunnerServer(tmp_path / "state") as server:
+        body = json.dumps({"stage": "badstage", "message": "x"}).encode()
+        req = urllib.request.Request(
+            f"{server.url}/notify", data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read())
+        assert data["ok"] is True
+        assert data["result"]["action"] == "skip"
