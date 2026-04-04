@@ -148,3 +148,16 @@ def test_load_metadata_accepts_valid_metadata(tmp_path):
     engine = PipelineEngine()
     data = engine._load_metadata(good)
     assert data["intent_signature"] == "read.mock.test"
+
+
+def test_missing_pipeline_raises_pipeline_missing_error(tmp_path):
+    from scripts.pipeline_engine import PipelineEngine, PipelineMissingError
+    import os
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path / "connectors")
+    try:
+        engine = PipelineEngine()
+        with pytest.raises(PipelineMissingError) as exc_info:
+            engine.run_read({"connector": "nonexistent", "pipeline": "nope"})
+        assert "nonexistent" in str(exc_info.value)
+    finally:
+        os.environ.pop("EMERGE_CONNECTOR_ROOT", None)

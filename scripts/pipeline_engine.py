@@ -6,6 +6,23 @@ import os
 from pathlib import Path
 from typing import Any
 
+
+class PipelineMissingError(FileNotFoundError):
+    """Raised when a pipeline's .yaml + .py files cannot be found in any connector root.
+
+    Subclasses FileNotFoundError so existing broad ``except Exception`` handlers
+    still catch it, but ``call_tool`` can distinguish it with a specific ``except``.
+    """
+    def __init__(self, connector: str, mode: str, pipeline: str, searched: str) -> None:
+        self.connector = connector
+        self.mode = mode
+        self.pipeline = pipeline
+        self.searched = searched
+        super().__init__(
+            f"Pipeline '{connector}/{mode}/{pipeline}' not found in: {searched}"
+        )
+
+
 _USER_CONNECTOR_ROOT = Path("~/.emerge/connectors").expanduser()
 
 
@@ -103,8 +120,8 @@ class PipelineEngine:
                 break
         else:
             searched = ", ".join(str(r / connector) for r in self._connector_roots)
-            raise FileNotFoundError(
-                f"Pipeline '{connector}/{mode}/{pipeline}' not found in: {searched}"
+            raise PipelineMissingError(
+                connector=connector, mode=mode, pipeline=pipeline, searched=searched
             )
 
         metadata = self._load_metadata(meta_path)
