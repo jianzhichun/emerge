@@ -127,3 +127,36 @@ def test_post_event_rejects_missing_machine_id(tmp_path):
             assert False, "should have raised"
         except urllib.error.HTTPError as e:
             assert e.code == 400
+
+
+def test_post_event_rejects_path_traversal_machine_id(tmp_path):
+    with _RunnerServer(tmp_path / "state") as server:
+        body = json.dumps({
+            "ts_ms": 1000,
+            "machine_id": "../../../etc",
+            "session_role": "operator",
+            "event_type": "entity_added",
+            "app": "zwcad",
+            "payload": {},
+        }).encode()
+        req = urllib.request.Request(
+            f"{server.url}/operator-event",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(req, timeout=5)
+            assert False, "should have raised"
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
+
+
+def test_get_events_rejects_path_traversal_machine_id(tmp_path):
+    with _RunnerServer(tmp_path / "state") as server:
+        url = f"{server.url}/operator-events?machine_id=../../../etc&since_ms=0"
+        try:
+            urllib.request.urlopen(url, timeout=5)
+            assert False, "should have raised"
+        except urllib.error.HTTPError as e:
+            assert e.code == 400

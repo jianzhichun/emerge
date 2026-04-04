@@ -36,6 +36,15 @@ def _setup_logging() -> None:
     logging.getLogger().setLevel(logging.INFO)
 
 
+def _validate_machine_id(machine_id: str) -> None:
+    """Reject machine_id values that could escape the event root via path traversal."""
+    if not machine_id or machine_id != machine_id.strip():
+        raise ValueError("machine_id is required and must not have leading/trailing whitespace")
+    p = Path(machine_id)
+    if p.name != machine_id or ".." in machine_id or "/" in machine_id or "\\" in machine_id:
+        raise ValueError(f"Invalid machine_id: {machine_id!r}")
+
+
 class RunnerExecutor:
     def __init__(self, root: Path | None = None, state_root: Path | None = None) -> None:
         resolved_root = root or ROOT
@@ -49,8 +58,7 @@ class RunnerExecutor:
 
     def write_operator_event(self, event: dict) -> None:
         machine_id = str(event.get("machine_id", "")).strip()
-        if not machine_id:
-            raise ValueError("machine_id is required")
+        _validate_machine_id(machine_id)
         machine_dir = self._event_root / machine_id
         machine_dir.mkdir(parents=True, exist_ok=True)
         events_path = machine_dir / "events.jsonl"
@@ -59,6 +67,7 @@ class RunnerExecutor:
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
     def read_operator_events(self, machine_id: str, since_ms: int = 0, limit: int = 200) -> list[dict]:
+        _validate_machine_id(machine_id)
         machine_dir = self._event_root / machine_id
         if not machine_dir.exists():
             return []
