@@ -1043,3 +1043,99 @@ def test_build_elicit_params_schema_is_valid_json_schema(tmp_path):
         assert schema.get("required") == ["action"]
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
+
+
+# ---------------------------------------------------------------------------
+# HyperMesh vertical flywheel tests
+# ---------------------------------------------------------------------------
+
+def test_hypermesh_icc_read_returns_structured_state():
+    """icc_read with hypermesh/state pipeline returns rows with model metadata."""
+    daemon = EmergeDaemon(root=ROOT)
+    result = daemon.handle_jsonrpc(
+        {
+            "jsonrpc": "2.0",
+            "id": 900,
+            "method": "tools/call",
+            "params": {
+                "name": "icc_read",
+                "arguments": {"connector": "hypermesh", "pipeline": "state", "hm_timeout": 0.1},
+            },
+        }
+    )
+    assert result["result"]["isError"] is not True
+    obj = json.loads(result["result"]["content"][0]["text"])
+    assert obj["pipeline_id"] == "hypermesh.read.state"
+    assert obj["verify_result"]["ok"] is True
+    assert obj["verification_state"] == "verified"
+    assert isinstance(obj["rows"], list)
+    assert len(obj["rows"]) > 0
+    row = obj["rows"][0]
+    assert "node_count" in row
+    assert "element_count" in row
+
+
+def test_hypermesh_icc_write_apply_change_returns_verification_fields():
+    """icc_write with hypermesh/apply-change returns all required policy fields."""
+    daemon = EmergeDaemon(root=ROOT)
+    result = daemon.handle_jsonrpc(
+        {
+            "jsonrpc": "2.0",
+            "id": 901,
+            "method": "tools/call",
+            "params": {
+                "name": "icc_write",
+                "arguments": {
+                    "connector": "hypermesh",
+                    "pipeline": "apply-change",
+                    "tcl_cmd": "*createnode 100 200 0 0 0 0",
+                    "change_description": "create test node",
+                    "hm_timeout": 0.1,
+                },
+            },
+        }
+    )
+    assert result["result"]["isError"] is not True
+    obj = json.loads(result["result"]["content"][0]["text"])
+    assert obj["pipeline_id"] == "hypermesh.write.apply-change"
+    assert obj["verification_state"] == "verified"
+    assert "policy_enforced" in obj
+    assert "stop_triggered" in obj
+    assert "rollback_executed" in obj
+    assert "rollback_result" in obj
+
+
+def test_hypermesh_icc_write_participates_in_pipeline_lifecycle_registry(tmp_path: Path):
+    """icc_write calls for hypermesh appear in pipeline policy registry and counts move."""
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "hm-policy-test"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        for _ in range(20):
+            out = daemon.handle_jsonrpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 902,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "icc_write",
+                        "arguments": {
+                            "connector": "hypermesh",
+                            "pipeline": "apply-change",
+                            "tcl_cmd": "*createnode 10 20 0 0 0 0",
+                            "change_description": "policy lifecycle test node",
+                            "hm_timeout": 0.1,
+                        },
+                    },
+                }
+            )
+            assert out["result"]["isError"] is False
+
+        reg = tmp_path / "state" / "pipelines-registry.json"
+        data = json.loads(reg.read_text(encoding="utf-8"))
+        key = "pipeline::hypermesh.write.apply-change"
+        assert key in data["pipelines"], f"Key {key!r} not found; keys={list(data['pipelines'])}"
+        assert data["pipelines"][key]["status"] == "canary"
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
