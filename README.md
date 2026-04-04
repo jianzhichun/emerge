@@ -110,8 +110,6 @@ flowchart TD
   E3 --> I
 ```
 
-Design detail: `docs/superpowers/specs/2026-04-04-muscle-memory-flywheel-design.md`
-
 ### 2. Remote pipeline execution
 
 When a remote runner is configured, `icc_read` / `icc_write` still run pipeline logic on the remote host — but the runner never needs connector files:
@@ -254,7 +252,6 @@ flowchart LR
 | Test connector (mock) | `tests/connectors/mock/pipelines/` |
 | Slash commands | `commands/` (`init`, `policy`, `runner-status`) |
 | Skills | `skills/` (`initializing-vertical-flywheel`, `muscle-memory-flywheel`, `remote-runner-dev`) |
-| Design spec | `docs/superpowers/specs/2026-04-04-muscle-memory-flywheel-design.md` |
 | Reference (submodule) | `references/claude-code` |
 
 ## Requirements
