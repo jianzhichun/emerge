@@ -284,6 +284,35 @@ docs/superpowers/specs/   Design specifications
 references/         External reference codebases (git submodule)
 ```
 
+## Roadmap
+
+<table>
+<tr>
+<td width="72" align="center">🟢<br><sub>shipped</sub></td>
+<td><b>Solo Flywheel</b><br>
+<sub>Per-session learning on a single machine. <code>icc_exec</code> accumulates history → <code>icc_crystallize</code> generates a pipeline → explore → canary → stable. Stable pipelines short-circuit at the tool layer with zero LLM overhead. Remote runner dispatch included — daemon sends self-contained inline code, runner needs no connector files.</sub>
+</td>
+</tr>
+<tr>
+<td align="center">🔵<br><sub>next</sub></td>
+<td><b>Memory Hub</b><br>
+<sub>Stable pipelines are pure data. Publish by <code>intent_signature</code>, install with one command, aggregate community success / human-fix rates. Parameterized connectors strip local paths before publish. Diff-aware re-crystallize auto-demotes when the connector API changes.</sub>
+</td>
+</tr>
+<tr>
+<td align="center">🟡<br><sub>planned</sub></td>
+<td><b>Federated Execution Grid</b><br>
+<sub>Multiple runners with capability tags (<code>zwcad</code>, <code>cuda12</code>, <code>android-emu</code>). <code>RunnerRouter</code> picks by capability, not just URL. Failover to next capable host. Cross-session policy: a failure on one machine can demote the pipeline globally.</sub>
+</td>
+</tr>
+<tr>
+<td align="center">🔮<br><sub>research</sub></td>
+<td><b>Split-Personality Flywheel</b><br>
+<sub>Today the flywheel crystallizes <i>actions</i> → deterministic pipelines (no LLM). Next: crystallize <i>reasoning patterns</i> → specialized subagent personas (compressed system prompt + tools + few-shot traces). Subagents dispatch to stable pipelines. Two tiers of crystallization — code where the task is deterministic, compressed mind where it isn't.</sub>
+</td>
+</tr>
+</table>
+
 ## Reference sources
 
 Claude Code source is vendored under `references/` as read-only context so the Emerge implementation can evolve independently.
