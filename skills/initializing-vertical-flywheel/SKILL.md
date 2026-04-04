@@ -1,13 +1,13 @@
 ---
-
-## name: initializing-vertical-flywheel
+name: initializing-vertical-flywheel
 description: Use when a user asks to initialize a domain flywheel from natural language context, especially when environment details are incomplete or mixed with execution assumptions.
+---
 
 # Initializing Vertical Flywheel
 
 ## Overview
 
-Use this skill to convert one natural-language bootstrap request into concrete vertical flywheel assets under `connectors/`, plus verified runtime readiness.
+Use this skill to convert one natural-language bootstrap request into concrete vertical flywheel assets under `~/.emerge/connectors/<vertical>/`, plus verified runtime readiness. Never place vertical connectors inside the plugin project directory.
 
 Core principle: do not claim initialization complete until new read/write pipelines execute and policy state is observable.
 
@@ -40,15 +40,39 @@ No bootstrap completion claim without RED and GREEN evidence.
   - created/updated assets
   - next verification actions
 
+## Remote Runner Bootstrap (When Needed)
+If the user context indicates remote execution, initialize runner connectivity first.
+
+Minimum steps:
+1. Execute automated bootstrap from local plugin root:
+   - `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" runner-bootstrap --ssh-target "<user@host>" --target-profile "<target_profile>" --runner-url "http://<target>:8787"`
+2. `runner-bootstrap` performs remote deploy/start/check/persist automatically.
+3. Verify with one `icc_exec` smoke call before creating vertical assets.
+4. Verify admin health signal:
+   - `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" runner-status --pretty`
+   - proceed only when `Runner reachable: True`.
+
+Protocol reference: `docs/architecture/remote-runner-protocol.md`
+
+## Connector Location Rule
+
+This plugin is a **generic RWB flywheel engine**. Vertical-specific connectors must NOT be placed inside the plugin project directory.
+
+- Plugin project (`connectors/mock/`) — testing only, committed to git
+- User verticals → `~/.emerge/connectors/<vertical>/` (user-space, not committed)
+- Override via env: `EMERGE_CONNECTOR_ROOT=<path>` (e.g. for remote runner deployments)
+
+`PipelineEngine` searches `~/.emerge/connectors/` before the plugin root, so user verticals take precedence automatically.
+
 ## Assets To Create (Minimum)
 
-For vertical `<vertical>` (for example `zwcad`), create:
+For vertical `<vertical>` (for example `zwcad`), create in **user-space**:
 
-- `connectors/<vertical>/pipelines/read/state.yaml`
-- `connectors/<vertical>/pipelines/read/state.py`
-- `connectors/<vertical>/pipelines/write/apply-change.yaml`
-- `connectors/<vertical>/pipelines/write/apply-change.py`
-- tests (prefer existing suites unless there is a strong reason to split files):
+- `~/.emerge/connectors/<vertical>/pipelines/read/state.yaml`
+- `~/.emerge/connectors/<vertical>/pipelines/read/state.py`
+- `~/.emerge/connectors/<vertical>/pipelines/write/apply-change.yaml`
+- `~/.emerge/connectors/<vertical>/pipelines/write/apply-change.py`
+- tests (in plugin project, prefer existing suites unless there is a strong reason to split files):
   - `tests/test_pipeline_engine.py`
   - `tests/test_mcp_tools_integration.py`
 
@@ -92,7 +116,10 @@ Initialization is complete only when:
 
 - read and write calls succeed through `icc_read/icc_write`
 - policy status includes the new pipeline key (shape: `pipeline::<connector>.<mode>.<pipeline>`)
+- when remote mode is used, at least one call is confirmed through runner dispatch
 - tests and lint pass.
+
+If runner is required and unreachable, return `blocked` (not `degraded`).
 
 ## TDD Test Surface (Required)
 
