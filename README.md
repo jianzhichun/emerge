@@ -20,55 +20,67 @@ Emerge sits **inside the Claude Code process**: the plugin exposes one stdio MCP
 ```mermaid
 flowchart TB
   subgraph cc [Claude Code]
-    Agent[Model / Agent]
+    direction TB
     Hooks[Hook scripts]
+    Agent[Model / Agent]
+    Hooks -->|additionalContext — Goal · Delta| Agent
   end
 
-  subgraph daemon [EmergeDaemon — scripts/emerge_daemon.py]
-    T[icc_exec · icc_read · icc_write · icc_crystallize · icc_reconcile]
-    R[policy:// · runner:// · state:// · pipeline://]
-    OM[OperatorMonitor thread\nenabled via EMERGE_OPERATOR_MONITOR=1]
-  end
+  subgraph row [Daemon · Core · Runner]
+    direction LR
+    subgraph daemon [EmergeDaemon — scripts/emerge_daemon.py]
+      direction TB
+      T[icc_exec · icc_read · icc_write · icc_crystallize · icc_reconcile]
+      R[policy:// · runner:// · state:// · pipeline://]
+      OM[OperatorMonitor thread\nenabled via EMERGE_OPERATOR_MONITOR=1]
+      T --> R
+    end
 
-  subgraph core [Runtime Core]
-    ES[ExecSession + WAL]
-    PE[PipelineEngine]
-    PR[Policy Registry]
-    ST[StateTracker]
-    Met[Metrics sink]
-    RR[RunnerRouter]
-    PD2[PatternDetector + Distiller]
+    subgraph core [Runtime Core]
+      direction TB
+      subgraph core_row [in-process handlers]
+        direction LR
+        D{{icc_* dispatch}}
+        ES[ExecSession + WAL]
+        PE[PipelineEngine]
+        PR[Policy Registry]
+        ST[StateTracker]
+        Met[Metrics sink]
+        RR[RunnerRouter]
+      end
+      PD2[PatternDetector + Distiller]
+      D --> ES & PE & PR & ST & Met & RR
+    end
+
+    subgraph runner [Remote Runner — optional]
+      direction TB
+      RC[RunnerClient]
+      RProc[remote_runner.py — icc_exec + EventBus endpoints]
+      RC -->|HTTP POST /run — icc_exec only| RProc
+    end
   end
 
   subgraph persist [Persistence]
+    direction LR
     SD[session/ — wal.jsonl · candidates.json · events]
     Reg[~/.emerge/ — pipelines-registry · connectors · adapters]
     PD[.plugin-data/ — state.json · metrics.jsonl]
     EB[~/.emerge/operator-events/\nmachine_id/events.jsonl]
   end
 
-  subgraph runner [Remote Runner — optional]
-    RC[RunnerClient]
-    RProc[remote_runner.py — icc_exec + EventBus endpoints]
-  end
-
-  Agent <-->|MCP stdio / JSON-RPC 2.0| daemon
-  Hooks -->|additionalContext — Goal · Delta| Agent
-
-  T --> ES & PE & PR & ST & Met & RR
-  daemon --> OM
+  Agent <-->|MCP stdio / JSON-RPC 2.0| T
+  T --> D
+  RR --> RC
+  OM -->|GET /operator-events| RC
+  RProc -->|POST /operator-event| EB
+  EB --> OM
+  OM --> PD2
+  PD2 -->|MCP push — channel notify / ElicitRequest| Agent
 
   ES --> SD
   PR --> SD & Reg
   PE --> Reg
   ST & Met --> PD
-
-  RR --> RC -->|HTTP POST /run — icc_exec only| RProc
-  RProc -->|POST /operator-event| EB
-  OM -->|GET /operator-events| RC
-  EB --> OM
-  OM --> PD2
-  PD2 -->|MCP push — channel notify / ElicitRequest| Agent
 ```
 
 **Component responsibilities:**
