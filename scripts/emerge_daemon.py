@@ -31,6 +31,30 @@ from scripts.runner_client import RunnerRouter  # noqa: E402
 from scripts.exec_session import ExecSession  # noqa: E402
 
 
+class _RunnerClientAdapter:
+    """Calls /operator-events HTTP endpoint on the remote runner directly.
+    Used by OperatorMonitor to fetch operator events from runner machines."""
+
+    def __init__(self, base_url: str, timeout_s: float = 5.0) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._timeout_s = timeout_s
+
+    def get_events(self, machine_id: str, since_ms: int = 0) -> list[dict]:
+        import urllib.request
+        import urllib.parse
+        import json as _j
+        url = (
+            f"{self._base_url}/operator-events"
+            f"?machine_id={urllib.parse.quote(machine_id)}&since_ms={since_ms}"
+        )
+        try:
+            with urllib.request.urlopen(url, timeout=self._timeout_s) as r:
+                data = _j.loads(r.read())
+            return data.get("events", [])
+        except Exception:
+            return []
+
+
 class EmergeDaemon:
     def __init__(self, root: Path | None = None) -> None:
         resolved_root = root or ROOT
@@ -55,6 +79,7 @@ class EmergeDaemon:
             _settings = {}
         _default_metrics_path = default_emerge_home() / "metrics.jsonl"
         self._sink = get_sink(_settings, default_path=_default_metrics_path)
+        self._operator_monitor: "OperatorMonitor | None" = None
 
     def _try_flywheel_bridge(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
         intent_signature = str(arguments.get("intent_signature", "")).strip()
@@ -1446,6 +1471,115 @@ class EmergeDaemon:
         if root_key not in data or not isinstance(data[root_key], dict):
             data[root_key] = {}
         return data
+
+    # ------------------------------------------------------------------
+    # OperatorMonitor lifecycle
+    # ------------------------------------------------------------------
+
+    def start_operator_monitor(self) -> None:
+        """Start OperatorMonitor if EMERGE_OPERATOR_MONITOR=1 and not already running."""
+        if os.environ.get("EMERGE_OPERATOR_MONITOR", "0") != "1":
+            return
+        if self._operator_monitor is not None and self._operator_monitor.is_alive():
+            return
+        from scripts.operator_monitor import OperatorMonitor
+
+        poll_s = float(os.environ.get("EMERGE_MONITOR_POLL_S", "5"))
+        machines_env = os.environ.get("EMERGE_MONITOR_MACHINES", "")
+
+        machines: dict = {}
+        if self._runner_router:
+            for profile_name in (machines_env.split(",") if machines_env else ["default"]):
+                profile_name = profile_name.strip()
+                if not profile_name:
+                    continue
+                client = self._runner_router.find_client({"target_profile": profile_name})
+                if client is not None:
+                    machines[profile_name] = _RunnerClientAdapter(
+                        base_url=client.base_url,
+                        timeout_s=min(client.timeout_s, 10.0),
+                    )
+
+        self._operator_monitor = OperatorMonitor(
+            machines=machines,
+            push_fn=self._push_pattern_to_cc,
+            poll_interval_s=poll_s,
+            event_root=Path.home() / ".emerge" / "operator-events",
+            adapter_root=Path.home() / ".emerge" / "adapters",
+        )
+        self._operator_monitor.start()
+
+    def stop_operator_monitor(self) -> None:
+        if self._operator_monitor is not None:
+            self._operator_monitor.stop()
+
+    def _push_pattern_to_cc(self, stage: str, context: dict, summary: Any) -> None:
+        """Push pattern detection result to CC via MCP.
+        Explore -> channel notification (LLM evaluates).
+        Canary/Stable -> ElicitRequest form (blocking dialog).
+        """
+        if stage == "explore":
+            msg = self._build_explore_message(context, summary)
+            notification = {
+                "jsonrpc": "2.0",
+                "method": "notifications/claude/channel",
+                "params": {
+                    "serverName": "emerge",
+                    "content": msg,
+                    "meta": {
+                        "source": "operator_monitor",
+                        "intent_signature": summary.intent_signature,
+                    },
+                },
+            }
+            self._write_mcp_push(notification)
+        else:
+            params = self._build_elicit_params(stage, context, summary)
+            request = {
+                "jsonrpc": "2.0",
+                "id": f"elicit-{summary.intent_signature}-{int(time.time())}",
+                "method": "elicit",
+                "params": params,
+            }
+            self._write_mcp_push(request)
+
+    def _build_explore_message(self, context: dict, summary: Any) -> str:
+        app = context.get("app", "unknown")
+        samples = context.get("samples", summary.context_hint.get("samples", []))
+        sig = summary.intent_signature
+        return (
+            f"[OperatorMonitor] 检测到 {app} 中反复出现操作模式 `{sig}`，"
+            f"共 {summary.occurrences} 次，约 {summary.window_minutes:.0f} 分钟内。"
+            + (f" 样本: {', '.join(str(s) for s in samples[:3])}。" if samples else "")
+            + " 请评估是否值得接管，如值得请发起 elicitation。"
+        )
+
+    def _build_elicit_params(self, stage: str, context: dict, summary: Any) -> dict:
+        timeout_s = 10 if stage == "stable" else 30
+        sig = summary.intent_signature
+        message = (
+            f"检测到 `{sig}` 重复 {summary.occurrences} 次。"
+            + (f" 上下文: {context}。" if stage == "canary" else "")
+            + f" 是否接管？（{timeout_s}s 无响应自动确认）"
+        )
+        schema: dict = {
+            "action": {
+                "type": "string",
+                "oneOf": [
+                    {"const": "yes", "title": "是，接管"},
+                    {"const": "later", "title": "稍后"},
+                    {"const": "no", "title": "不需要"},
+                ],
+            }
+        }
+        if stage == "canary":
+            schema["note"] = {"type": "string", "description": "补充说明（可选）", "maxLength": 200}
+        return {"mode": "form", "message": message, "requestedSchema": schema}
+
+    def _write_mcp_push(self, payload: dict) -> None:
+        """Write a JSON-RPC notification/request to stdout for CC to receive."""
+        sys.stdout.write(json.dumps(payload) + "\n")
+        sys.stdout.flush()
 
 
 def run_stdio() -> None:

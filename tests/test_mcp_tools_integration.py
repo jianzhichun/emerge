@@ -975,3 +975,19 @@ def test_has_synthesizable_wal_entry_checks_profile_wal(tmp_path):
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_operator_monitor_starts_and_stops(monkeypatch, tmp_path):
+    """EmergeDaemon starts OperatorMonitor when EMERGE_OPERATOR_MONITOR=1."""
+    import time as _time
+    monkeypatch.setenv("EMERGE_OPERATOR_MONITOR", "1")
+    monkeypatch.setenv("EMERGE_MONITOR_POLL_S", "0.05")
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon(root=tmp_path)
+    daemon.start_operator_monitor()
+    _time.sleep(0.1)
+    assert daemon._operator_monitor is not None
+    assert daemon._operator_monitor.is_alive()
+    daemon.stop_operator_monitor()
+    daemon._operator_monitor.join(timeout=1.0)
+    assert not daemon._operator_monitor.is_alive()
