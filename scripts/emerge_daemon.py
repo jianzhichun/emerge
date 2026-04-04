@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.pipeline_engine import PipelineEngine  # noqa: E402
+from scripts.pipeline_engine import PipelineEngine, PipelineMissingError  # noqa: E402
 from scripts.policy_config import (  # noqa: E402
     PROMOTE_MAX_HUMAN_FIX_RATE,
     PROMOTE_MIN_ATTEMPTS,
@@ -188,6 +188,23 @@ class EmergeDaemon:
                 except Exception as exc:
                     self._append_warning_text(response, f"policy bookkeeping failed: {exc}")
                 return response
+            except PipelineMissingError as exc:
+                connector = str(arguments.get("connector", ""))
+                pipeline = str(arguments.get("pipeline", ""))
+                hint = (
+                    f"no pipeline registered yet — use icc_exec with "
+                    f"intent_signature='{connector}.read.{pipeline}' to explore"
+                )
+                return {
+                    "isError": False,
+                    "pipeline_missing": True,
+                    "connector": connector,
+                    "pipeline": pipeline,
+                    "mode": "read",
+                    "fallback": "icc_exec",
+                    "fallback_hint": hint,
+                    "content": [{"type": "text", "text": f"Pipeline not found. {hint}"}],
+                }
             except Exception as exc:
                 try:
                     self._record_pipeline_event(
@@ -201,6 +218,7 @@ class EmergeDaemon:
                     pass
                 return {
                     "isError": True,
+                    "recovery_suggestion": "exec",
                     "content": [{"type": "text", "text": f"icc_read failed: {exc}"}],
                 }
         if name == "icc_write":
@@ -229,6 +247,23 @@ class EmergeDaemon:
                 except Exception as exc:
                     self._append_warning_text(response, f"policy bookkeeping failed: {exc}")
                 return response
+            except PipelineMissingError as exc:
+                connector = str(arguments.get("connector", ""))
+                pipeline = str(arguments.get("pipeline", ""))
+                hint = (
+                    f"no pipeline registered yet — use icc_exec with "
+                    f"intent_signature='{connector}.write.{pipeline}' to explore"
+                )
+                return {
+                    "isError": False,
+                    "pipeline_missing": True,
+                    "connector": connector,
+                    "pipeline": pipeline,
+                    "mode": "write",
+                    "fallback": "icc_exec",
+                    "fallback_hint": hint,
+                    "content": [{"type": "text", "text": f"Pipeline not found. {hint}"}],
+                }
             except Exception as exc:
                 try:
                     self._record_pipeline_event(
@@ -242,6 +277,7 @@ class EmergeDaemon:
                     pass
                 return {
                     "isError": True,
+                    "recovery_suggestion": "exec",
                     "content": [{"type": "text", "text": f"icc_write failed: {exc}"}],
                 }
         if name == "icc_reconcile":

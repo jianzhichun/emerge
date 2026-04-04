@@ -114,8 +114,10 @@ def test_tools_call_returns_error_payload_for_missing_pipeline_and_script(tmp_pa
             },
         }
     )
-    assert bad_read["result"]["isError"] is True
-    assert "icc_read failed" in bad_read["result"]["content"][0]["text"]
+    # A missing pipeline is now a structured guidance response (not an error)
+    assert bad_read["result"]["isError"] is not True
+    assert bad_read["result"]["pipeline_missing"] is True
+    assert bad_read["result"]["fallback"] == "icc_exec"
 
     bad_script = daemon.handle_jsonrpc(
         {
@@ -666,3 +668,51 @@ def test_l15_exec_does_not_promote_when_candidate_is_canary(tmp_path):
     finally:
         os.environ.pop("REPL_STATE_ROOT", None)
         os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_icc_read_pipeline_missing_returns_structured_fallback(tmp_path):
+    import os
+    from pathlib import Path
+    from scripts.emerge_daemon import EmergeDaemon
+    ROOT = Path(__file__).resolve().parents[1]
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path / "connectors")
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        result = daemon.call_tool("icc_read", {
+            "connector": "nonexistent",
+            "pipeline": "nope",
+        })
+        # Must NOT be an error — it's a guidance response
+        assert result.get("isError") is not True
+        assert result.get("pipeline_missing") is True
+        assert result.get("connector") == "nonexistent"
+        assert result.get("pipeline") == "nope"
+        assert result.get("mode") == "read"
+        assert result.get("fallback") == "icc_exec"
+        assert "icc_exec" in result.get("fallback_hint", "")
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+
+
+def test_icc_write_pipeline_missing_returns_structured_fallback(tmp_path):
+    import os
+    from pathlib import Path
+    from scripts.emerge_daemon import EmergeDaemon
+    ROOT = Path(__file__).resolve().parents[1]
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path / "connectors")
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        result = daemon.call_tool("icc_write", {
+            "connector": "nonexistent",
+            "pipeline": "nope",
+        })
+        assert result.get("isError") is not True
+        assert result.get("pipeline_missing") is True
+        assert result.get("mode") == "write"
+        assert result.get("fallback") == "icc_exec"
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
