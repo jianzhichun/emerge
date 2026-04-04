@@ -83,3 +83,48 @@ def test_operator_monitor_stops_cleanly(tmp_path):
     monitor.stop()
     monitor.join(timeout=1.0)
     assert not monitor.is_alive()
+
+
+def test_operator_monitor_accumulates_events_across_polls(tmp_path):
+    """Events arriving one-per-poll must still trigger detection via the sliding window buffer."""
+    push_calls = []
+
+    now_ms = int(time.time() * 1000)
+    # Events ordered oldest-first so each successive event has a higher ts_ms,
+    # allowing the since_ms filter to advance correctly across polls.
+    all_events = [
+        {
+            "ts_ms": now_ms - (2 - i) * 60_000,
+            "machine_id": "m1",
+            "session_role": "operator",
+            "event_type": "entity_added",
+            "app": "zwcad",
+            "payload": {"layer": "标注", "content": f"room_{i}"},
+        }
+        for i in range(3)
+    ]
+
+    call_count = [0]
+
+    class _OnePollClient:
+        """Returns exactly one new event per call — simulates events arriving one per poll."""
+        def get_events(self, machine_id: str, since_ms: int = 0) -> list[dict]:
+            idx = call_count[0]
+            call_count[0] += 1
+            if idx < len(all_events):
+                return [all_events[idx]]
+            return []
+
+    monitor = OperatorMonitor(
+        machines={"m1": _OnePollClient()},
+        push_fn=lambda s, c, x: push_calls.append(1),
+        poll_interval_s=0.05,
+        event_root=tmp_path / "events",
+        adapter_root=tmp_path / "adapters",
+    )
+    monitor.start()
+    time.sleep(0.5)
+    monitor.stop()
+    monitor.join(timeout=1.0)
+
+    assert len(push_calls) >= 1, "pattern should fire after accumulating 3 events across polls"

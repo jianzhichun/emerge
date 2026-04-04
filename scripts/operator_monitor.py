@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import time
 import threading
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable
 
@@ -15,7 +17,8 @@ class _RunnerClientProtocol:
 
 class OperatorMonitor(threading.Thread):
     """Background thread that polls remote runners for operator events,
-    runs PatternDetector, and calls push_fn when a pattern is found."""
+    runs PatternDetector against a per-machine sliding window buffer,
+    and calls push_fn when a pattern is found."""
 
     def __init__(
         self,
@@ -33,6 +36,8 @@ class OperatorMonitor(threading.Thread):
         self._adapter_registry = AdapterRegistry(adapter_root=adapter_root)
         self._detector = PatternDetector()
         self._last_poll_ms: dict[str, int] = {}
+        # Sliding window buffer: accumulates events within FREQ_WINDOW_MS per machine.
+        self._event_buffers: dict[str, deque] = {}
         self._stop_event = threading.Event()
 
     def stop(self) -> None:
@@ -49,13 +54,28 @@ class OperatorMonitor(threading.Thread):
     def _poll_machine(self, machine_id: str, client: Any) -> None:
         since_ms = self._last_poll_ms.get(machine_id, 0)
         events = client.get_events(machine_id=machine_id, since_ms=since_ms)
-        if not events:
+
+        if events:
+            latest_ts = max(e.get("ts_ms", 0) for e in events)
+            self._last_poll_ms[machine_id] = latest_ts
+
+            buf = self._event_buffers.setdefault(machine_id, deque())
+            buf.extend(events)
+
+        buf = self._event_buffers.get(machine_id)
+        if not buf:
             return
 
-        latest_ts = max(e.get("ts_ms", 0) for e in events)
-        self._last_poll_ms[machine_id] = latest_ts
+        # Trim events older than the detector's frequency window
+        now_ms = int(time.time() * 1000)
+        window_ms = PatternDetector.FREQ_WINDOW_MS
+        while buf and now_ms - buf[0].get("ts_ms", 0) > window_ms:
+            buf.popleft()
 
-        summaries = self._detector.ingest(events)
+        if not buf:
+            return
+
+        summaries = self._detector.ingest(list(buf))
         for summary in summaries:
             app = summary.context_hint.get("app", machine_id)
             plugin = self._adapter_registry.get_plugin(app)
