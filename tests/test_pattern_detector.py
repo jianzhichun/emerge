@@ -96,3 +96,29 @@ def test_frequency_detector_ignores_old_events():
     events = [_event("zwcad", "entity_added", ts_delta_ms=-(25 * 60_000 + i * 1000)) for i in range(3)]
     summaries = detector.ingest(events)
     assert summaries == []
+
+
+def test_frequency_check_no_signature_collision_across_event_types():
+    """Different event_types on the same layer must produce distinct intent_signatures."""
+    import time
+    now_ms = int(time.time() * 1000)
+    detector = PatternDetector()
+
+    def make_events(event_type: str) -> list[dict]:
+        return [
+            {
+                "ts_ms": now_ms - i * 60_000,
+                "machine_id": "m1",
+                "session_role": "operator",
+                "event_type": event_type,
+                "app": "zwcad",
+                "payload": {"layer": "标注", "content": f"x_{i}"},
+            }
+            for i in range(3)
+        ]
+
+    summaries = detector.ingest(make_events("entity_added") + make_events("entity_modified"))
+    sigs = [s.intent_signature for s in summaries if "frequency" in s.detector_signals]
+    assert len(set(sigs)) == len(sigs), f"Duplicate signatures found: {sigs}"
+    assert any("entity_added" in s for s in sigs)
+    assert any("entity_modified" in s for s in sigs)

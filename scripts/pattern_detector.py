@@ -64,7 +64,7 @@ class PatternDetector:
                 for e in grp
                 if e.get("payload", {}).get("content")
             ][:5]
-            sig = f"{app}.{layer.replace('/', '_') if layer else event_type}"
+            sig = f"{app}.{event_type}" + (f".{layer.replace('/', '_')}" if layer else "")
             summaries.append(PatternSummary(
                 machine_ids=machines,
                 intent_signature=sig,
