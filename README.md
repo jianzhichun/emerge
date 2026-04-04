@@ -3,14 +3,14 @@
 ![Version](https://img.shields.io/badge/version-v0.2.0-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge)
-![Tests](https://img.shields.io/badge/tests-133%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-134%20passing-brightgreen?logo=pytest)
 
 **Emerge** is a Claude Code plugin (v0.2.0) that implements a **muscle-memory flywheel**: repeated work is tracked via `icc_exec`, promoted through a **policy registry** (explore → canary → stable), and can be **crystallized** into connector pipelines so the same tasks run as structured `icc_read` / `icc_write` instead of ad-hoc code.
 
 Design anchors:
 
-- **A-track pipelines** — YAML + Python under `~/.emerge/connectors/<connector>/pipelines/` with read/write verification and rollback policy.
-- **Persistent exec** — `icc_exec` runs Python in a durable session (WAL, profiles, optional remote runner).
+- **Connector pipelines** — YAML + Python under `~/.emerge/connectors/<connector>/pipelines/`, with verification and rollback policy baked in.
+- **Persistent exec** — `icc_exec` runs Python in a durable local session (WAL + profiles). A remote runner is optional — local is the default.
 - **State delta** — hooks and `state://deltas` keep goals, deltas, and open risks for context budgeting (`Goal` / `Delta` / `Open Risks`).
 
 ## Architecture
@@ -62,8 +62,6 @@ flowchart TB
   RR --> RC -->|HTTP POST /run — icc_exec only| RProc
 ```
 
-> **Remote pipeline execution:** When a runner is configured, `icc_read`/`icc_write` are **not** sent to the runner as-is. The daemon loads the pipeline `.py` + `.yaml` files **locally**, builds self-contained inline code, and sends it as `icc_exec` to the runner. Pipeline files never need to be copied to remote machines — switching runners is a URL change only.
-
 **Component responsibilities:**
 
 | Component | Role |
@@ -74,11 +72,12 @@ flowchart TB
 | **Policy Registry** | Tracks per-candidate lifecycle (`explore → canary → stable`), rollout %, `synthesis_ready` signal, `human_fix_rate`. Written to `pipelines-registry.json`. |
 | **StateTracker** | Maintains `Goal` / `Delta` / `Open Risks` session state. Exposed via `state://deltas` resource and hook `additionalContext`. |
 | **RunnerRouter** | Selects a `RunnerClient` by `target_profile` / `runner_id` (map), consistent hash (pool), or default URL. Returns `None` when no runner is configured → local execution. |
+| **Flywheel bridge** | Short-circuit inside `icc_exec`: when the matching candidate is `stable`, execution is redirected to the pipeline result without LLM inference. Zero overhead path once a pattern is trusted. |
 | **Hooks** | Inject minimal context at session/prompt boundaries; record `Delta` after each `icc_*` call; preserve critical state across **PreCompact**. Not a second MCP server. |
 
 ## Flows
 
-### 1. Muscle-memory flywheel
+### 1. Muscle-memory flywheel lifecycle
 
 The full lifecycle from exploratory exec to stable pipeline:
 
@@ -110,9 +109,19 @@ flowchart TD
   E3 --> I
 ```
 
-### 2. Remote pipeline execution
+### 2. Pipeline execution
 
-When a remote runner is configured, `icc_read` / `icc_write` still run pipeline logic on the remote host — but the runner never needs connector files:
+`icc_read` and `icc_write` have two execution paths depending on whether a remote runner is configured.
+
+**Local (default).** The daemon calls the pipeline engine in-process. No network, no subprocess.
+
+```
+icc_read { connector, pipeline }
+  → PipelineEngine.run_read(args)
+  → { rows, verify_result, verification_state }
+```
+
+**Remote.** When `RunnerRouter` resolves a client for the request, the daemon loads the pipeline source locally, builds a self-contained `icc_exec` payload, and dispatches it over HTTP. The runner machine never needs connector files — a machine change is a URL change only.
 
 ```mermaid
 sequenceDiagram
@@ -125,75 +134,64 @@ sequenceDiagram
   CC->>D: icc_read { connector, pipeline, target_profile }
   D->>RR: find_client(arguments)
   RR-->>D: RunnerClient
-  D->>PE: _load_pipeline_source(connector, mode, pipeline)
-  PE-->>D: metadata dict + py_source text
-  Note over D: build self-contained icc_exec payload
-  D->>R: POST /run { tool_name: icc_exec, code: inline, no_replay: true }
-  R-->>D: { ok: true, result: { content: stdout JSON } }
-  Note over D: parse stdout, assemble icc_read response
+  D->>PE: load pipeline source + metadata
+  PE-->>D: py_source + metadata dict
+  Note over D: strip __future__ imports, build inline exec payload
+  D->>R: POST /run { tool_name: icc_exec, code: inline }
+  R-->>D: { ok: true, result: stdout JSON }
   D-->>CC: { rows, verify_result, verification_state }
 ```
 
-### 3. Remote runner — setup and protocol
+### 3. Remote runner — operations
 
-The runner is a **pure Python executor**: it only accepts `icc_exec`. Pipeline operations (`icc_read`, `icc_write`) are handled by the daemon, which loads `.py` + `.yaml` locally, builds self-contained inline code, and sends it as `icc_exec`. No connector files ever need to exist on the runner machine — switching machines is a URL change only.
+The runner is a **stateless Python executor** — it accepts `icc_exec` only. All pipeline logic, policy decisions, and state writes happen in the daemon.
 
-**HTTP endpoints**
+**Endpoints**
 
 | Endpoint | Purpose |
-|----------|---------|
+|---|---|
 | `POST /run` | Execute one `icc_exec` call |
-| `GET /health` | Liveness probe |
-| `GET /status` | Process info (pid, uptime, root) |
-| `GET /logs?n=N` | Last N log lines (default 100) |
-
-Request / response shape:
-```json
-{ "tool_name": "icc_exec", "arguments": { "code": "...", "target_profile": "default", "no_replay": false } }
-{ "ok": true,  "result": { "isError": false, "content": [{ "type": "text", "text": "..." }] } }
-{ "ok": false, "error": "string message" }
-```
+| `GET /health` | Liveness — `{"ok": true, "uptime_s": N}` |
+| `GET /status` | Process info (pid, python, root) |
+| `GET /logs?n=N` | Last N log lines |
 
 **Configuration**
 
-Env vars override persisted config at runtime:
+| Env var | Purpose | Default |
+|---|---|---|
+| `EMERGE_RUNNER_URL` | Single default runner | — |
+| `EMERGE_RUNNER_MAP` | JSON `target_profile → URL` | — |
+| `EMERGE_RUNNER_URLS` | Comma-separated URL pool | — |
+| `EMERGE_RUNNER_TIMEOUT_S` | Per-request timeout (s) | `30` |
 
-| Var | Description | Default |
-|-----|-------------|---------|
-| `EMERGE_RUNNER_URL` | Single default runner URL | — |
-| `EMERGE_RUNNER_MAP` | JSON object: `target_profile` → URL | — |
-| `EMERGE_RUNNER_URLS` | Comma-separated pool of URLs | — |
-| `EMERGE_RUNNER_TIMEOUT_S` | Per-request timeout (seconds) | `30` |
-| `EMERGE_RUNNER_CONFIG_PATH` | Override persisted config path | `~/.emerge/runner-map.json` |
-
-Persisted config (`~/.emerge/runner-map.json`):
+Persisted route map (`~/.emerge/runner-map.json`):
 ```json
 {
   "default_url": "http://127.0.0.1:8787",
-  "map": { "mycader-1": "http://10.0.0.11:8787" },
-  "pool": ["http://10.0.0.11:8787", "http://10.0.0.12:8787"]
+  "map":  { "cad-win": "http://10.0.0.11:8787" },
+  "pool": [ "http://10.0.0.11:8787", "http://10.0.0.12:8787" ]
 }
 ```
 
-`map` keys match `target_profile` in tool arguments. `pool` uses consistent hashing on profile/connector to pick a stable endpoint.
+`map` keys match `target_profile` in tool arguments. `pool` uses consistent hashing so the same profile always lands on the same host.
 
-**Starting the runner**
+**Starting**
 
 ```bash
-# Foreground — logs written to .runner.log
+# Standard — logs to .runner.log
 python3 scripts/remote_runner.py --host 0.0.0.0 --port 8787
 
-# Watchdog — auto-restarts on crash or .watchdog-restart signal file
+# With watchdog — auto-restarts on crash or .watchdog-restart signal
 pythonw scripts/runner_watchdog.py --host 0.0.0.0 --port 8787
 ```
 
-For GUI/COM workloads (e.g. AutoCAD), the runner must run in an **interactive user session**, not a Windows service session.
+> **Windows / GUI workloads** (AutoCAD, ZWCAD, COM objects): launch from an interactive desktop session (RDP/console), not a Windows service. COM objects are session-scoped.
 
-Bootstrap helper (remote deploy + health probe + runner-map write):
+**One-command bootstrap** (deploy → start → health-check → persist route):
 ```bash
 python3 scripts/repl_admin.py runner-bootstrap \
-  --ssh-target "user@host" \
-  --target-profile "mycader-1" \
+  --ssh-target "user@10.0.0.11" \
+  --target-profile "cad-win" \
   --runner-url "http://10.0.0.11:8787"
 ```
 
@@ -225,11 +223,11 @@ flowchart LR
 
 | Tool | Purpose |
 |------|---------|
-| `icc_exec` | Execute Python in a persistent session. Tracks `intent_signature` for flywheel policy. Routes to remote runner if `target_profile` is mapped. |
-| `icc_read` | Run a read pipeline with verification. Returns `{ rows, verify_result, verification_state }`. Falls back to structured `pipeline_missing` hint when no pipeline exists yet. |
-| `icc_write` | Run a write pipeline with verification and rollback/stop policy enforcement. |
+| `icc_exec` | Execute Python in a persistent local session. Tracks `intent_signature` for flywheel policy. Optionally routes to a remote runner when `target_profile` is mapped — local is the default. |
+| `icc_read` | Run a read pipeline locally (default) or via remote runner. Returns `{ rows, verify_result, verification_state }`. Returns a structured `pipeline_missing` hint when no pipeline exists yet. |
+| `icc_write` | Run a write pipeline locally (default) or via remote runner, with verification and rollback/stop policy enforcement. |
 | `icc_crystallize` | Generate `.py` + `.yaml` pipeline files from WAL history. Call when `synthesis_ready: true` appears in `policy://current`. Always writes locally. |
-| `icc_reconcile` | Confirm / correct / retract a StateTracker delta. `outcome=correct` + `intent_signature` increments `human_fix_rate` for the matching candidate. |
+| `icc_reconcile` | Confirm or correct a state delta. `outcome=correct` + `intent_signature` increments `human_fix_rate` on the most-recently-used matching candidate. |
 
 **Resources:** `policy://current` · `runner://status` · `state://deltas` · `pipeline://{connector}/{mode}/{name}`
 
@@ -245,7 +243,7 @@ flowchart LR
 | Local MCP wiring (dev) | `.mcp.json` → `scripts/emerge_daemon.py` |
 | MCP server | `scripts/emerge_daemon.py` (`EmergeDaemon`, stdio JSON-RPC) |
 | Pipeline engine & policy | `scripts/pipeline_engine.py`, `scripts/policy_config.py` |
-| Exec session & WAL | `scripts/exec_session.py` |
+| ExecSession & WAL | `scripts/exec_session.py` |
 | State & metrics | `scripts/state_tracker.py`, `scripts/metrics.py` |
 | Remote runner | `scripts/remote_runner.py`, `scripts/runner_client.py`, `scripts/runner_watchdog.py` |
 | Ops / bootstrap | `scripts/repl_admin.py` |
@@ -266,7 +264,7 @@ flowchart LR
 python -m pytest tests -q
 ```
 
-Current baseline: **133** tests passing.
+Current baseline: **134** tests passing.
 
 ## Repository layout
 
