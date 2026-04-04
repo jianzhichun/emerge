@@ -1,6 +1,65 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# Testing
 .pytest_cache/
-.worktrees/
+.coverage
+htmlcov/
+*.lcov
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Emerge runtime state
 .plugin-data/
-.venv
+.worktrees/
+session/
+*.runner.log
+*.watchdog.log
+.watchdog-restart
+runner-map.json
+
+# LaTeX build artefacts
+docs/paper/*.pdf
+docs/paper/*.aux
+docs/paper/*.log
+docs/paper/*.out
+docs/paper/*.toc
+docs/paper/*.synctex.gz
+docs/paper/*.fls
+docs/paper/*.fdb_latexmk
+docs/paper/*.blg
+docs/paper/*.bbl
+docs/paper/__MACOSX/
+docs/paper/Styles/
+docs/paper/neurips2024.zip
+
+# Credentials / secrets
+.env.*
+*.pem
+*.key
+secrets.json

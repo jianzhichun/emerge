@@ -314,6 +314,21 @@ references/         External reference codebases (git submodule)
 </tr>
 </table>
 
+## Glossary
+
+| Term | Definition |
+|---|---|
+| **Candidate** | A tracked execution pattern identified by `intent_signature`. Carries policy counters (attempts, successes, human-fix rate) that drive lifecycle transitions. Multiple candidates can share the same `intent_signature` (e.g. exec vs pipeline variants). |
+| **Crystallization** | Generating a deterministic `.py` + `.yaml` pipeline from WAL history via `icc_crystallize`. Converts accumulated exec knowledge into a reusable, verifiable pipeline. |
+| **Connector** | A named integration target (e.g. `zwcad`, `mock`). Owns pipeline definitions under `~/.emerge/connectors/<connector>/pipelines/read/` and `.../write/`. |
+| **Flywheel bridge** | Short-circuit inside `icc_exec`: when the matching candidate is `stable`, the call is redirected to the pipeline result with zero LLM inference. |
+| **Intent signature** | Dot-notation string (e.g. `zwcad.read.state`) that identifies the semantic intent of an `icc_exec` call. The policy flywheel tracks all counters per intent signature. |
+| **Pipeline** | YAML + Python pair implementing a deterministic `run_read` / `run_write` / `verify` / `rollback` contract. Lives in the connector directory; never needs to exist on the runner machine. |
+| **Policy lifecycle** | Three-stage promotion path: `explore` (accumulating history, 0% rollout) → `canary` (partial rollout, 20%) → `stable` (full trust, 100%). Demotion on consecutive failures or low window success rate. |
+| **State delta** | A recorded change in system state maintained by `StateTracker`. Surfaced via hooks as `additionalContext` to keep the agent aware of what has changed since the last prompt. |
+| **Target profile** | String key (e.g. `default`, `cad-win`) that identifies an execution environment. Routes `icc_exec` to the matching remote runner or local `ExecSession`. |
+| **WAL** | Write-ahead log — append-only record of successful `icc_exec` code paths per session profile. Primary source material for crystallization. |
+
 ## Reference sources
 
 Claude Code source is vendored under `references/` as read-only context so the Emerge implementation can evolve independently.
