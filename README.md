@@ -163,6 +163,9 @@ The runner is a **stateless Python executor** — it accepts `icc_exec` only. Al
 | `EMERGE_RUNNER_MAP` | JSON `target_profile → URL` | — |
 | `EMERGE_RUNNER_URLS` | Comma-separated URL pool | — |
 | `EMERGE_RUNNER_TIMEOUT_S` | Per-request timeout (s) | `30` |
+| `EMERGE_OPERATOR_MONITOR` | Enable OperatorMonitor thread in daemon | `0` |
+| `EMERGE_MONITOR_POLL_S` | EventBus poll interval (seconds) | `5` |
+| `EMERGE_MONITOR_MACHINES` | Comma-separated runner profile names to monitor | all configured |
 
 Persisted route map (`~/.emerge/runner-map.json`):
 ```json
@@ -246,6 +249,10 @@ flowchart LR
 | ExecSession & WAL | `scripts/exec_session.py` |
 | State & metrics | `scripts/state_tracker.py`, `scripts/metrics.py` |
 | Remote runner | `scripts/remote_runner.py`, `scripts/runner_client.py`, `scripts/runner_watchdog.py` |
+| Observer framework | `scripts/observer_plugin.py`, `scripts/observers/` |
+| Pattern detector | `scripts/pattern_detector.py` |
+| Distiller | `scripts/distiller.py` |
+| Operator monitor | `scripts/operator_monitor.py` |
 | Ops / bootstrap | `scripts/repl_admin.py` |
 | Test connector (mock) | `tests/connectors/mock/pipelines/` |
 | Slash commands | `commands/` (`init`, `policy`, `runner-status`) |
@@ -318,13 +325,19 @@ references/         External reference codebases (git submodule)
 
 | Term | Definition |
 |---|---|
+| **Adapter** | An `ObserverPlugin` subclass that provides application-specific observation and takeover capability for a specific vertical (e.g. ZWCAD COM, Excel). Generic built-in observers (`accessibility`, `filesystem`, `clipboard`) ship with the framework; vertical adapters are crystallized from WAL history via `icc_crystallize mode=adapter` and live in `~/.emerge/adapters/<vertical>/adapter.py`. |
 | **Candidate** | A tracked execution pattern identified by `intent_signature`. Carries policy counters (attempts, successes, human-fix rate) that drive lifecycle transitions. Multiple candidates can share the same `intent_signature` (e.g. exec vs pipeline variants). |
-| **Crystallization** | Generating a deterministic `.py` + `.yaml` pipeline from WAL history via `icc_crystallize`. Converts accumulated exec knowledge into a reusable, verifiable pipeline. |
 | **Connector** | A named integration target (e.g. `zwcad`, `mock`). Owns pipeline definitions under `~/.emerge/connectors/<connector>/pipelines/read/` and `.../write/`. |
+| **Crystallization** | Generating a deterministic `.py` + `.yaml` pipeline from WAL history via `icc_crystallize`. Converts accumulated exec knowledge into a reusable, verifiable pipeline. |
+| **EventBus** | Append-only JSONL file per machine at `~/.emerge/operator-events/<machine_id>/events.jsonl`. Written by `ObserverPlugin` instances on the operator machine via `POST /operator-event` to the remote runner. Consumed by `OperatorMonitor` via `GET /operator-events`. |
 | **Flywheel bridge** | Short-circuit inside `icc_exec`: when the matching candidate is `stable`, the call is redirected to the pipeline result with zero LLM inference. |
 | **Intent signature** | Dot-notation string (e.g. `zwcad.read.state`) that identifies the semantic intent of an `icc_exec` call. The policy flywheel tracks all counters per intent signature. |
+| **ObserverPlugin** | Abstract base class for operator behavior observation. Defines four methods: `start(config)`, `stop()`, `get_context(hint) -> dict` (pre-elicitation context read), `execute(intent, params) -> dict` (takeover). Mirrors the `Pipeline` contract for the reverse flywheel. |
+| **OperatorMonitor** | Background thread inside `EmergeDaemon` (enabled via `EMERGE_OPERATOR_MONITOR=1`). Polls remote runners for operator events, runs `PatternDetector`, calls `adapter.get_context()` for pre-elicitation context, then pushes to CC via MCP channel notification (explore stage) or `ElicitRequest` (canary/stable). |
+| **PatternDetector** | Analyses batches of operator events and emits `PatternSummary` objects when thresholds are crossed. Pluggable strategies: frequency (3 same-type events in 20 min), error-rate (undo ratio ≥ 0.4), cross-machine (same pattern on ≥2 machines). Filters out `session_role=monitor_sub` events to prevent AI self-monitoring. |
 | **Pipeline** | YAML + Python pair implementing a deterministic `run_read` / `run_write` / `verify` / `rollback` contract. Lives in the connector directory; never needs to exist on the runner machine. |
 | **Policy lifecycle** | Three-stage promotion path: `explore` (accumulating history, 0% rollout) → `canary` (partial rollout, 20%) → `stable` (full trust, 100%). Demotion on consecutive failures or low window success rate. |
+| **Reverse flywheel** | The Operator Intelligence Loop: observes the human operator (not the AI), detects repeated patterns, surfaces a CC dialog to capture intent, and hands off to the AI layer. Feeds the same policy registry and crystallization mechanism as the forward flywheel. |
 | **State delta** | A recorded change in system state maintained by `StateTracker`. Surfaced via hooks as `additionalContext` to keep the agent aware of what has changed since the last prompt. |
 | **Target profile** | String key (e.g. `default`, `cad-win`) that identifies an execution environment. Routes `icc_exec` to the matching remote runner or local `ExecSession`. |
 | **WAL** | Write-ahead log — append-only record of successful `icc_exec` code paths per session profile. Primary source material for crystallization. |

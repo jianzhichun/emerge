@@ -52,6 +52,9 @@ Integration tests go in `test_mcp_tools_integration.py` and call `EmergeDaemon.c
 - Connector pipelines live in `~/.emerge/connectors/<connector>/pipelines/{read,write}/` (user-space). `tests/connectors/` is test fixture only, not shipped.
 - Policy state files use atomic writes (temp file + rename). Never write directly.
 - WAL entries with `no_replay=True` are excluded from both replay and crystallization. State setup entries must not use `no_replay`.
+- `EMERGE_OPERATOR_MONITOR=1` enables `OperatorMonitor` thread in the daemon. Off by default. Polls remote runners via `GET /operator-events`, runs `PatternDetector`, pushes to CC via MCP channel notification (explore) or `ElicitRequest` (canary/stable).
+- `ObserverPlugin` (`scripts/observer_plugin.py`) is the ABC for all operator observation. `AdapterRegistry` loads built-in observers (`scripts/observers/`) and crystallized vertical adapters from `~/.emerge/adapters/<vertical>/adapter.py`. Vertical adapters are built via `icc_crystallize mode=adapter` (not shipped, crystallized per-user).
+- `EventBus`: `~/.emerge/operator-events/<machine_id>/events.jsonl` — append-only. Written via `POST /operator-event` on the remote runner. `session_role=monitor_sub` events are filtered by `PatternDetector` to prevent AI self-monitoring.
 
 ## Documentation Update Rules
 
@@ -67,3 +70,5 @@ When making code changes, keep these in sync:
 | Runner protocol change | `README.md` §"Remote runner — operations" + `skills/remote-runner-dev/SKILL.md` |
 | Architecture change | `README.md` architecture diagram + component table |
 | Test count change | `README.md` badge + Quick verification baseline |
+| New observer or adapter interface change | `skills/writing-vertical-adapter/SKILL.md` |
+| OperatorMonitor env var change | README.md env var table + `skills/operator-monitor-debug/SKILL.md` |
