@@ -40,3 +40,136 @@ def test_icc_exec_restores_state_after_daemon_restart(tmp_path: Path):
     finally:
         os.environ.pop("REPL_STATE_ROOT", None)
         os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_default_session_id_is_project_scoped_not_literal_default(tmp_path: Path):
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
+    os.environ.pop("REPL_SESSION_ID", None)
+    try:
+        daemon = ReplDaemon(root=ROOT)
+        daemon.call_tool("icc_exec", {"code": "x = 1"})
+        dirs = [p.name for p in tmp_path.iterdir() if p.is_dir()]
+        assert dirs
+        assert "default" not in dirs
+        assert any(name.startswith("emerge-") for name in dirs)
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+
+
+def test_wal_replay_tolerates_broken_entries(tmp_path: Path):
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
+    os.environ["REPL_SESSION_ID"] = "recover"
+    try:
+        daemon1 = ReplDaemon(root=ROOT)
+        daemon1.call_tool("icc_exec", {"code": "x = 7"})
+        session_dir = tmp_path / "recover"
+        wal = session_dir / "wal.jsonl"
+        wal.write_text(
+            wal.read_text(encoding="utf-8")
+            + '{"seq": 999, "status":"success","code":"raise RuntimeError(\\"bad replay\\")"}\n',
+            encoding="utf-8",
+        )
+
+        daemon2 = ReplDaemon(root=ROOT)
+        out = daemon2.call_tool("icc_exec", {"code": "print(x)"})
+        assert out.get("isError") is not True
+        assert "7" in out["content"][0]["text"]
+        recovery = session_dir / "recovery.json"
+        assert recovery.exists()
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_wal_replay_tolerates_invalid_json_lines(tmp_path: Path):
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
+    os.environ["REPL_SESSION_ID"] = "recover-json"
+    try:
+        daemon1 = ReplDaemon(root=ROOT)
+        daemon1.call_tool("icc_exec", {"code": "x = 8"})
+        session_dir = tmp_path / "recover-json"
+        wal = session_dir / "wal.jsonl"
+        wal.write_text(wal.read_text(encoding="utf-8") + "{not valid json}\n", encoding="utf-8")
+
+        daemon2 = ReplDaemon(root=ROOT)
+        out = daemon2.call_tool("icc_exec", {"code": "print(x)"})
+        assert out.get("isError") is not True
+        assert "8" in out["content"][0]["text"]
+        recovery = session_dir / "recovery.json"
+        assert recovery.exists()
+        assert "invalid_wal_json" in recovery.read_text(encoding="utf-8")
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_explicit_session_id_is_contained_under_state_root(tmp_path: Path):
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["REPL_SESSION_ID"] = "../../etc/passwd"
+    try:
+        daemon = ReplDaemon(root=ROOT)
+        daemon.call_tool("icc_exec", {"code": "x = 1"})
+        dirs = [p for p in (tmp_path / "state").iterdir() if p.is_dir()]
+        assert len(dirs) == 1
+        assert dirs[0].parent.resolve() == (tmp_path / "state").resolve()
+        assert ".." not in dirs[0].name
+        assert "/" not in dirs[0].name
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_explicit_dot_session_id_is_sanitized(tmp_path: Path):
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["REPL_SESSION_ID"] = "."
+    try:
+        daemon = ReplDaemon(root=ROOT)
+        daemon.call_tool("icc_exec", {"code": "x = 1"})
+        dirs = [p for p in (tmp_path / "state").iterdir() if p.is_dir()]
+        assert len(dirs) == 1
+        assert dirs[0].name != "."
+        assert dirs[0].resolve() != (tmp_path / "state").resolve()
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_corrupt_checkpoint_falls_back_to_wal_replay(tmp_path: Path):
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
+    os.environ["REPL_SESSION_ID"] = "checkpoint-corrupt"
+    try:
+        daemon1 = ReplDaemon(root=ROOT)
+        daemon1.call_tool("icc_exec", {"code": "x = 21"})
+        session_dir = tmp_path / "checkpoint-corrupt"
+        checkpoint = session_dir / "checkpoint.json"
+        checkpoint.write_text("{bad checkpoint", encoding="utf-8")
+
+        daemon2 = ReplDaemon(root=ROOT)
+        out = daemon2.call_tool("icc_exec", {"code": "print(x)"})
+        assert out.get("isError") is not True
+        assert "21" in out["content"][0]["text"]
+        recovery = session_dir / "recovery.json"
+        assert recovery.exists()
+        assert "invalid_checkpoint" in recovery.read_text(encoding="utf-8")
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)
+
+
+def test_exec_success_not_reversed_by_policy_bookkeeping_failure(tmp_path: Path):
+    os.environ["REPL_STATE_ROOT"] = str(tmp_path)
+    os.environ["REPL_SESSION_ID"] = "bookkeeping"
+    try:
+        daemon = ReplDaemon(root=ROOT)
+
+        def _raise(*args, **kwargs):  # type: ignore[no-untyped-def]
+            raise RuntimeError("registry broken")
+
+        daemon._record_exec_event = _raise  # type: ignore[method-assign]
+        out = daemon.call_tool("icc_exec", {"code": "print('ok')"})
+        assert out.get("isError") is not True
+        assert "ok" in out["content"][0]["text"]
+        assert "policy bookkeeping failed: registry broken" in out["content"][0]["text"]
+    finally:
+        os.environ.pop("REPL_STATE_ROOT", None)
+        os.environ.pop("REPL_SESSION_ID", None)

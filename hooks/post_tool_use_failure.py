@@ -10,9 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.policy_config import default_hook_state_root  # noqa: E402
-from scripts.state_tracker import load_tracker  # noqa: E402
-
-_BUDGET_CHARS = 800
+from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
 
 
 def main() -> None:
@@ -22,24 +20,23 @@ def main() -> None:
     except Exception:
         payload = {}
 
+    tool_name = payload.get("tool_name", "unknown")
+    error_text = str(payload.get("error", "unknown error"))
     state_path = Path(
         os.environ.get("CLAUDE_PLUGIN_DATA", str(default_hook_state_root()))
     ) / "state.json"
-    tracker = load_tracker(state_path)
 
-    token = tracker.format_recovery_token(budget_chars=_BUDGET_CHARS)
-    token_json = json.dumps(token, ensure_ascii=True, separators=(",", ":"))
-    context_text = (
-        f"Goal\n{token.get('goal') or 'Not set.'}\n\n"
-        f"Open Risks\n"
-        + ("\n".join(f"- {r}" for r in token.get("open_risks", [])) or "- None.")
-        + f"\n\nL1_5_TOKEN\n{token_json}"
-    )
+    try:
+        tracker = load_tracker(state_path)
+        tracker.mark_degraded(f"Tool failure: {tool_name} — {error_text[:120]}")
+        save_tracker(state_path, tracker)
+    except Exception as exc:
+        print(f"post_tool_use_failure: tracker update failed: {exc}", file=sys.stderr)
 
     out = {
         "hookSpecificOutput": {
-            "hookEventName": "PreCompact",
-            "additionalContext": context_text,
+            "hookEventName": "PostToolUseFailure",
+            "additionalContext": f"Tool {tool_name} failed: {error_text[:200]}",
         }
     }
     print(json.dumps(out))

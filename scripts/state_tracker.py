@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -9,23 +11,35 @@ from typing import Any
 LEVEL_CORE_CRITICAL = "core_critical"
 LEVEL_CORE_SECONDARY = "core_secondary"
 LEVEL_PERIPHERAL = "peripheral"
+MAX_GOAL_CHARS = 120
 
 
 class StateTracker:
     def __init__(self, state: dict[str, Any] | None = None) -> None:
-        self.state = state or {
-            "goal": "",
-            "open_risks": [],
-            "deltas": [],
-            "verification_state": "verified",
-            "consistency_window_ms": 0,
-        }
+        if state is None:
+            self.state = {
+                "goal": "",
+                "goal_source": "unset",
+                "open_risks": [],
+                "deltas": [],
+                "verification_state": "verified",
+                "consistency_window_ms": 0,
+            }
+        else:
+            self.state = _normalize_state(state)
 
-    def set_goal(self, goal: str) -> None:
-        self.state["goal"] = goal
+    def set_goal(self, goal: str, source: str = "unknown") -> None:
+        sanitized = str(goal).strip()
+        if len(sanitized) > MAX_GOAL_CHARS:
+            sanitized = sanitized[:MAX_GOAL_CHARS]
+        self.state["goal"] = sanitized
+        self.state["goal_source"] = source
 
     def set_consistency_window(self, window_ms: int) -> None:
-        self.state["consistency_window_ms"] = max(0, int(window_ms))
+        try:
+            self.state["consistency_window_ms"] = max(0, int(window_ms))
+        except Exception:
+            self.state["consistency_window_ms"] = 0
 
     def add_delta(
         self,
@@ -34,6 +48,7 @@ class StateTracker:
         verification_state: str = "verified",
         provisional: bool = False,
     ) -> str:
+        message = str(message).strip() or "(no message)"
         delta_id = f"d-{int(time.time() * 1000)}-{len(self.state['deltas'])}"
         self.state["deltas"].append(
             {
@@ -56,24 +71,22 @@ class StateTracker:
         self.add_risk(reason)
 
     def reconcile_delta(self, delta_id: str, outcome: str) -> None:
+        if outcome not in {"confirm", "correct", "retract"}:
+            raise ValueError(f"reconcile_delta: outcome must be confirm/correct/retract, got {outcome!r}")
         for delta in self.state["deltas"]:
             if delta["id"] == delta_id:
                 delta["provisional"] = False
-                if outcome in {"confirm", "correct", "retract"}:
-                    delta["reconcile_outcome"] = outcome
-                    if outcome == "retract":
-                        delta["verification_state"] = "degraded"
-                        self.state["verification_state"] = "degraded"
+                delta["reconcile_outcome"] = outcome
+                if outcome == "retract":
+                    delta["verification_state"] = "degraded"
+                    self.state["verification_state"] = "degraded"
                 break
 
     def can_auto_chain_high_risk_write(self) -> bool:
         return self.state.get("verification_state") != "degraded"
 
     def format_context(self, budget_chars: int | None = None) -> dict[str, str]:
-        deltas = list(self.state["deltas"])
-        critical = [d for d in deltas if d["level"] == LEVEL_CORE_CRITICAL]
-        secondary = [d for d in deltas if d["level"] == LEVEL_CORE_SECONDARY]
-        peripheral = [d for d in deltas if d["level"] == LEVEL_PERIPHERAL]
+        critical, secondary, peripheral = self._partition_deltas()
 
         delta_lines = [f"- {d['message']}" for d in critical]
         if secondary:
@@ -101,16 +114,186 @@ class StateTracker:
             "Open Risks": risks_text,
         }
 
+    def format_recovery_token(self, budget_chars: int | None = None) -> dict[str, Any]:
+        critical, secondary, peripheral = self._partition_deltas()
+        selected: list[dict[str, Any]] = [*critical, *secondary, *peripheral]
+        aggregated_secondary = 0
+        aggregated_peripheral = 0
+
+        if budget_chars:
+            encoded = json.dumps(selected, ensure_ascii=True, separators=(",", ":"))
+            if len(encoded) > budget_chars:
+                selected = [*critical]
+                aggregated_secondary = len(secondary)
+                aggregated_peripheral = len(peripheral)
+
+        token_deltas: list[dict[str, Any]] = []
+        for item in selected:
+            row = {
+                "id": str(item.get("id", "")),
+                "level": str(item.get("level", LEVEL_CORE_CRITICAL)),
+                "message": str(item.get("message", "")),
+                "verification_state": str(item.get("verification_state", "verified")),
+                "provisional": bool(item.get("provisional", False)),
+            }
+            if "reconcile_outcome" in item:
+                row["reconcile_outcome"] = str(item.get("reconcile_outcome", ""))
+            token_deltas.append(row)
+        if aggregated_secondary:
+            token_deltas.append(
+                {
+                    "id": "agg-secondary",
+                    "level": LEVEL_CORE_SECONDARY,
+                    "message": f"aggregated:{aggregated_secondary}",
+                    "verification_state": "verified",
+                    "provisional": False,
+                    "aggregated": True,
+                }
+            )
+        if aggregated_peripheral:
+            token_deltas.append(
+                {
+                    "id": "agg-peripheral",
+                    "level": LEVEL_PERIPHERAL,
+                    "message": f"aggregated:{aggregated_peripheral}",
+                    "verification_state": "verified",
+                    "provisional": False,
+                    "aggregated": True,
+                }
+            )
+
+        token: dict[str, Any] = {
+            "schema_version": "l15.v1",
+            "goal": self.state.get("goal") or "",
+            "goal_source": self.state.get("goal_source", "unset"),
+            "verification_state": self.state.get("verification_state", "verified"),
+            "consistency_window_ms": int(self.state.get("consistency_window_ms", 0) or 0),
+            "open_risks": [str(r) for r in self.state.get("open_risks", [])],
+            "deltas": token_deltas,
+        }
+        if budget_chars:
+            encoded = json.dumps(token, ensure_ascii=True, separators=(",", ":"))
+            if len(encoded) > budget_chars:
+                # Hard cap: truncate critical deltas to fit budget
+                kept: list[dict[str, Any]] = []
+                overhead = len(encoded) - sum(
+                    len(json.dumps(d, ensure_ascii=True, separators=(",", ":")))
+                    for d in token_deltas
+                )
+                budget_left = budget_chars - overhead
+                for d in token_deltas:
+                    s = json.dumps(d, ensure_ascii=True, separators=(",", ":"))
+                    if budget_left - len(s) - 2 >= 0:
+                        kept.append(d)
+                        budget_left -= len(s) + 2  # +2 for separator
+                    else:
+                        break
+                token["deltas"] = kept
+        return token
+
+    def format_additional_context(self, budget_chars: int | None = None) -> str:
+        context = self.format_context(budget_chars=budget_chars)
+        token = self.format_recovery_token(budget_chars=budget_chars)
+        token_json = json.dumps(token, ensure_ascii=True, separators=(",", ":"))
+        return (
+            f"Goal\n{context['Goal']}\n\n"
+            f"Delta\n{context['Delta']}\n\n"
+            f"Open Risks\n{context['Open Risks']}\n\n"
+            f"L1_5_TOKEN\n{token_json}"
+        )
+
+    def _partition_deltas(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        deltas = list(self.state["deltas"])
+        critical = [d for d in deltas if d["level"] == LEVEL_CORE_CRITICAL]
+        secondary = [d for d in deltas if d["level"] == LEVEL_CORE_SECONDARY]
+        peripheral = [d for d in deltas if d["level"] == LEVEL_PERIPHERAL]
+        return critical, secondary, peripheral
+
     def to_dict(self) -> dict[str, Any]:
         return self.state
 
 
+def _normalize_state(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {
+            "goal": "",
+            "goal_source": "unset",
+            "open_risks": [],
+            "deltas": [],
+            "verification_state": "verified",
+            "consistency_window_ms": 0,
+        }
+    goal = str(raw.get("goal", ""))
+    goal_source = str(raw.get("goal_source", "unset"))
+    if len(goal) > MAX_GOAL_CHARS:
+        goal = goal[:MAX_GOAL_CHARS]
+    verification_state = (
+        "degraded" if str(raw.get("verification_state", "verified")) == "degraded" else "verified"
+    )
+    try:
+        consistency_window_ms = max(0, int(raw.get("consistency_window_ms", 0)))
+    except Exception:
+        consistency_window_ms = 0
+
+    open_risks_raw = raw.get("open_risks", [])
+    open_risks = [str(item) for item in open_risks_raw] if isinstance(open_risks_raw, list) else []
+
+    deltas_raw = raw.get("deltas", [])
+    deltas: list[dict[str, Any]] = []
+    if isinstance(deltas_raw, list):
+        for item in deltas_raw:
+            if not isinstance(item, dict):
+                continue
+            delta_id = str(item.get("id", ""))
+            message = str(item.get("message", ""))
+            level = str(item.get("level", LEVEL_CORE_CRITICAL))
+            if level not in {LEVEL_CORE_CRITICAL, LEVEL_CORE_SECONDARY, LEVEL_PERIPHERAL}:
+                level = LEVEL_CORE_CRITICAL
+            delta_state = (
+                "degraded"
+                if str(item.get("verification_state", "verified")) == "degraded"
+                else "verified"
+            )
+            normalized = {
+                "id": delta_id or f"d-{int(time.time() * 1000)}-{len(deltas)}",
+                "message": message,
+                "level": level,
+                "verification_state": delta_state,
+                "provisional": bool(item.get("provisional", False)),
+            }
+            if "reconcile_outcome" in item:
+                normalized["reconcile_outcome"] = str(item["reconcile_outcome"])
+            deltas.append(normalized)
+
+    return {
+        "goal": goal,
+        "goal_source": goal_source,
+        "open_risks": open_risks,
+        "deltas": deltas,
+        "verification_state": verification_state,
+        "consistency_window_ms": consistency_window_ms,
+    }
+
+
 def load_tracker(path: Path) -> StateTracker:
     if path.exists():
-        return StateTracker(json.loads(path.read_text(encoding="utf-8")))
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return StateTracker()
+        return StateTracker(_normalize_state(raw))
     return StateTracker()
 
 
 def save_tracker(path: Path, tracker: StateTracker) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(tracker.to_dict(), ensure_ascii=True, indent=2), encoding="utf-8")
+    fd, tmp_path = tempfile.mkstemp(prefix="state-", suffix=".json", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+            json.dump(_normalize_state(tracker.to_dict()), tmp, ensure_ascii=True, indent=2)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)

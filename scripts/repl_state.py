@@ -11,18 +11,22 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from scripts.policy_config import default_repl_root
+
 
 class ReplState:
     """Persistent Python execution state for icc_exec."""
 
     def __init__(self, state_root: Path | None = None, session_id: str = "default") -> None:
         self._globals: dict[str, Any] = {"__builtins__": __builtins__}
-        base = state_root or (Path.home() / ".emerge" / "repl")
+        base = state_root or default_repl_root()
         self._session_dir = base / session_id
         self._wal_path = self._session_dir / "wal.jsonl"
         self._checkpoint_path = self._session_dir / "checkpoint.json"
+        self._recovery_path = self._session_dir / "recovery.json"
         self._seq = 0
         self._wal_seq_applied = 0
+        self._recovery_issues: list[dict[str, Any]] = []
         self._ensure_paths()
         self._restore_from_disk()
 
@@ -94,12 +98,25 @@ class ReplState:
 
     def _restore_from_disk(self) -> None:
         if self._checkpoint_path.exists():
-            checkpoint = json.loads(self._checkpoint_path.read_text(encoding="utf-8"))
-            restored = checkpoint.get("globals", {})
-            if isinstance(restored, dict):
-                self._globals.update(restored)
-            self._wal_seq_applied = int(checkpoint.get("wal_seq_applied", 0))
-            self._seq = self._wal_seq_applied
+            try:
+                checkpoint = json.loads(self._checkpoint_path.read_text(encoding="utf-8"))
+                if not isinstance(checkpoint, dict):
+                    raise ValueError("checkpoint must be a JSON object")
+                restored = checkpoint.get("globals", {})
+                if isinstance(restored, dict):
+                    self._globals.update(restored)
+                self._wal_seq_applied = int(checkpoint.get("wal_seq_applied", 0))
+                self._seq = self._wal_seq_applied
+            except Exception as exc:
+                self._recovery_issues.append(
+                    {
+                        "seq": -1,
+                        "error": f"invalid_checkpoint: {exc}",
+                        "code_preview": "checkpoint.json",
+                    }
+                )
+                self._wal_seq_applied = 0
+                self._seq = 0
         self._replay_wal_after_checkpoint()
 
     def _replay_wal_after_checkpoint(self) -> None:
@@ -110,18 +127,46 @@ class ReplState:
                 text = line.strip()
                 if not text:
                     continue
-                item = json.loads(text)
-                seq = int(item.get("seq", 0))
+                try:
+                    item = json.loads(text)
+                except Exception as exc:
+                    self._recovery_issues.append(
+                        {"seq": -1, "error": f"invalid_wal_json: {exc}", "code_preview": text[:200]}
+                    )
+                    continue
+                try:
+                    seq = int(item.get("seq", 0))
+                except Exception as exc:
+                    self._recovery_issues.append(
+                        {
+                            "seq": -1,
+                            "error": f"invalid_wal_seq: {exc}",
+                            "code_preview": text[:200],
+                        }
+                    )
+                    continue
                 self._seq = max(self._seq, seq)
                 if seq <= self._wal_seq_applied:
                     continue
                 if item.get("status") == "success":
                     code = str(item.get("code", ""))
-                    exec(code, self._globals, self._globals)
-                    self._wal_seq_applied = seq
+                    try:
+                        exec(code, self._globals, self._globals)
+                        self._wal_seq_applied = seq
+                    except Exception as exc:
+                        self._recovery_issues.append(
+                            {
+                                "seq": seq,
+                                "error": str(exc),
+                                "code_preview": code[:200],
+                            }
+                        )
+                        # Stop replay at first failed WAL step to avoid applying a non-prefix tail.
+                        break
         # Persist the new replay point so startup remains fast after crash recovery.
         if self._wal_seq_applied:
             self._write_checkpoint(self._wal_seq_applied)
+        self._write_recovery_status()
 
     def _append_wal(self, payload: dict[str, Any]) -> int:
         self._seq += 1
@@ -187,3 +232,22 @@ class ReplState:
                 out_dict[k] = encoded
             return out_dict
         return None
+
+    def _write_recovery_status(self) -> None:
+        body = {
+            "recovery_degraded": bool(self._recovery_issues),
+            "issues": self._recovery_issues[-20:],
+            "updated_at_ms": int(time.time() * 1000),
+        }
+        fd, tmp_path = tempfile.mkstemp(
+            prefix="recovery-", suffix=".json", dir=str(self._session_dir)
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+                json.dump(body, tmp, ensure_ascii=True, indent=2)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            os.replace(tmp_path, self._recovery_path)
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)

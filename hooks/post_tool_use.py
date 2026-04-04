@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from scripts.policy_config import default_hook_state_root  # noqa: E402
 from scripts.state_tracker import (  # noqa: E402
     LEVEL_CORE_CRITICAL,
     LEVEL_CORE_SECONDARY,
@@ -28,19 +29,23 @@ def _classify_level(tool_name: str) -> str:
 
 def main() -> None:
     payload_text = sys.stdin.read().strip()
-    payload = json.loads(payload_text) if payload_text else {}
+    try:
+        payload = json.loads(payload_text) if payload_text else {}
+    except Exception:
+        payload = {}
 
     tool_name = payload.get("tool_name", "")
-    result = payload.get("tool_result", {})
+    raw_result = payload.get("tool_result", {})
+    result = raw_result if isinstance(raw_result, dict) else {}
     state_path = Path(
-        os.environ.get("CLAUDE_PLUGIN_DATA", str(Path.home() / ".emerge" / "hook-state"))
+        os.environ.get("CLAUDE_PLUGIN_DATA", str(default_hook_state_root()))
     ) / "state.json"
     tracker = load_tracker(state_path)
 
     message = payload.get("delta_message") or f"Tool used: {tool_name or 'unknown'}"
     level = _classify_level(tool_name)
     provisional = bool(payload.get("provisional", False))
-    verification_state = result.get("verification_state", "verified")
+    verification_state = str(result.get("verification_state", "verified"))
     delta_id = tracker.add_delta(
         message=message,
         level=level,
@@ -55,23 +60,24 @@ def main() -> None:
     if isinstance(reconcile, dict) and "delta_id" in reconcile and "outcome" in reconcile:
         tracker.reconcile_delta(str(reconcile["delta_id"]), str(reconcile["outcome"]))
 
-    budget_chars = int(payload.get("budget_chars", 0)) or None
-    context = tracker.format_context(budget_chars=budget_chars)
+    raw_budget = payload.get("budget_chars", 0)
+    try:
+        budget_chars = int(raw_budget)
+        if budget_chars <= 0:
+            budget_chars = None
+    except Exception:
+        budget_chars = None
+    context_text = tracker.format_additional_context(budget_chars=budget_chars)
     save_tracker(state_path, tracker)
 
     output = {
-        "hookEventName": "PostToolUse",
         "hookSpecificOutput": {
-            "additionalContext": (
-                f"Goal\n{context['Goal']}\n\n"
-                f"Delta\n{context['Delta']}\n\n"
-                f"Open Risks\n{context['Open Risks']}"
-            )
-        },
-        "delta_id": delta_id,
+            "hookEventName": "PostToolUse",
+            "additionalContext": context_text,
+        }
     }
-    if "tool_result" in payload:
-        output["updatedMCPToolOutput"] = payload["tool_result"]
+    if isinstance(payload.get("tool_result"), dict):
+        output["hookSpecificOutput"]["updatedMCPToolOutput"] = payload["tool_result"]
     print(json.dumps(output))
 
 
