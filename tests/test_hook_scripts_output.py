@@ -21,7 +21,7 @@ def _run(script: str, payload: dict, data_dir: Path) -> str:
     return proc.stdout.strip()
 
 
-def _extract_l15_token(additional_context: str) -> dict:
+def _extract_flywheel_token(additional_context: str) -> dict:
     marker = "FLYWHEEL_TOKEN\n"
     assert marker in additional_context
     token_text = additional_context.rsplit(marker, 1)[1].strip()
@@ -38,7 +38,7 @@ def test_session_start_and_user_prompt_submit_output_parseable(tmp_path: Path):
     u_json = json.loads(u_out)
     assert u_json["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
     assert "Goal" in u_json["hookSpecificOutput"]["additionalContext"]
-    token = _extract_l15_token(u_json["hookSpecificOutput"]["additionalContext"])
+    token = _extract_flywheel_token(u_json["hookSpecificOutput"]["additionalContext"])
     assert token["schema_version"] == "flywheel.v1"
     assert "deltas" in token
     assert token["goal_source"] in {"unset", "hook_payload"}
@@ -57,7 +57,7 @@ def test_post_tool_use_and_pre_compact_contract(tmp_path: Path):
     p_json = json.loads(p_out)
     assert p_json["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
     assert "additionalContext" in p_json["hookSpecificOutput"]
-    token = _extract_l15_token(p_json["hookSpecificOutput"]["additionalContext"])
+    token = _extract_flywheel_token(p_json["hookSpecificOutput"]["additionalContext"])
     assert token["schema_version"] == "flywheel.v1"
     assert token["deltas"]
 
@@ -134,7 +134,7 @@ def test_post_tool_use_tolerates_non_object_tool_result(tmp_path: Path):
 def test_session_start_without_goal_does_not_write_default_goal(tmp_path: Path):
     out = _run("session_start.py", {}, tmp_path)
     parsed = json.loads(out)
-    token = _extract_l15_token(parsed["hookSpecificOutput"]["additionalContext"])
+    token = _extract_flywheel_token(parsed["hookSpecificOutput"]["additionalContext"])
     assert token["goal"] == ""
     assert token["goal_source"] == "unset"
 
@@ -144,7 +144,7 @@ def test_goal_is_capped_and_source_marked(tmp_path: Path):
     _run("session_start.py", {"goal": long_goal}, tmp_path)
     out = _run("user_prompt_submit.py", {}, tmp_path)
     parsed = json.loads(out)
-    token = _extract_l15_token(parsed["hookSpecificOutput"]["additionalContext"])
+    token = _extract_flywheel_token(parsed["hookSpecificOutput"]["additionalContext"])
     assert len(token["goal"]) == 120
     assert token["goal_source"] == "hook_payload"
 

@@ -63,22 +63,13 @@ class EmergeDaemon:
         if not (intent_signature and script_ref and base_pipeline_id):
             return None
 
-        key = f"l15::{base_pipeline_id}::{intent_signature}::{script_ref}"
-        session_dir = self._state_root / self._base_session_id
-        candidates_path = session_dir / "candidates.json"
-        candidates_data = self._load_json_object(candidates_path, root_key="candidates")
-        candidate = candidates_data.get("candidates", {}).get(key)
-        if not isinstance(candidate, dict):
-            return None
-        if str(candidate.get("status", "explore")) != "stable":
-            return None
-
+        key = self._bridge_candidate_key(base_pipeline_id, intent_signature, script_ref)
         pipelines_path = self._state_root / "pipelines-registry.json"
         pipelines_data = self._load_json_object(pipelines_path, root_key="pipelines")
-        pipeline_entry = pipelines_data.get("pipelines", {}).get(f"pipeline::{base_pipeline_id}")
-        if not isinstance(pipeline_entry, dict):
+        bridge_entry = pipelines_data.get("pipelines", {}).get(key)
+        if not isinstance(bridge_entry, dict):
             return None
-        if str(pipeline_entry.get("status", "explore")) not in ("canary", "stable"):
+        if str(bridge_entry.get("status", "explore")) != "stable":
             return None
 
         parts = base_pipeline_id.split(".", 2)
@@ -248,7 +239,8 @@ class EmergeDaemon:
             if promoted is not None:
                 response = {"isError": False, "content": [{"type": "text", "text": json.dumps(promoted)}]}
                 try:
-                    tool_for_event = "icc_read" if promoted.get("pipeline_id", "").split(".")[1] == "read" else "icc_write"
+                    _pid_parts = promoted.get("pipeline_id", "").split(".")
+                    tool_for_event = "icc_read" if len(_pid_parts) >= 2 and _pid_parts[1] == "read" else "icc_write"
                     self._record_pipeline_event(
                         tool_name=tool_for_event,
                         arguments=arguments,
@@ -306,8 +298,15 @@ class EmergeDaemon:
             try:
                 _read_client = self._runner_router.find_client(arguments) if self._runner_router else None
                 if _read_client is not None:
-                    result = _read_client.call_tool("icc_read", arguments)
-                    text = str(result.get("content", [{}])[0].get("text", ""))
+                    _runner_result = _read_client.call_tool("icc_read", arguments)
+                    if _runner_result.get("pipeline_missing"):
+                        raise PipelineMissingError(
+                            connector=str(_runner_result.get("connector", "")),
+                            mode=str(_runner_result.get("mode", "read")),
+                            pipeline=str(_runner_result.get("pipeline", "")),
+                            searched="remote runner",
+                        )
+                    text = str(_runner_result.get("content", [{}])[0].get("text", ""))
                     payload = json.loads(text)
                     if not isinstance(payload, dict):
                         raise ValueError("runner icc_read payload must be an object")
@@ -365,8 +364,15 @@ class EmergeDaemon:
             try:
                 _write_client = self._runner_router.find_client(arguments) if self._runner_router else None
                 if _write_client is not None:
-                    result = _write_client.call_tool("icc_write", arguments)
-                    text = str(result.get("content", [{}])[0].get("text", ""))
+                    _runner_result = _write_client.call_tool("icc_write", arguments)
+                    if _runner_result.get("pipeline_missing"):
+                        raise PipelineMissingError(
+                            connector=str(_runner_result.get("connector", "")),
+                            mode=str(_runner_result.get("mode", "write")),
+                            pipeline=str(_runner_result.get("pipeline", "")),
+                            searched="remote runner",
+                        )
+                    text = str(_runner_result.get("content", [{}])[0].get("text", ""))
                     payload = json.loads(text)
                     if not isinstance(payload, dict):
                         raise ValueError("runner icc_write payload must be an object")
@@ -437,6 +443,9 @@ class EmergeDaemon:
                         "isError": True,
                         "content": [{"type": "text", "text": f"icc_crystallize: mode must be 'read' or 'write', got {mode!r}"}],
                     }
+                _crystallize_client = self._runner_router.find_client(arguments) if self._runner_router else None
+                if _crystallize_client is not None:
+                    return _crystallize_client.call_tool("icc_crystallize", arguments)
                 return self._crystallize(
                     intent_signature=intent_signature,
                     connector=connector,
@@ -949,7 +958,7 @@ class EmergeDaemon:
         entry = registry["candidates"].get(
             key,
             {
-                "source": "l15_composed" if key.startswith("l15::") else "pipeline",
+                "source": "flywheel_composed" if key.startswith("flywheel::") else "pipeline",
                 "pipeline_id": pipeline_id,
                 "target_profile": target_profile,
                 "intent_signature": intent_signature or pipeline_id,
@@ -1060,7 +1069,7 @@ class EmergeDaemon:
                 # Signal that this exec candidate can be crystallized into a pipeline
                 intent_sig = entry.get("intent_signature", "")
                 if intent_sig and not candidate_key.startswith("pipeline::"):
-                    if self._has_synthesizable_wal_entry(intent_sig):
+                    if self._has_synthesizable_wal_entry(intent_sig, entry.get("target_profile", "default")):
                         pipeline["synthesis_ready"] = True
                         try:
                             self._sink.emit(
@@ -1195,7 +1204,7 @@ class EmergeDaemon:
 
     @staticmethod
     def _bridge_candidate_key(pipeline_id: str, intent_signature: str, script_ref: str) -> str:
-        return f"l15::{pipeline_id}::{intent_signature}::{script_ref}"
+        return f"flywheel::{pipeline_id}::{intent_signature}::{script_ref}"
 
     def _resolve_exec_candidate_key(self, *, arguments: dict[str, Any], target_profile: str) -> str:
         intent_signature = str(arguments.get("intent_signature", "")).strip()
@@ -1258,14 +1267,20 @@ class EmergeDaemon:
             return
         result["content"] = [{"type": "text", "text": f"warning:\n{warning}"}]
 
-    def _has_synthesizable_wal_entry(self, intent_signature: str) -> bool:
-        """Return True if the current session's WAL has at least one success entry
+    def _has_synthesizable_wal_entry(self, intent_signature: str, target_profile: str = "default") -> bool:
+        """Return True if the WAL for the given profile has at least one success entry
         with no_replay=False for the given intent_signature.
         """
         if not intent_signature:
             return False
-        session_dir = self._state_root / self._base_session_id
-        wal_path = session_dir / "wal.jsonl"
+        normalized = (target_profile or "default").strip() or "default"
+        profile_key = "__default__" if normalized == "default" else derive_profile_token(normalized)
+        session_id = (
+            self._base_session_id
+            if normalized == "default"
+            else f"{self._base_session_id}__{profile_key}"
+        )
+        wal_path = self._state_root / session_id / "wal.jsonl"
         if not wal_path.exists():
             return False
         try:

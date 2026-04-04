@@ -162,7 +162,7 @@ def test_icc_write_participates_in_pipeline_lifecycle_registry(tmp_path: Path):
         os.environ.pop("EMERGE_SESSION_ID", None)
 
 
-def test_l15_composed_key_can_be_shared_by_exec_and_pipeline(tmp_path: Path):
+def test_flywheel_composed_key_can_be_shared_by_exec_and_pipeline(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "compose"
     try:
@@ -190,7 +190,7 @@ def test_l15_composed_key_can_be_shared_by_exec_and_pipeline(tmp_path: Path):
         )
         registry = tmp_path / "state" / "compose" / "candidates.json"
         data = json.loads(registry.read_text(encoding="utf-8"))
-        key = "l15::mock.write.add-wall::zwcad.plan.wall::connectors/zwcad/actions/plan_wall.py"
+        key = "flywheel::mock.write.add-wall::zwcad.plan.wall::connectors/zwcad/actions/plan_wall.py"
         assert data["candidates"][key]["total_calls"] == 2
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
@@ -568,39 +568,27 @@ def test_icc_reconcile_in_tools_list():
     assert reconcile_tool.get("_internal") is True
 
 
-def test_l15_exec_routes_to_pipeline_when_stable(tmp_path):
-    """When L1.5 candidate is stable AND pipeline is canary/stable, icc_exec is redirected."""
+def test_flywheel_exec_routes_to_pipeline_when_stable(tmp_path):
+    """When flywheel bridge candidate is stable in pipelines-registry, icc_exec is redirected."""
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["EMERGE_SESSION_ID"] = "l15-promote-test"
+    os.environ["EMERGE_SESSION_ID"] = "flywheel-promote-test"
     try:
         daemon = EmergeDaemon(root=ROOT)
-        session_dir = tmp_path / "state" / daemon._base_session_id
-        session_dir.mkdir(parents=True, exist_ok=True)
 
-        candidates = {
-            "candidates": {
-                "l15::mock.read.layers::zwcad.plan.read::connectors/zwcad/read.py": {
-                    "status": "stable",
-                    "attempts": 40, "successes": 40, "verify_passes": 40,
-                    "human_fixes": 0, "degraded_count": 0, "consecutive_failures": 0,
-                    "recent_outcomes": [1] * 20, "total_calls": 40, "last_ts_ms": 0,
-                    "source": "l15_composed", "pipeline_id": "mock.read.layers",
-                    "intent_signature": "zwcad.plan.read",
-                    "script_ref": "connectors/zwcad/read.py",
-                }
-            }
-        }
-        (session_dir / "candidates.json").write_text(json.dumps(candidates))
-
+        # Status lives in pipelines-registry.json, keyed by the bridge candidate key
+        bridge_key = "flywheel::mock.read.layers::zwcad.plan.read::connectors/zwcad/read.py"
         pipelines = {
             "pipelines": {
-                "pipeline::mock.read.layers": {
-                    "status": "canary", "rollout_pct": 20,
+                bridge_key: {
+                    "status": "stable", "rollout_pct": 100,
                     "success_rate": 1.0, "verify_rate": 1.0,
+                    "consecutive_failures": 0,
                 }
             }
         }
-        (tmp_path / "state" / "pipelines-registry.json").write_text(json.dumps(pipelines))
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "pipelines-registry.json").write_text(json.dumps(pipelines))
 
         out = daemon.call_tool("icc_exec", {
             "code": "x = 1",
@@ -617,26 +605,25 @@ def test_l15_exec_routes_to_pipeline_when_stable(tmp_path):
         os.environ.pop("EMERGE_SESSION_ID", None)
 
 
-def test_l15_exec_does_not_promote_when_candidate_is_canary(tmp_path):
-    """When L1.5 candidate is only canary, exec runs normally (no promotion)."""
+def test_flywheel_exec_does_not_promote_when_candidate_is_canary(tmp_path):
+    """When flywheel bridge candidate is only canary, exec runs normally (no promotion)."""
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["EMERGE_SESSION_ID"] = "l15-canary-test"
+    os.environ["EMERGE_SESSION_ID"] = "flywheel-canary-test"
     try:
         daemon = EmergeDaemon(root=ROOT)
-        session_dir = tmp_path / "state" / daemon._base_session_id
-        session_dir.mkdir(parents=True, exist_ok=True)
 
-        candidates = {
-            "candidates": {
-                "l15::mock.read.layers::zwcad.plan.read::connectors/zwcad/read.py": {
-                    "status": "canary",
-                    "attempts": 20, "successes": 20, "verify_passes": 20,
-                    "human_fixes": 0, "consecutive_failures": 0,
-                    "recent_outcomes": [1] * 20, "total_calls": 20, "last_ts_ms": 0,
+        bridge_key = "flywheel::mock.read.layers::zwcad.plan.read::connectors/zwcad/read.py"
+        pipelines = {
+            "pipelines": {
+                bridge_key: {
+                    "status": "canary", "rollout_pct": 20,
+                    "success_rate": 1.0, "verify_rate": 1.0,
                 }
             }
         }
-        (session_dir / "candidates.json").write_text(json.dumps(candidates))
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "pipelines-registry.json").write_text(json.dumps(pipelines))
 
         out = daemon.call_tool("icc_exec", {
             "code": "print('hello')",
@@ -741,3 +728,46 @@ def test_icc_write_pipeline_missing_returns_structured_fallback(tmp_path):
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+
+
+def test_runner_pipeline_missing_propagates_as_structured_response(tmp_path):
+    """PipelineMissingError from remote runner must reach caller as pipeline_missing, not isError."""
+    from scripts.remote_runner import RunnerExecutor
+    os.environ["EMERGE_SESSION_ID"] = "runner-pm-test"
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path / "connectors")
+    try:
+        executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
+        result = executor.run("icc_read", {"connector": "missing", "pipeline": "nope"})
+        assert result.get("isError") is not True
+        assert result.get("pipeline_missing") is True
+        assert result.get("connector") == "missing"
+        assert result.get("pipeline") == "nope"
+
+        result_w = executor.run("icc_write", {"connector": "missing", "pipeline": "nope"})
+        assert result_w.get("isError") is not True
+        assert result_w.get("pipeline_missing") is True
+    finally:
+        os.environ.pop("EMERGE_SESSION_ID", None)
+        os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+
+
+def test_has_synthesizable_wal_entry_checks_profile_wal(tmp_path):
+    """synthesis_ready check must read the profile-specific WAL, not the default WAL."""
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "wal-profile-test"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        # Execute with a non-default profile — WAL lands in profile-specific session dir
+        daemon.call_tool("icc_exec", {
+            "code": "__result = [1]",
+            "intent_signature": "test.read.profiled",
+            "target_profile": "gpu-worker",
+            "no_replay": False,
+        })
+        # _has_synthesizable_wal_entry with correct profile must find it
+        assert daemon._has_synthesizable_wal_entry("test.read.profiled", "gpu-worker") is True
+        # Default profile WAL does NOT have it
+        assert daemon._has_synthesizable_wal_entry("test.read.profiled", "default") is False
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
