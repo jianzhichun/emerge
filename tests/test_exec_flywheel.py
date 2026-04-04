@@ -260,6 +260,41 @@ def test_stable_rolls_back_on_window_failure_rate(tmp_path: Path):
         os.environ.pop("REPL_SESSION_ID", None)
 
 
+def test_synthesis_ready_flag_set_on_canary_promotion(tmp_path):
+    """synthesis_ready is set when an exec candidate reaches canary and WAL has code."""
+    import json, os
+    from pathlib import Path
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.policy_config import PROMOTE_MIN_ATTEMPTS
+
+    ROOT = Path(__file__).resolve().parents[1]
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "synth-test"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        # Run enough successful icc_exec calls to cross the promote threshold
+        for i in range(PROMOTE_MIN_ATTEMPTS):
+            daemon.call_tool("icc_exec", {
+                "code": f"__result = [{{'i': {i}}}]",
+                "intent_signature": "test.read.synth",
+                "no_replay": False,
+            })
+        registry_path = tmp_path / "state" / "pipelines-registry.json"
+        assert registry_path.exists()
+        data = json.loads(registry_path.read_text())
+        entries = data.get("pipelines", {})
+        synth_entry = next(
+            (v for k, v in entries.items() if "test.read.synth" in k),
+            None,
+        )
+        assert synth_entry is not None, "no registry entry found for test.read.synth"
+        assert synth_entry.get("status") == "canary", f"expected canary, got {synth_entry.get('status')}"
+        assert synth_entry.get("synthesis_ready") is True
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
 def test_exec_degraded_argument_is_not_trusted_for_policy_counters(tmp_path: Path):
     os.environ["REPL_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["REPL_SESSION_ID"] = "flywheel"

@@ -895,6 +895,22 @@ class EmergeDaemon:
                 transitioned = True
                 reason = "promotion_threshold_met"
                 pipeline["rollout_pct"] = 20
+                # Signal that this exec candidate can be crystallized into a pipeline
+                intent_sig = entry.get("intent_signature", "")
+                if intent_sig and not candidate_key.startswith("pipeline::"):
+                    if self._has_synthesizable_wal_entry(intent_sig):
+                        pipeline["synthesis_ready"] = True
+                        try:
+                            self._sink.emit(
+                                "policy.synthesis_ready",
+                                {
+                                    "candidate_key": candidate_key,
+                                    "intent_signature": intent_sig,
+                                    "session_id": self._base_session_id,
+                                },
+                            )
+                        except Exception:
+                            pass
         elif status == "canary":
             if consecutive_failures >= ROLLBACK_CONSECUTIVE_FAILURES:
                 status = "explore"
@@ -1057,6 +1073,36 @@ class EmergeDaemon:
             content.append({"type": "text", "text": f"warning:\n{warning}"})
             return
         result["content"] = [{"type": "text", "text": f"warning:\n{warning}"}]
+
+    def _has_synthesizable_wal_entry(self, intent_signature: str) -> bool:
+        """Return True if the current session's WAL has at least one success entry
+        with no_replay=False for the given intent_signature.
+        """
+        if not intent_signature:
+            return False
+        session_dir = self._state_root / self._base_session_id
+        wal_path = session_dir / "wal.jsonl"
+        if not wal_path.exists():
+            return False
+        try:
+            with wal_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if (
+                        entry.get("status") == "success"
+                        and not entry.get("no_replay", False)
+                        and entry.get("metadata", {}).get("intent_signature") == intent_signature
+                    ):
+                        return True
+        except OSError:
+            pass
+        return False
 
     @staticmethod
     def _load_json_object(path: Path, *, root_key: str) -> dict[str, Any]:
