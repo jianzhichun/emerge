@@ -6,6 +6,11 @@ from scripts.observer_plugin import ObserverPlugin
 class FilesystemObserver(ObserverPlugin):
     """Polls a watched directory for file changes."""
 
+    def __init__(self) -> None:
+        self._watch_path = Path(".")
+        self._active = False
+        self._last_scan: dict[str, float] = {}
+
     def start(self, config: dict) -> None:
         self._watch_path = Path(config.get("path", ".")).expanduser()
         self._last_scan: dict[str, float] = {}
