@@ -204,7 +204,7 @@ flowchart LR
     PC[PreCompact — serialize recovery token]
   end
 
-  subgraph call [Per tool call]
+  subgraph percall [Per tool call]
     PTU[PreToolUse — validate args]
     EX[Tool executes]
     POTU[PostToolUse — record Delta]
