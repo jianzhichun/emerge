@@ -23,7 +23,8 @@ class AccessibilityObserver(ObserverPlugin):
                      'tell application "System Events" to get name of first process whose frontmost is true'],
                     capture_output=True, text=True, timeout=2,
                 )
-                ctx["focused_app"] = result.stdout.strip()
+                if result.returncode == 0:
+                    ctx["focused_app"] = result.stdout.strip()
         except Exception:
             pass
         return ctx

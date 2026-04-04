@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+_log = logging.getLogger(__name__)
 
 
 class ObserverPlugin(ABC):
@@ -108,5 +111,6 @@ class AdapterRegistry:
             if cls is None:
                 return None
             return cls()
-        except Exception:
+        except Exception as exc:
+            _log.warning("AdapterRegistry: failed to load adapter %r from %s: %s", name, path, exc)
             return None
