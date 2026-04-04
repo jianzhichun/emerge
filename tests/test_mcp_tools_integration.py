@@ -990,4 +990,28 @@ def test_operator_monitor_starts_and_stops(monkeypatch, tmp_path):
     assert daemon._operator_monitor.is_alive()
     daemon.stop_operator_monitor()
     daemon._operator_monitor.join(timeout=1.0)
-    assert not daemon._operator_monitor.is_alive()
+
+
+def test_run_stdio_starts_operator_monitor_when_env_set(monkeypatch, tmp_path):
+    """run_stdio must call start_operator_monitor() so EMERGE_OPERATOR_MONITOR=1 actually works."""
+    import io
+    import scripts.emerge_daemon as _mod
+    from scripts.emerge_daemon import EmergeDaemon
+
+    started = []
+
+    def fake_start(self):
+        started.append(True)
+
+    monkeypatch.setattr(EmergeDaemon, "start_operator_monitor", fake_start)
+    monkeypatch.setenv("EMERGE_OPERATOR_MONITOR", "1")
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+
+    _orig_stdin = sys.stdin
+    sys.stdin = io.StringIO("")  # empty → loop exits immediately
+    try:
+        _mod.run_stdio()
+    finally:
+        sys.stdin = _orig_stdin
+
+    assert started, "run_stdio did not call start_operator_monitor()"

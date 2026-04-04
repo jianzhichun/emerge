@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,8 @@ from scripts.policy_config import (  # noqa: E402
 )
 from scripts.runner_client import RunnerRouter  # noqa: E402
 from scripts.exec_session import ExecSession  # noqa: E402
+
+_stdout_lock = threading.Lock()
 
 
 class _RunnerClientAdapter:
@@ -1578,12 +1581,17 @@ class EmergeDaemon:
 
     def _write_mcp_push(self, payload: dict) -> None:
         """Write a JSON-RPC notification/request to stdout for CC to receive."""
-        sys.stdout.write(json.dumps(payload) + "\n")
-        sys.stdout.flush()
+        line = json.dumps(payload) + "\n"
+        with _stdout_lock:
+            sys.stdout.write(line)
+            sys.stdout.flush()
 
 
 def run_stdio() -> None:
+    import atexit
     daemon = EmergeDaemon()
+    daemon.start_operator_monitor()
+    atexit.register(daemon.stop_operator_monitor)
     for line in sys.stdin:
         text = line.strip()
         if not text:
@@ -1597,8 +1605,9 @@ def run_stdio() -> None:
                 "error": {"code": -32700, "message": f"Parse error: {exc}"},
             }
             if resp is not None:
-                sys.stdout.write(json.dumps(resp) + "\n")
-                sys.stdout.flush()
+                with _stdout_lock:
+                    sys.stdout.write(json.dumps(resp) + "\n")
+                    sys.stdout.flush()
             continue
         try:
             resp = daemon.handle_jsonrpc(req)
@@ -1609,8 +1618,9 @@ def run_stdio() -> None:
                 "error": {"code": -32603, "message": str(exc)},
             }
         if resp is not None:
-            sys.stdout.write(json.dumps(resp) + "\n")
-            sys.stdout.flush()
+            with _stdout_lock:
+                sys.stdout.write(json.dumps(resp) + "\n")
+                sys.stdout.flush()
 
 
 if __name__ == "__main__":
