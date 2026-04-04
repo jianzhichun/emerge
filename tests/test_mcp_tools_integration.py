@@ -696,6 +696,44 @@ def test_icc_read_pipeline_missing_returns_structured_fallback(tmp_path):
         os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
 
 
+def test_icc_reconcile_correct_increments_human_fixes(tmp_path):
+    """icc_reconcile(outcome=correct, intent_signature=X) must increment human_fixes
+    on the matching candidate, which affects human_fix_rate in the policy registry."""
+    import json, os
+    from pathlib import Path
+    from scripts.emerge_daemon import EmergeDaemon
+
+    ROOT = Path(__file__).resolve().parents[1]
+    state_root = tmp_path / "state"
+    os.environ["EMERGE_STATE_ROOT"] = str(state_root)
+    os.environ["EMERGE_SESSION_ID"] = "reconcile-fix-test"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        # Run one exec to create a candidate
+        daemon.call_tool("icc_exec", {
+            "code": "x = 1",
+            "intent_signature": "test.write.fixme",
+        })
+        # Reconcile with correct — simulates human correcting AI output
+        daemon.call_tool("icc_reconcile", {
+            "delta_id": "fake-delta",
+            "outcome": "correct",
+            "intent_signature": "test.write.fixme",
+        })
+        # Read candidates.json and verify human_fixes incremented
+        session_dir = state_root / "reconcile-fix-test"
+        cands = json.loads((session_dir / "candidates.json").read_text())
+        matched = [
+            v for k, v in cands["candidates"].items()
+            if "test.write.fixme" in k
+        ]
+        assert matched, "no candidate found for test.write.fixme"
+        assert matched[0]["human_fixes"] >= 1, "human_fixes not incremented"
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
 def test_icc_write_pipeline_missing_returns_structured_fallback(tmp_path):
     import os
     from pathlib import Path

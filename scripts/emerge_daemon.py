@@ -451,6 +451,7 @@ class EmergeDaemon:
         if name == "icc_reconcile":
             delta_id = str(arguments.get("delta_id", "")).strip()
             outcome = str(arguments.get("outcome", "")).strip()
+            intent_signature = str(arguments.get("intent_signature", "")).strip()
             if not delta_id:
                 return {"isError": True, "content": [{"type": "text", "text": "icc_reconcile: delta_id is required"}]}
             if outcome not in ("confirm", "correct", "retract"):
@@ -462,9 +463,13 @@ class EmergeDaemon:
             tracker.reconcile_delta(delta_id, outcome)
             save_tracker(state_path, tracker)
             td = tracker.to_dict()
+            # When outcome=correct and intent_signature provided, increment human_fixes
+            if outcome == "correct" and intent_signature:
+                self._increment_human_fix(intent_signature)
             return {"isError": False, "content": [{"type": "text", "text": json.dumps({
                 "delta_id": delta_id,
                 "outcome": outcome,
+                "intent_signature": intent_signature or None,
                 "verification_state": td.get("verification_state", "unverified"),
                 "goal": td.get("goal", ""),
             })}]}
@@ -555,13 +560,14 @@ class EmergeDaemon:
                         },
                         {
                             "name": "icc_reconcile",
-                            "description": "Reconcile a state tracker delta — confirm, correct, or retract a recorded observation. Not auto-recommended; call directly when needed.",
+                            "description": "Reconcile a state tracker delta — confirm, correct, or retract a recorded observation. Pass intent_signature with outcome=correct to register a human fix against the policy flywheel.",
                             "_internal": True,
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "delta_id": {"type": "string", "description": "ID of the delta to reconcile"},
                                     "outcome": {"type": "string", "enum": ["confirm", "correct", "retract"], "description": "Reconciliation outcome"},
+                                    "intent_signature": {"type": "string", "description": "Intent signature of the exec/pipeline being corrected (required when outcome=correct to update human_fix_rate)"},
                                 },
                                 "required": ["delta_id", "outcome"],
                             },
@@ -1162,6 +1168,28 @@ class EmergeDaemon:
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
+
+    def _increment_human_fix(self, intent_signature: str) -> None:
+        """Increment human_fixes on the most recent candidate matching intent_signature.
+
+        Searches all candidate entries in the current session's candidates.json.
+        Updates candidates.json so human_fix_rate flows into the next policy evaluation.
+        """
+        session_dir = self._state_root / self._base_session_id
+        candidates_path = session_dir / "candidates.json"
+        if not candidates_path.exists():
+            return
+        registry = self._load_json_object(candidates_path, root_key="candidates")
+        updated = False
+        for key, entry in registry["candidates"].items():
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("intent_signature", "")) == intent_signature:
+                entry["human_fixes"] = int(entry.get("human_fixes", 0)) + 1
+                registry["candidates"][key] = entry
+                updated = True
+        if updated:
+            self._atomic_write_json(candidates_path, registry)
 
     def _resolve_script_roots(self) -> list[Path]:
         raw = os.environ.get("REPL_SCRIPT_ROOTS", "").strip()
