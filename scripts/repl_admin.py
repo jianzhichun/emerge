@@ -394,7 +394,7 @@ def cmd_runner_deploy(
     """Push local scripts/ to remote runner via icc_exec (HTTP) and signal hot-reload.
 
     Only deploys runner-side scripts (excludes dev-machine-only tools like
-    repl_admin.py and repl_daemon.py).  The remote path is derived from the
+    repl_admin.py and emerge_daemon.py).  The remote path is derived from the
     runner's own /status endpoint so no path needs to be hardcoded here.
     """
     import base64

@@ -8,10 +8,10 @@
     {
       "name": "emerge",
       "source": "./",
-      "description": "Generic RWB flywheel plugin for Claude Code — read/write/balance pipelines with policy enforcement and remote runner support.",
+      "description": "Emerge muscle memory flywheel for Claude Code — exec history crystallizes into pipelines, policy flywheel promotes stable patterns to native speed.",
       "version": "0.2.0",
       "category": "development",
-      "tags": ["flywheel", "pipeline", "mcp", "repl", "automation"],
+      "tags": ["flywheel", "pipeline", "mcp", "crystallize", "automation"],
       "strict": true
     }
   ],

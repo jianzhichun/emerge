@@ -804,7 +804,6 @@ class EmergeDaemon:
         script_ref = str(arguments.get("script_ref", ""))
         base_pipeline_id = str(arguments.get("base_pipeline_id", "")).strip()
         trusted_verify_passed = not is_error
-        trusted_human_fix = False
         event = {
             "ts_ms": int(time.time() * 1000),
             "source": "exec",
@@ -814,7 +813,7 @@ class EmergeDaemon:
             "script_ref": script_ref,
             "base_pipeline_id": base_pipeline_id,
             "verify_passed": trusted_verify_passed,
-            "human_fix": trusted_human_fix,
+            "human_fix": False,  # incremented via icc_reconcile(outcome=correct), not at execution time
             "is_error": is_error,
             "sampled_in_policy": sampled_in_policy,
         }
@@ -871,8 +870,7 @@ class EmergeDaemon:
                 entry["successes"] += 1
             if trusted_verify_passed:
                 entry["verify_passes"] += 1
-            if trusted_human_fix:
-                entry["human_fixes"] += 1
+            # human_fixes incremented via _increment_human_fix() on icc_reconcile(outcome=correct)
         is_degraded = False
         failed_attempt = (is_error or is_degraded) and sampled_in_policy
         if sampled_in_policy and is_degraded:
@@ -909,7 +907,6 @@ class EmergeDaemon:
         intent_signature = str(result.get("intent_signature", ""))
         target_profile = str(arguments.get("target_profile", "default"))
         verify_passed = str(result.get("verification_state", "")).lower() == "verified"
-        trusted_human_fix = False
         key = self._resolve_pipeline_candidate_key(arguments=arguments, pipeline_id=pipeline_id)
         sampled_in_policy = self._should_sample(key)
         if is_error:
@@ -924,7 +921,7 @@ class EmergeDaemon:
             "intent_signature": intent_signature,
             "script_ref": pipeline_id,
             "verify_passed": verify_passed,
-            "human_fix": trusted_human_fix,
+            "human_fix": False,  # incremented via icc_reconcile(outcome=correct), not at execution time
             "is_error": is_error,
             "sampled_in_policy": sampled_in_policy,
             "error": error_text,
@@ -996,8 +993,7 @@ class EmergeDaemon:
                 entry["successes"] += 1
             if event["verify_passed"]:
                 entry["verify_passes"] += 1
-            if trusted_human_fix:
-                entry["human_fixes"] += 1
+            # human_fixes incremented via _increment_human_fix() on icc_reconcile(outcome=correct)
         is_degraded = str(result.get("verification_state", "")).lower() == "degraded"
         failed_attempt = (is_error or is_degraded) and sampled_in_policy
         if sampled_in_policy and is_degraded:
