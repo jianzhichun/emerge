@@ -744,15 +744,6 @@ class EmergeDaemon:
                 {"name": "goal", "description": "What to explore", "required": False},
             ],
         },
-        {
-            "name": "icc_promote",
-            "description": "Promote an exec history into a formalized pipeline",
-            "arguments": [
-                {"name": "intent_signature", "description": "Intent signature of the exec", "required": True},
-                {"name": "script_ref", "description": "Path to the script that was executed", "required": True},
-                {"name": "connector", "description": "Target connector name", "required": True},
-            ],
-        },
     ]
 
     def _get_prompt(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -764,18 +755,6 @@ class EmergeDaemon:
                 f"Include intent_signature='<intent>' and script_ref='~/.emerge/connectors/{vertical}/pipelines/read/state.py' "
                 f"in each icc_exec call so the policy flywheel can track progress.\n"
                 f"When the exec is stable and consistent, use icc_read with connector='{vertical}' to verify the pipeline works."
-            )
-            return {"name": name, "messages": [{"role": "user", "content": content}]}
-        if name == "icc_promote":
-            sig = str(arguments.get("intent_signature", ""))
-            ref = str(arguments.get("script_ref", ""))
-            connector = str(arguments.get("connector", ""))
-            content = (
-                f"Promote the exec pattern '{sig}' (script: {ref}) to a formal {connector} pipeline.\n"
-                f"1. Create ~/.emerge/connectors/{connector}/pipelines/read/<name>.yaml and <name>.py\n"
-                f"2. Implement run_read() and verify_read() in the .py file\n"
-                f"3. Call icc_read with connector='{connector}' to verify it works\n"
-                f"4. The intent_signature in the yaml must match '{sig}'"
             )
             return {"name": name, "messages": [{"role": "user", "content": content}]}
         raise KeyError(f"Prompt not found: {name}")

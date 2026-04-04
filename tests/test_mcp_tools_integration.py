@@ -505,12 +505,11 @@ def test_resources_read_pipeline_uri_rejects_path_traversal():
 
 # ── Task 7: MCP prompts ──────────────────────────────────────────────────────
 
-def test_prompts_list_returns_icc_explore_and_icc_promote():
+def test_prompts_list_returns_icc_explore():
     daemon = ReplDaemon(root=ROOT)
     resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 60, "method": "prompts/list", "params": {}})
     names = [p["name"] for p in resp["result"]["prompts"]]
     assert "icc_explore" in names
-    assert "icc_promote" in names
 
 
 def test_prompts_get_icc_explore():
@@ -520,18 +519,6 @@ def test_prompts_get_icc_explore():
     result = resp["result"]
     assert result["name"] == "icc_explore"
     assert isinstance(result["messages"], list) and result["messages"]
-    assert "zwcad" in result["messages"][0]["content"]
-
-
-def test_prompts_get_icc_promote():
-    daemon = ReplDaemon(root=ROOT)
-    resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 62, "method": "prompts/get",
-                                  "params": {"name": "icc_promote",
-                                             "arguments": {"intent_signature": "zwcad.read.state",
-                                                           "script_ref": "connectors/zwcad/read.py",
-                                                           "connector": "zwcad"}}})
-    result = resp["result"]
-    assert result["name"] == "icc_promote"
     assert "zwcad" in result["messages"][0]["content"]
 
 
