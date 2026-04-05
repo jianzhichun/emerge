@@ -1,11 +1,13 @@
 from __future__ import annotations
 import sys
 from pathlib import Path
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+_CHOICE_SPEC = {"type": "choice", "body": "接管？", "options": ["好", "不用"]}
+_INPUT_SPEC = {"type": "input", "body": "你在做什么？", "prefill": "草稿"}
 
 
 def test_local_notifier_calls_show_notify(monkeypatch):
@@ -13,51 +15,43 @@ def test_local_notifier_calls_show_notify(monkeypatch):
     from scripts.notify_dispatcher import LocalNotifier
 
     monkeypatch.setattr(popup_mod, "show_notify",
-        lambda stage, message, intent_draft="", timeout_s=0:
-            {"action": "confirm", "intent": "test intent"})
-
-    notifier = LocalNotifier()
-    result = notifier.notify(stage="explore", message="msg", intent_draft="draft")
-    assert result["action"] == "confirm"
-    assert result["intent"] == "test intent"
+        lambda spec: {"action": "selected", "value": spec["options"][0]})
+    result = LocalNotifier().notify(_CHOICE_SPEC)
+    assert result == {"action": "selected", "value": "好"}
 
 
 def test_local_notifier_returns_skip_on_error(monkeypatch):
     import scripts.operator_popup as popup_mod
     from scripts.notify_dispatcher import LocalNotifier
 
-    def raise_err(stage, message, intent_draft="", timeout_s=0):
+    def raise_err(spec):
         raise RuntimeError("no display")
 
     monkeypatch.setattr(popup_mod, "show_notify", raise_err)
-
-    notifier = LocalNotifier()
-    result = notifier.notify(stage="canary", message="msg")
+    result = LocalNotifier().notify(_CHOICE_SPEC)
     assert result["action"] == "skip"
     assert "error" in result
 
 
-def test_remote_notifier_calls_runner_client(monkeypatch):
+def test_remote_notifier_calls_runner_client():
     from scripts.notify_dispatcher import RemoteNotifier
 
     class FakeClient:
-        def notify(self, stage, message, intent_draft="", timeout_s=0):
-            return {"action": "takeover", "intent": ""}
+        def notify(self, ui_spec):
+            return {"action": "selected", "value": ui_spec["options"][0]}
 
-    notifier = RemoteNotifier(client=FakeClient())
-    result = notifier.notify(stage="canary", message="接管？")
-    assert result["action"] == "takeover"
+    result = RemoteNotifier(client=FakeClient()).notify(_CHOICE_SPEC)
+    assert result == {"action": "selected", "value": "好"}
 
 
-def test_remote_notifier_returns_skip_on_error(monkeypatch):
+def test_remote_notifier_returns_skip_on_error():
     from scripts.notify_dispatcher import RemoteNotifier
 
     class FailClient:
-        def notify(self, stage, message, intent_draft="", timeout_s=0):
+        def notify(self, ui_spec):
             raise RuntimeError("connection refused")
 
-    notifier = RemoteNotifier(client=FailClient())
-    result = notifier.notify(stage="canary", message="msg")
+    result = RemoteNotifier(client=FailClient()).notify(_CHOICE_SPEC)
     assert result["action"] == "skip"
     assert "error" in result
 
@@ -65,25 +59,20 @@ def test_remote_notifier_returns_skip_on_error(monkeypatch):
 def test_dispatcher_uses_remote_when_runner_available(monkeypatch):
     from scripts.notify_dispatcher import NotificationDispatcher
 
-    mcp_calls = []
     remote_calls = []
 
     class FakeRouter:
         def find_client(self, args):
             class C:
-                def notify(self, stage, message, intent_draft="", timeout_s=0):
-                    remote_calls.append(stage)
-                    return {"action": "takeover", "intent": ""}
+                def notify(self, ui_spec):
+                    remote_calls.append(ui_spec["type"])
+                    return {"action": "selected", "value": "好"}
             return C()
 
-    dispatcher = NotificationDispatcher(
-        mcp_push_fn=lambda stage, msg: mcp_calls.append(stage),
-        runner_router=FakeRouter(),
-    )
-    result = dispatcher.dispatch(stage="canary", message="msg")
-    assert result["action"] == "takeover"
-    assert mcp_calls == ["canary"]   # MCP always fires
-    assert remote_calls == ["canary"]  # remote used
+    dispatcher = NotificationDispatcher(runner_router=FakeRouter())
+    result = dispatcher.dispatch(_CHOICE_SPEC)
+    assert result == {"action": "selected", "value": "好"}
+    assert remote_calls == ["choice"]
 
 
 def test_dispatcher_falls_back_to_local_when_no_runner(monkeypatch):
@@ -91,22 +80,13 @@ def test_dispatcher_falls_back_to_local_when_no_runner(monkeypatch):
     from scripts.notify_dispatcher import NotificationDispatcher
 
     monkeypatch.setattr(popup_mod, "show_notify",
-        lambda stage, message, intent_draft="", timeout_s=0:
-            {"action": "confirm", "intent": "local"})
+        lambda spec: {"action": "confirmed", "value": "local"})
 
-    mcp_calls = []
-    dispatcher = NotificationDispatcher(
-        mcp_push_fn=lambda stage, msg: mcp_calls.append(stage),
-        runner_router=None,
-    )
-    result = dispatcher.dispatch(stage="explore", message="msg", intent_draft="draft")
-    assert result["action"] == "confirm"
-    assert result["intent"] == "local"
-    assert mcp_calls == ["explore"]
+    result = NotificationDispatcher(runner_router=None).dispatch(_INPUT_SPEC)
+    assert result == {"action": "confirmed", "value": "local"}
 
 
-def test_dispatcher_machines_param_selects_runner(monkeypatch):
-    """machine_ids[0] is used as target_profile for runner selection."""
+def test_dispatcher_machine_ids_selects_runner_profile(monkeypatch):
     from scripts.notify_dispatcher import NotificationDispatcher
 
     selected_profiles = []
@@ -115,13 +95,10 @@ def test_dispatcher_machines_param_selects_runner(monkeypatch):
         def find_client(self, args):
             selected_profiles.append(args.get("target_profile"))
             class C:
-                def notify(self, stage, message, intent_draft="", timeout_s=0):
-                    return {"action": "manual", "intent": ""}
+                def notify(self, ui_spec): return {"action": "selected", "value": ""}
             return C()
 
-    dispatcher = NotificationDispatcher(
-        mcp_push_fn=lambda *a: None,
-        runner_router=FakeRouter(),
+    NotificationDispatcher(runner_router=FakeRouter()).dispatch(
+        _CHOICE_SPEC, machine_ids=["mycader-1"]
     )
-    dispatcher.dispatch(stage="canary", message="msg", machine_ids=["mycader-1"])
     assert selected_profiles == ["mycader-1"]

@@ -1,28 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
 
 class LocalNotifier:
     """Shows operator_popup dialog directly in the current process."""
 
-    def notify(
-        self,
-        stage: str,
-        message: str,
-        intent_draft: str = "",
-        timeout_s: int = 0,
-    ) -> dict[str, Any]:
+    def notify(self, ui_spec: dict) -> dict[str, Any]:
         try:
             from scripts.operator_popup import show_notify
-            return show_notify(
-                stage=stage,
-                message=message,
-                intent_draft=intent_draft,
-                timeout_s=timeout_s,
-            )
+            return show_notify(ui_spec)
         except Exception as exc:
-            return {"action": "skip", "intent": "", "error": str(exc)}
+            return {"action": "skip", "value": "", "error": str(exc)}
 
 
 class RemoteNotifier:
@@ -31,81 +20,36 @@ class RemoteNotifier:
     def __init__(self, client: Any) -> None:
         self._client = client
 
-    def notify(
-        self,
-        stage: str,
-        message: str,
-        intent_draft: str = "",
-        timeout_s: int = 0,
-    ) -> dict[str, Any]:
+    def notify(self, ui_spec: dict) -> dict[str, Any]:
         try:
-            return self._client.notify(
-                stage=stage,
-                message=message,
-                intent_draft=intent_draft,
-                timeout_s=timeout_s,
-            )
+            return self._client.notify(ui_spec)
         except Exception as exc:
-            return {"action": "skip", "intent": "", "error": str(exc)}
+            return {"action": "skip", "value": "", "error": str(exc)}
 
 
 class NotificationDispatcher:
-    """Routes notifications to remote runner or local fallback.
+    """Routes OS-native dialog to remote runner or local fallback.
 
-    Always co-fires mcp_push_fn (non-blocking CC path) then dispatches
-    to OS-native dialog and waits for the operator's response.
+    MCP push is the daemon's responsibility; this class handles only the
+    OS dialog routing. CC calls this via icc_exec when it decides to engage
+    the operator.
     """
 
-    def __init__(
-        self,
-        mcp_push_fn: Callable[[str, str], None],
-        runner_router: Any | None = None,
-    ) -> None:
-        self._mcp_push = mcp_push_fn
+    def __init__(self, runner_router: Any | None = None) -> None:
         self._router = runner_router
 
     def dispatch(
         self,
-        stage: str,
-        message: str,
-        intent_draft: str = "",
-        timeout_s: int = 0,
+        ui_spec: dict,
         machine_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Send notification via MCP (non-blocking) and OS dialog (blocking).
+        """Route ui_spec dialog to remote runner or local Tkinter.
 
-        Returns the operator's response dict from the OS dialog.
+        Returns operator response: {action, value}.
         """
-        # Always push to CC (fire-and-forget)
-        try:
-            self._mcp_push(stage, message)
-        except Exception:
-            pass
-
-        # OS dialog: remote first, local fallback
-        return self._notify_os(stage, message, intent_draft, timeout_s, machine_ids)
-
-    def _notify_os(
-        self,
-        stage: str,
-        message: str,
-        intent_draft: str,
-        timeout_s: int,
-        machine_ids: list[str] | None,
-    ) -> dict[str, Any]:
         if self._router is not None:
             profile = (machine_ids or [None])[0] or "default"
             client = self._router.find_client({"target_profile": profile})
             if client is not None:
-                return RemoteNotifier(client).notify(
-                    stage=stage,
-                    message=message,
-                    intent_draft=intent_draft,
-                    timeout_s=timeout_s,
-                )
-        return LocalNotifier().notify(
-            stage=stage,
-            message=message,
-            intent_draft=intent_draft,
-            timeout_s=timeout_s,
-        )
+                return RemoteNotifier(client).notify(ui_spec)
+        return LocalNotifier().notify(ui_spec)
