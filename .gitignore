@@ -63,3 +63,4 @@ docs/paper/neurips2024.zip
 *.pem
 *.key
 secrets.json
+.mcp.json
