@@ -553,3 +553,103 @@ def test_connector_export_missing_connector_returns_error(tmp_path):
     )
     assert result["ok"] is False
     assert "nonexistent" in result["error"]
+
+
+def _make_pkg(tmp_path: Path, connector: str = "mycon") -> Path:
+    """Helper: build a valid connector zip package."""
+    src_root = tmp_path / "src_connectors"
+    connector_dir = src_root / connector / "pipelines" / "read"
+    connector_dir.mkdir(parents=True)
+    (connector_dir / "state.py").write_text("# state")
+    (connector_dir / "state.yaml").write_text("pipeline: state")
+
+    state_root = tmp_path / "src_repl"
+    state_root.mkdir(exist_ok=True)
+    (state_root / "pipelines-registry.json").write_text(json.dumps({
+        "pipelines": {f"pipeline::{connector}.read.state": {"status": "explore", "rollout_pct": 0}}
+    }))
+
+    out_zip = tmp_path / f"{connector}-pkg.zip"
+    repl_admin.cmd_connector_export(
+        connector=connector,
+        out=str(out_zip),
+        connector_root=src_root,
+        state_root=state_root,
+    )
+    return out_zip
+
+
+def test_connector_import_extracts_files_and_merges_registry(tmp_path):
+    """Import unpacks connector files and merges registry entries."""
+    pkg = _make_pkg(tmp_path)
+
+    dest_connector_root = tmp_path / "dest_connectors"
+    dest_connector_root.mkdir()
+    dest_state_root = tmp_path / "dest_repl"
+    dest_state_root.mkdir()
+    (dest_state_root / "pipelines-registry.json").write_text(json.dumps({"pipelines": {}}))
+
+    result = repl_admin.cmd_connector_import(
+        pkg=str(pkg),
+        overwrite=False,
+        connector_root=dest_connector_root,
+        state_root=dest_state_root,
+    )
+
+    assert result["ok"] is True
+    assert result["connector"] == "mycon"
+    assert (dest_connector_root / "mycon" / "pipelines" / "read" / "state.py").exists()
+    assert "pipeline::mycon.read.state" in result["pipelines_merged"]
+    assert result["pipelines_skipped"] == []
+
+    reg = json.loads((dest_state_root / "pipelines-registry.json").read_text())
+    assert "pipeline::mycon.read.state" in reg["pipelines"]
+
+
+def test_connector_import_conflict_no_overwrite_returns_error(tmp_path):
+    """Import returns error when connector dir exists and --overwrite not set."""
+    pkg = _make_pkg(tmp_path)
+
+    dest_connector_root = tmp_path / "dest_connectors"
+    existing = dest_connector_root / "mycon"
+    existing.mkdir(parents=True)
+    dest_state_root = tmp_path / "dest_repl"
+    dest_state_root.mkdir()
+
+    result = repl_admin.cmd_connector_import(
+        pkg=str(pkg),
+        overwrite=False,
+        connector_root=dest_connector_root,
+        state_root=dest_state_root,
+    )
+
+    assert result["ok"] is False
+    assert "overwrite" in result["error"].lower() or "exists" in result["error"].lower()
+
+
+def test_connector_import_overwrite_replaces_files_and_registry(tmp_path):
+    """Import with overwrite=True replaces existing connector and registry entries."""
+    pkg = _make_pkg(tmp_path)
+
+    dest_connector_root = tmp_path / "dest_connectors"
+    existing_file = dest_connector_root / "mycon" / "pipelines" / "read" / "state.py"
+    existing_file.parent.mkdir(parents=True)
+    existing_file.write_text("# old")
+
+    dest_state_root = tmp_path / "dest_repl"
+    dest_state_root.mkdir()
+    (dest_state_root / "pipelines-registry.json").write_text(json.dumps({
+        "pipelines": {"pipeline::mycon.read.state": {"status": "stable", "rollout_pct": 100}}
+    }))
+
+    result = repl_admin.cmd_connector_import(
+        pkg=str(pkg),
+        overwrite=True,
+        connector_root=dest_connector_root,
+        state_root=dest_state_root,
+    )
+
+    assert result["ok"] is True
+    assert existing_file.read_text() == "# state"
+    reg = json.loads((dest_state_root / "pipelines-registry.json").read_text())
+    assert reg["pipelines"]["pipeline::mycon.read.state"]["status"] == "explore"
