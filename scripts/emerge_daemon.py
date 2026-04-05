@@ -1507,7 +1507,6 @@ class EmergeDaemon:
         from scripts.notify_dispatcher import NotificationDispatcher
 
         self._notification_dispatcher = NotificationDispatcher(
-            mcp_push_fn=self._mcp_push_simple,
             runner_router=self._runner_router,
         )
 

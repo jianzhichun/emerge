@@ -1141,35 +1141,14 @@ def test_hypermesh_icc_write_participates_in_pipeline_lifecycle_registry(tmp_pat
         os.environ.pop("EMERGE_SESSION_ID", None)
 
 
-def test_push_pattern_fires_both_mcp_and_os_notify(monkeypatch, tmp_path):
-    """_push_pattern co-fires MCP push and OS notify dispatcher."""
-    import scripts.operator_popup as popup_mod
+def test_push_pattern_explore_sends_channel_notification(monkeypatch, tmp_path):
+    """_push_pattern for explore stage sends a channel notification. (Task 5 will extend to all stages.)"""
     from scripts.pattern_detector import PatternSummary
     from scripts.emerge_daemon import EmergeDaemon
-    from scripts.notify_dispatcher import NotificationDispatcher
-
-    notify_calls = []
-    monkeypatch.setattr(
-        popup_mod, "show_notify",
-        lambda stage, message, intent_draft="", timeout_s=0: (
-            notify_calls.append({"stage": stage, "message": message})
-            or {"action": "skip", "intent": ""}
-        ),
-    )
 
     daemon = EmergeDaemon(root=ROOT)
-
     mcp_calls = []
-
-    def tracking_write(payload):
-        mcp_calls.append(payload.get("method", payload.get("id", "?")))
-
-    monkeypatch.setattr(daemon, "_write_mcp_push", tracking_write)
-
-    daemon._notification_dispatcher = NotificationDispatcher(
-        mcp_push_fn=lambda stage, msg: None,
-        runner_router=None,
-    )
+    monkeypatch.setattr(daemon, "_write_mcp_push", lambda payload: mcp_calls.append(payload))
 
     summary = PatternSummary(
         machine_ids=["local"],
@@ -1178,12 +1157,12 @@ def test_push_pattern_fires_both_mcp_and_os_notify(monkeypatch, tmp_path):
         window_minutes=10.0,
         detector_signals=["frequency"],
         context_hint={"app": "hypermesh", "samples": []},
-        policy_stage="canary",
+        policy_stage="explore",
     )
-    daemon._push_pattern("canary", {"app": "hypermesh"}, summary)
+    daemon._push_pattern("explore", {"app": "hypermesh"}, summary)
 
-    assert len(notify_calls) == 1
-    assert notify_calls[0]["stage"] == "canary"
+    assert len(mcp_calls) == 1
+    assert mcp_calls[0]["method"] == "notifications/claude/channel"
 
 
 def test_runner_client_notify_posts_to_notify_endpoint(tmp_path):
