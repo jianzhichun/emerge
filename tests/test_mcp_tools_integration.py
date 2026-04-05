@@ -1238,3 +1238,93 @@ def test_runner_client_adapter_uses_no_proxy_opener(monkeypatch):
     assert result == []
     # urlopen should NOT have been called (proxy-bypassing opener is used instead)
     assert calls == [], f"Raw urlopen called — proxy bypass missing: {calls}"
+
+
+# ---------------------------------------------------------------------------
+# cloud-server e2e flywheel (YAML-driven)
+# ---------------------------------------------------------------------------
+
+def test_cloud_server_read_state_pipeline_returns_structured_rows(tmp_path: Path):
+    """RED→GREEN: cloud-server read/state pipeline returns structured env health rows."""
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "cs-read"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        out = daemon.handle_jsonrpc(
+            {
+                "jsonrpc": "2.0",
+                "id": 400,
+                "method": "tools/call",
+                "params": {
+                    "name": "icc_read",
+                    "arguments": {"connector": "cloud-server", "pipeline": "state"},
+                },
+            }
+        )
+        assert out["result"]["isError"] is False, out["result"]["content"][0]["text"]
+        body = json.loads(out["result"]["content"][0]["text"])
+        assert body["pipeline_id"] == "cloud-server.read.state"
+        assert body["verify_result"]["ok"] is True
+        rows = body["rows"]
+        assert isinstance(rows, list) and len(rows) > 0
+        # Each row must carry: id, name, status — the minimal e2e health shape
+        assert all("id" in r and "name" in r and "status" in r for r in rows), rows
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_cloud_server_write_apply_test_pipeline_enforces_policy(tmp_path: Path):
+    """RED→GREEN: cloud-server write/apply-test pipeline executes a YAML scenario and returns policy fields."""
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "cs-write"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        out = daemon.handle_jsonrpc(
+            {
+                "jsonrpc": "2.0",
+                "id": 401,
+                "method": "tools/call",
+                "params": {
+                    "name": "icc_write",
+                    "arguments": {
+                        "connector": "cloud-server",
+                        "pipeline": "apply-test",
+                        "scenario": "health-check",
+                    },
+                },
+            }
+        )
+        assert out["result"]["isError"] is False, out["result"]["content"][0]["text"]
+        body = json.loads(out["result"]["content"][0]["text"])
+        assert body["verification_state"] == "verified"
+        assert "policy_enforced" in body
+        assert "stop_triggered" in body
+        assert "rollback_executed" in body
+        # scenario name must be echoed so caller knows which YAML ran
+        assert body["action_result"].get("scenario") == "health-check"
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_cloud_server_policy_registry_tracks_pipeline_key(tmp_path: Path):
+    """RED→GREEN: cloud-server pipeline keys appear in policy registry after calls."""
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "cs-policy"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        for _ in range(3):
+            daemon.call_tool("icc_read", {"connector": "cloud-server", "pipeline": "state"})
+            daemon.call_tool(
+                "icc_write",
+                {"connector": "cloud-server", "pipeline": "apply-test", "scenario": "health-check"},
+            )
+        reg = tmp_path / "state" / "pipelines-registry.json"
+        assert reg.exists(), "registry file not created"
+        data = json.loads(reg.read_text(encoding="utf-8"))
+        assert "pipeline::cloud-server.read.state" in data["pipelines"]
+        assert "pipeline::cloud-server.write.apply-test" in data["pipelines"]
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
