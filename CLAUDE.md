@@ -15,8 +15,11 @@ python -m pytest tests/test_mcp_tools_integration.py::test_increment_human_fix_t
 # Run the daemon manually (dev)
 python3 scripts/emerge_daemon.py
 
-# Runner bootstrap (remote setup)
+# Runner bootstrap (remote setup, first time only)
 python3 scripts/repl_admin.py runner-bootstrap --ssh-target "user@host" --target-profile "key" --runner-url "http://host:8787"
+
+# Runner deploy (push updated scripts + hot-reload watchdog — use after any scripts/ change)
+python3 scripts/repl_admin.py runner-deploy --target-profile mycader-1
 
 # Runner status
 python3 scripts/repl_admin.py runner-status --pretty

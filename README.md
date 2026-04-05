@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/version-v0.2.0-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-190%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-192%20passing-brightgreen?logo=pytest)
 
 **Emerge** is a Claude Code plugin (v0.2.0) that implements a **muscle-memory flywheel**: repeated work is tracked via `icc_exec`, promoted through a **policy registry** (explore → canary → stable), and can be **crystallized** into connector pipelines so the same tasks run as structured `icc_read` / `icc_write` instead of ad-hoc code.
 
@@ -206,7 +206,7 @@ flowchart LR
 | `icc_crystallize` | Generate `.py` + `.yaml` pipeline files from WAL history. Call when `synthesis_ready: true` appears in `policy://current`. Always writes locally. |
 | `icc_reconcile` | Confirm or correct a state delta. `outcome=correct` + `intent_signature` increments `human_fix_rate` on the most-recently-used matching candidate. |
 
-**Resources:** `policy://current` · `runner://status` · `state://deltas` · `pipeline://{connector}/{mode}/{name}`
+**Resources:** `policy://current` · `runner://status` · `state://deltas` · `pipeline://{connector}/{mode}/{name}` · `connector://{vertical}/notes`
 
 **Prompts:** `icc_explore`
 
@@ -245,7 +245,7 @@ flowchart LR
 python -m pytest tests -q
 ```
 
-Current baseline: **190** tests passing.
+Current baseline: **192** tests passing.
 
 ## Repository layout
 

@@ -81,3 +81,29 @@ assert len(summaries) == 1
 No registration step needed — `AdapterRegistry` auto-discovers any directory under
 `~/.emerge/adapters/` that contains `adapter.py` with an `ObserverPlugin` subclass.
 Restart the daemon (or send SIGHUP if supported) after placing a new adapter file.
+
+## Windows COM Verticals (ZWCAD, AutoCAD, Excel…)
+
+COM objects are **thread-local** (STA apartment model). Each `icc_exec` call may run on a different thread, so COM objects do not survive across calls.
+
+**Rule**: always `CoInitialize` + `Dispatch` at the top of every `icc_exec` call that touches COM. Never cache COM objects across calls.
+
+```python
+import pythoncom, win32com.client
+pythoncom.CoInitialize()
+app = win32com.client.Dispatch("ZwCAD.Application")   # reconnect every call
+```
+
+Non-COM Python objects (dicts, lists, numpy arrays) ARE safe to reuse across calls — ExecSession globals persist within a session.
+
+**Runner must be in Session 1** (interactive desktop) for COM/GUI to work. Verify:
+```python
+import os, ctypes
+sid = ctypes.c_ulong(0)
+ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(sid))
+assert sid.value >= 1, f"wrong session: {sid.value}"
+```
+
+If `sid == 0`: reboot the Windows runner host — the registry autostart (`HKCU\...\Run`) will re-launch the watchdog in Session 1 at next logon. SSH-triggered restarts always land in Session 0.
+
+Vertical-specific COM patterns (ProgID, object model quirks, error codes) belong in `~/.emerge/connectors/<vertical>/NOTES.md`, not in this skill.

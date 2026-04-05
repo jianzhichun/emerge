@@ -503,6 +503,41 @@ def test_resources_read_pipeline_uri_rejects_path_traversal():
         assert "error" in resp, f"Expected error for traversal URI {uri!r}, got {resp}"
 
 
+def test_resources_connector_notes_listed_and_readable(tmp_path):
+    """connector://<vertical>/notes is listed and returns NOTES.md content."""
+    # Create a mock connector with NOTES.md in the test connector root
+    notes_path = ROOT / "NOTES.md"  # ROOT is tests/connectors/mock — use mock connector root
+    # Find the actual connector root used by tests
+    import os
+    connector_root = Path(os.environ.get("EMERGE_CONNECTOR_ROOT", "tests/connectors"))
+    mock_notes = connector_root / "mock" / "NOTES.md"
+    mock_notes.write_text("# Mock Notes\ntest content", encoding="utf-8")
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        # Listed
+        resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 60, "method": "resources/list", "params": {}})
+        uris = [r["uri"] for r in resp["result"]["resources"]]
+        assert "connector://mock/notes" in uris
+        # Readable
+        resp2 = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 61, "method": "resources/read",
+                                       "params": {"uri": "connector://mock/notes"}})
+        resource = resp2["result"]["resource"]
+        assert resource["mimeType"] == "text/markdown"
+        assert "Mock Notes" in resource["text"]
+    finally:
+        mock_notes.unlink(missing_ok=True)
+
+
+def test_resources_connector_notes_rejects_path_traversal():
+    """connector:// resource must not serve files outside connector roots."""
+    daemon = EmergeDaemon(root=ROOT)
+    for uri in ["connector://../etc/notes", "connector://../../etc/passwd/notes"]:
+        resp = daemon.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 62, "method": "resources/read", "params": {"uri": uri}}
+        )
+        assert "error" in resp, f"Expected error for {uri!r}"
+
+
 # ── Task 7: MCP prompts ──────────────────────────────────────────────────────
 
 def test_prompts_list_returns_icc_explore():

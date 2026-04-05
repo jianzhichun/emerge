@@ -105,23 +105,41 @@ pathlib.Path('<plugin_root>/.watchdog-restart').touch()
 
 ### Windows — interactive session required for GUI/COM
 
-COM objects (ZWCAD, AutoCAD, Excel, etc.) and GUI automation are **session-scoped**. A process can only access COM objects created in its own Windows session. SSH spawns a new session → COM fails with `RPC server unavailable`.
+COM objects (ZWCAD, AutoCAD, Excel, etc.) and GUI automation are **session-scoped**. A process can only access COM objects created in its own Windows session.
 
-**Fix**: launch watchdog from the user's **interactive desktop session** (RDP or console):
+**The session trap**: several approaches silently land the runner in **Session 0** (background service context) where COM/GUI calls fail:
 
+| Launch method | Session | GUI/COM |
+|---|---|---|
+| SSH exec / `start /B` | Session 0 | ✗ fails |
+| `schtasks /run` from SSH | Session 0 | ✗ fails |
+| `schtasks /create /sc onlogon` triggered at actual logon | Session 1+ | ✓ works |
+| Registry `HKCU\...\Run` at logon | Session 1+ | ✓ works |
+| Double-click VBS from desktop | Session 1+ | ✓ works |
+
+**Verify the session** before debugging COM errors:
+```python
+import os, ctypes
+session_id = ctypes.c_ulong(0)
+ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session_id))
+print(session_id.value)  # must be ≥ 1; 0 = wrong session
+```
+
+**Fix**: register the watchdog in the user's logon autostart via registry (correct session guaranteed):
+```bat
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" ^
+  /v EmergeRunner /t REG_SZ ^
+  /d "wscript.exe C:\Users\<user>\.emerge\start_emerge_runner.vbs" /f
+```
+
+**If runner is already running in Session 0**, you must reboot (or log off/on) to get a clean Session 1 start — killing and restarting via SSH will land back in Session 0. After reboot the registry entry auto-starts the runner in the correct session.
+
+The `start_emerge_runner.vbs` (created by `runner-bootstrap`):
 ```vbs
-' start_emerge_runner.vbs — double-click from desktop, no window appears
 Set sh = CreateObject("WScript.Shell")
 sh.CurrentDirectory = "<plugin_root>"
 sh.Run """<pythonw>"" ""<plugin_root>\scripts\runner_watchdog.py"" --host 0.0.0.0 --port <N>", 0, False
 ```
-
-Register for auto-start at logon:
-```bat
-schtasks /Create /F /SC ONLOGON /RU <user> /IT /TN "EmergeRunner" /TR "wscript.exe \"<vbs_path>\""
-```
-
-`/IT` = only run when user is interactively logged on (correct session).
 
 ### Linux/Mac — standard nohup launch
 
@@ -132,6 +150,23 @@ nohup python3 scripts/runner_watchdog.py --host 0.0.0.0 --port <N> \
 ```
 
 No session isolation issues. `runner-bootstrap` handles this automatically.
+
+## ExecSession — Persistent Globals and COM Limitations
+
+`icc_exec` calls to the same `target_profile` share one `ExecSession` (a persistent Python process). Globals survive across calls — like a Jupyter notebook cell:
+
+```python
+# call 1 — import once
+import numpy as np
+data = np.array([1, 2, 3])
+
+# call 2 — data and np are still in scope, no re-import needed
+print(data.mean())
+```
+
+**Exception: Windows COM objects** — COM apartments are thread-local; COM objects do not survive across calls. See `writing-vertical-adapter` skill (Windows COM Verticals section) and `~/.emerge/connectors/<vertical>/NOTES.md` for vertical-specific patterns.
+
+Non-COM globals (dicts, numpy arrays, plain objects) are safe to reuse across calls — skip redundant imports after the first call.
 
 ## self-contained Import
 
@@ -198,5 +233,8 @@ These two endpoints are consumed by `OperatorMonitor` in the daemon when `EMERGE
 | SCP/tar pipe to deploy on Windows | Binary corruption. Use `runner-deploy`. |
 | `runner-bootstrap` to push code changes | Bootstrap skips deploy when runner is healthy. Use `runner-deploy`. |
 | curl/urllib returns 502 | Local `http_proxy` intercepting. Use `NO_PROXY=<host>` or `ProxyHandler({})`. |
-| Windows: runner starts but COM fails | Watchdog was launched via SSH, not from the RDP desktop. Restart from desktop. |
+| Windows: runner starts but COM fails | Runner is in Session 0. Verify with `ProcessIdToSessionId`. Fix: reboot so registry autostart fires in Session 1, or user double-clicks VBS. Never SSH-exec to fix — SSH always creates Session 0. |
+| `schtasks /run` from SSH for GUI runner | Still Session 0. `schtasks /run` ignores the interactive session. Only actual logon triggers Session 1. |
 | `ModuleNotFoundError: scripts.pipeline_engine` | Missing `sys.path` self-insert in `remote_runner.py`. |
+| COM object works in call 1, fails in call 2 with "not connected to server" | COM apartments are thread-local. See `writing-vertical-adapter` skill → Windows COM Verticals. |
+| Redundant `import json` / `import pathlib` in every call | ExecSession globals persist across calls for the same profile — only import once. Exception: COM. |

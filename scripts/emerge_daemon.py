@@ -73,7 +73,7 @@ class EmergeDaemon:
         self.pipeline = PipelineEngine(root=resolved_root)
         self._root = resolved_root
         self._script_roots = self._resolve_script_roots()
-        self._runner_router = RunnerRouter.from_env()
+        self._runner_router = RunnerRouter.from_env()  # cached; refreshed lazily via _get_runner_router()
         from scripts.policy_config import load_settings, default_emerge_home
         from scripts.metrics import get_sink
         try:
@@ -83,6 +83,10 @@ class EmergeDaemon:
         _default_metrics_path = default_emerge_home() / "metrics.jsonl"
         self._sink = get_sink(_settings, default_path=_default_metrics_path)
         self._operator_monitor: "OperatorMonitor | None" = None
+
+    def _get_runner_router(self) -> "RunnerRouter | None":
+        """Always reload from disk so runner config added after daemon start is picked up."""
+        return RunnerRouter.from_env()
 
     def _try_flywheel_bridge(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
         intent_signature = str(arguments.get("intent_signature", "")).strip()
@@ -106,7 +110,8 @@ class EmergeDaemon:
         connector, mode, name = parts
         pipeline_args = {**arguments, "connector": connector, "pipeline": name}
         try:
-            _client = self._runner_router.find_client(arguments) if self._runner_router else None
+            _rr = self._get_runner_router()
+            _client = _rr.find_client(arguments) if _rr else None
             if _client is not None:
                 result = self._run_pipeline_remotely(mode, pipeline_args, _client)
             elif mode == "write":
@@ -290,7 +295,8 @@ class EmergeDaemon:
                     target_profile=target_profile,
                 )
                 sampled_in_policy = self._should_sample(candidate_key)
-                _exec_client = self._runner_router.find_client(arguments) if self._runner_router else None
+                _rr = self._get_runner_router()
+                _exec_client = _rr.find_client(arguments) if _rr else None
                 if _exec_client is not None:
                     result = _exec_client.call_tool("icc_exec", arguments)
                 else:
@@ -328,7 +334,8 @@ class EmergeDaemon:
                 }
         if name == "icc_read":
             try:
-                _read_client = self._runner_router.find_client(arguments) if self._runner_router else None
+                _rr = self._get_runner_router()
+                _read_client = _rr.find_client(arguments) if _rr else None
                 if _read_client is not None:
                     result = self._run_pipeline_remotely("read", arguments, _read_client)
                 else:
@@ -382,7 +389,8 @@ class EmergeDaemon:
                 }
         if name == "icc_write":
             try:
-                _write_client = self._runner_router.find_client(arguments) if self._runner_router else None
+                _rr = self._get_runner_router()
+                _write_client = _rr.find_client(arguments) if _rr else None
                 if _write_client is not None:
                     result = self._run_pipeline_remotely("write", arguments, _write_client)
                 else:
@@ -711,6 +719,10 @@ class EmergeDaemon:
                     name = name_yaml[:-5]
                     uri = f"pipeline://{connector}/{mode}/{name}"
                     static.append({"uri": uri, "name": f"{connector} {mode} pipeline: {name}", "mimeType": "application/json", "description": f"Pipeline metadata for {connector}/{mode}/{name}"})
+            for notes in connector_root.glob("*/NOTES.md"):
+                connector = notes.parent.name
+                uri = f"connector://{connector}/notes"
+                static.append({"uri": uri, "name": f"{connector} connector notes", "mimeType": "text/markdown", "description": f"Operational notes for the {connector} vertical: COM patterns, API quirks, known issues"})
         return static
 
     def _read_resource(self, uri: str) -> dict[str, Any]:
@@ -746,6 +758,20 @@ class EmergeDaemon:
                     if meta.exists():
                         data = PipelineEngine._load_metadata(meta)
                         return {"uri": uri, "mimeType": "application/json", "text": json.dumps(data)}
+        if uri.startswith("connector://"):
+            rest = uri[len("connector://"):]
+            parts = rest.split("/", 1)
+            if len(parts) == 2:
+                connector, resource = parts
+                if resource == "notes" and ".." not in connector and not connector.startswith("/"):
+                    for connector_root in self.pipeline._connector_roots:
+                        notes = connector_root / connector / "NOTES.md"
+                        try:
+                            notes.resolve().relative_to(connector_root.resolve())
+                        except ValueError:
+                            continue
+                        if notes.exists():
+                            return {"uri": uri, "mimeType": "text/markdown", "text": notes.read_text(encoding="utf-8")}
         raise KeyError(f"Resource not found: {uri}")
 
     _PROMPTS = [
@@ -1491,12 +1517,13 @@ class EmergeDaemon:
         machines_env = os.environ.get("EMERGE_MONITOR_MACHINES", "")
 
         machines: dict = {}
-        if self._runner_router:
+        _rr = self._get_runner_router()
+        if _rr:
             for profile_name in (machines_env.split(",") if machines_env else ["default"]):
                 profile_name = profile_name.strip()
                 if not profile_name:
                     continue
-                client = self._runner_router.find_client({"target_profile": profile_name})
+                client = _rr.find_client({"target_profile": profile_name})
                 if client is not None:
                     machines[profile_name] = _RunnerClientAdapter(
                         base_url=client.base_url,

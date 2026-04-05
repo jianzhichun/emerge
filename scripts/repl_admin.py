@@ -435,7 +435,7 @@ def cmd_runner_deploy(
 
     actions: list[str] = []
 
-    # Files to deploy: scripts/*.py that are needed on the runner.
+    # Files to deploy: scripts/*.py + .claude-plugin/plugin.json (for version tracking).
     # Exclude dev-machine-only tools that serve no purpose on the remote runner.
     _DEV_ONLY = {"repl_admin.py", "emerge_daemon.py"}
     scripts_dir = ROOT / "scripts"
@@ -446,6 +446,9 @@ def cmd_runner_deploy(
             p for p in scripts_dir.rglob("*.py")
             if "__pycache__" not in str(p) and p.name not in _DEV_ONLY
         ]
+        plugin_json = ROOT / ".claude-plugin" / "plugin.json"
+        if plugin_json.exists():
+            deploy_files.append(plugin_json)
 
     for local_path in deploy_files:
         rel = local_path.relative_to(ROOT)

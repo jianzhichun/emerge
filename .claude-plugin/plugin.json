@@ -11,5 +11,17 @@
   "permissions": {
     "filesystem": ["~/.emerge/"],
     "network": ["localhost", "192.168.122.0/24"]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runner_sync.py"
+          }
+        ]
+      }
+    ]
   }
 }
