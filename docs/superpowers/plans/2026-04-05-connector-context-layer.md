@@ -20,6 +20,7 @@
 | `scripts/policy_config.py` | **Modify** | Add `profiles`, `default_profile` to `_DEFAULTS` + validation |
 | `scripts/emerge_daemon.py` | **Modify** | Replace `RunnerRouter` with `ProfileRegistry`; update `icc_read/write`, flywheel bridge, remote exec, crystallize, MCP schema |
 | `scripts/runner_client.py` | **Modify** | Remove `RunnerRouter` class (keep `RunnerClient`, `RetryConfig`) |
+| `scripts/runner_sync.py` | **Modify** | Replace `RunnerRouter.persisted_config_path()` + `runner-map.json` reads with `settings.json` profiles iteration |
 | `tests/connectors/mock/manifest.yaml` | **Create** | Mock connector manifest (zero params for simplicity) |
 | `tests/connectors/mock/pipelines/read/layers.py` | **Modify** | `run_read(ctx)` / `verify_read(ctx, rows)` |
 | `tests/connectors/mock/pipelines/write/add-wall.py` | **Modify** | `run_write(ctx)` / `verify_write(ctx, result)` |
@@ -1024,6 +1025,50 @@ Expected: FAIL (daemon still uses old pipeline engine API)
 - [ ] **Step 3: Remove `RunnerRouter` from `runner_client.py`**
 
 Delete the entire `RunnerRouter` class (lines ~151–328 of `runner_client.py`). Keep `RetryConfig`, `RunnerClient`, and `_NO_PROXY_OPENER`.
+
+- [ ] **Step 3b: Update `runner_sync.py` to read from `settings.json` profiles**
+
+`runner_sync.py` currently discovers runner URLs from `runner-map.json` via `RunnerRouter.persisted_config_path()`. After `RunnerRouter` is removed, replace the entire `main()` function's discovery section:
+
+```python
+# Before (in main()):
+from scripts.runner_client import RunnerRouter
+cfg_path = RunnerRouter.persisted_config_path()
+if not cfg_path.exists():
+    return
+cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+runner_map: dict[str, str] = cfg.get("map", {})
+if not runner_map:
+    return
+seen: dict[str, str] = {}
+for profile, url in runner_map.items():
+    if url and url not in seen:
+        seen[url] = profile
+
+# After (in main()):
+from scripts.policy_config import default_settings_path
+settings_path = default_settings_path()
+if not settings_path.exists():
+    return
+settings = json.loads(settings_path.read_text(encoding="utf-8"))
+profiles: dict[str, dict] = settings.get("profiles", {})
+if not profiles:
+    return
+# Deduplicate: one deploy per unique URL
+seen: dict[str, str] = {}  # url -> first_profile_name
+for profile_name, profile_cfg in profiles.items():
+    if not isinstance(profile_cfg, dict):
+        continue
+    if str(profile_cfg.get("execution", "local")) != "remote":
+        continue
+    url = str(profile_cfg.get("runner_url", "")).strip()
+    if url and url not in seen:
+        seen[url] = profile_name
+```
+
+Also update `_deploy()` — the `cmd_runner_deploy` call uses `runner_url` positionally, which stays the same.
+
+Run: `python -m pytest tests -q --tb=short` — verify no regressions.
 
 - [ ] **Step 4: Rewrite daemon `__init__` to use `ProfileRegistry`**
 

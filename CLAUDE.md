@@ -27,9 +27,11 @@ python3 scripts/repl_admin.py runner-status --pretty
 
 ## Architecture
 
-**Single control plane**: `EmergeDaemon` (`scripts/emerge_daemon.py`) is the only MCP server. It handles all five tools (`icc_exec`, `icc_read`, `icc_write`, `icc_crystallize`, `icc_reconcile`) and all four resources (`policy://`, `runner://`, `state://`, `pipeline://`). There is no second server.
+**Single control plane**: `EmergeDaemon` (`scripts/emerge_daemon.py`) is the only MCP server. It handles all five tools (`icc_exec`, `icc_read`, `icc_write`, `icc_crystallize`, `icc_reconcile`) and all five resources (`policy://`, `runner://`, `state://`, `pipeline://`, `connector://`). There is no second server.
 
 **Two execution paths for pipelines**: `icc_read`/`icc_write` run locally by default (daemon calls `PipelineEngine` in-process). When `RunnerRouter` resolves a client for the request, the daemon loads pipeline `.py`+`.yaml` locally, builds a self-contained inline `exec()` payload, and POSTs it as `icc_exec` to the remote runner. The runner never receives pipeline files — switching machines is a URL change only.
+
+**`connector://` resource**: `connector://<name>/notes` reads `~/.emerge/connectors/<name>/NOTES.md` — operational notes, COM patterns, API quirks, and known issues for a vertical. Listed automatically when a `NOTES.md` file is present.
 
 **Policy never leaves the daemon**: all lifecycle state (`candidates.json`, `pipelines-registry.json`), WAL, and metrics are written locally regardless of whether execution is local or remote.
 
@@ -67,6 +69,7 @@ When making code changes, keep these in sync:
 | Change | Update |
 |---|---|
 | New/renamed MCP tool or parameter | `emerge_daemon.py` tool schema + `README.md` MCP surface table |
+| New MCP resource URI | `emerge_daemon.py` `_list_resources`/`_read_resource` + `README.md` Resources line + `CLAUDE.md` Architecture section |
 | New env var | `README.md` configuration table in §"Remote runner — operations" |
 | Policy lifecycle threshold change | `README.md` flywheel diagram + Glossary |
 | Hook behavior change | `README.md` component table (Hooks row) + hook flow diagram |
