@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -216,6 +217,145 @@ def cmd_pipeline_set(*, key: str, fields: dict) -> dict:
         "patched": fields,
         "before": {k: before.get(k) for k in fields},
         "after": {k: pipelines[full_key].get(k) for k in fields},
+    }
+
+
+def _resolve_connector_root() -> Path:
+    """Return connector root: EMERGE_CONNECTOR_ROOT env var if set, else ~/.emerge/connectors."""
+    from scripts.pipeline_engine import _USER_CONNECTOR_ROOT
+    env_root = os.environ.get("EMERGE_CONNECTOR_ROOT", "").strip()
+    if env_root:
+        return Path(env_root).expanduser()
+    return _USER_CONNECTOR_ROOT
+
+
+def cmd_connector_export(
+    *,
+    connector: str,
+    out: str,
+    connector_root: Path | None = None,
+    state_root: Path | None = None,
+) -> dict:
+    """Pack a connector directory and its registry entries into a zip file."""
+    c_root = connector_root if connector_root is not None else _resolve_connector_root()
+    connector_dir = c_root / connector
+    if not connector_dir.exists():
+        return {"ok": False, "error": f"connector not found: {connector_dir}"}
+
+    s_root = state_root if state_root is not None else _resolve_state_root()
+    _, registry_data = _load_registry(s_root)
+
+    prefix = f"pipeline::{connector}."
+    filtered = {
+        k: v
+        for k, v in registry_data.get("pipelines", {}).items()
+        if k.startswith(prefix)
+    }
+
+    out_path = Path(out)
+    manifest = {
+        "name": connector,
+        "emerge_version": _local_plugin_version(),
+        "exported_at_ms": int(time.time() * 1000),
+    }
+
+    files = sorted(
+        f for f in connector_dir.rglob("*")
+        if f.is_file() and "__pycache__" not in f.parts
+    )
+
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False))
+        zf.writestr(
+            "pipelines-registry.json",
+            json.dumps({"pipelines": filtered}, indent=2, ensure_ascii=False),
+        )
+        for f in files:
+            arcname = f"connectors/{connector}/{f.relative_to(connector_dir)}"
+            zf.write(f, arcname)
+
+    return {
+        "ok": True,
+        "connector": connector,
+        "out": str(out_path),
+        "pipeline_count": len(filtered),
+        "file_count": len(files),
+    }
+
+
+def cmd_connector_import(
+    *,
+    pkg: str,
+    overwrite: bool = False,
+    connector_root: Path | None = None,
+    state_root: Path | None = None,
+) -> dict:
+    """Unpack a connector asset package and merge its registry entries."""
+    pkg_path = Path(pkg)
+    if not pkg_path.exists():
+        return {"ok": False, "error": f"package not found: {pkg_path}"}
+
+    with zipfile.ZipFile(pkg_path, "r") as zf:
+        try:
+            manifest = json.loads(zf.read("manifest.json"))
+        except KeyError:
+            return {"ok": False, "error": "invalid package: missing manifest.json"}
+
+        connector = manifest.get("name", "")
+        if not connector:
+            return {"ok": False, "error": "invalid manifest: missing name"}
+
+        c_root = connector_root if connector_root is not None else _resolve_connector_root()
+        connector_dest = c_root / connector
+
+        if connector_dest.exists() and not overwrite:
+            return {
+                "ok": False,
+                "error": f"connector already exists: {connector_dest}. Use --overwrite to replace.",
+            }
+
+        try:
+            imported_reg = json.loads(zf.read("pipelines-registry.json"))
+        except KeyError:
+            imported_reg = {"pipelines": {}}
+
+        arc_prefix = f"connectors/{connector}/"
+        file_count = 0
+        for item in zf.infolist():
+            if not item.filename.startswith(arc_prefix):
+                continue
+            rel = item.filename[len(arc_prefix):]
+            if not rel or rel.endswith("/"):
+                continue
+            dest = connector_dest / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(zf.read(item.filename))
+            file_count += 1
+
+    s_root = state_root if state_root is not None else _resolve_state_root()
+    registry_path, existing = _load_registry(s_root)
+    existing_pipelines = existing.get("pipelines", {})
+    imported_pipelines = imported_reg.get("pipelines", {})
+
+    merged: list[str] = []
+    skipped: list[str] = []
+    for k, v in imported_pipelines.items():
+        if k in existing_pipelines and not overwrite:
+            skipped.append(k)
+        else:
+            existing_pipelines[k] = v
+            merged.append(k)
+
+    existing["pipelines"] = existing_pipelines
+    _save_registry(registry_path, existing)
+
+    return {
+        "ok": True,
+        "connector": connector,
+        "pkg": str(pkg_path),
+        "file_count": file_count,
+        "pipelines_merged": merged,
+        "pipelines_skipped": skipped,
     }
 
 

@@ -484,3 +484,72 @@ def test_runner_bootstrap_blocks_on_version_mismatch_with_running_runner(monkeyp
             python_bin="python3",
             deploy=False,
         )
+
+
+# ---------------------------------------------------------------------------
+# connector-export / connector-import
+# ---------------------------------------------------------------------------
+
+def test_connector_export_produces_zip(tmp_path):
+    """Export a connector directory into a zip with manifest, files, and registry."""
+    import zipfile
+
+    connector_root = tmp_path / "connectors"
+    connector_dir = connector_root / "mycon" / "pipelines" / "read"
+    connector_dir.mkdir(parents=True)
+    (connector_dir / "state.py").write_text("# state")
+    (connector_dir / "state.yaml").write_text("pipeline: state")
+    # __pycache__ should be excluded
+    pycache = connector_dir / "__pycache__"
+    pycache.mkdir()
+    (pycache / "state.cpython-313.pyc").write_bytes(b"junk")
+
+    state_root = tmp_path / "repl"
+    state_root.mkdir()
+    (state_root / "pipelines-registry.json").write_text(json.dumps({
+        "pipelines": {
+            "pipeline::mycon.read.state": {"status": "explore", "rollout_pct": 0},
+            "pipeline::other.read.state": {"status": "stable", "rollout_pct": 100},
+        }
+    }))
+
+    out_zip = tmp_path / "mycon-pkg.zip"
+    result = repl_admin.cmd_connector_export(
+        connector="mycon",
+        out=str(out_zip),
+        connector_root=connector_root,
+        state_root=state_root,
+    )
+
+    assert result["ok"] is True
+    assert out_zip.exists()
+
+    with zipfile.ZipFile(out_zip, "r") as zf:
+        names = zf.namelist()
+        assert "manifest.json" in names
+        assert "pipelines-registry.json" in names
+        assert "connectors/mycon/pipelines/read/state.py" in names
+        assert "connectors/mycon/pipelines/read/state.yaml" in names
+        assert not any("__pycache__" in n for n in names)
+        manifest = json.loads(zf.read("manifest.json"))
+        assert manifest["name"] == "mycon"
+        reg = json.loads(zf.read("pipelines-registry.json"))
+        assert "pipeline::mycon.read.state" in reg["pipelines"]
+        assert "pipeline::other.read.state" not in reg["pipelines"]
+
+
+def test_connector_export_missing_connector_returns_error(tmp_path):
+    """Export returns error dict when connector directory does not exist."""
+    connector_root = tmp_path / "connectors"
+    connector_root.mkdir()
+    state_root = tmp_path / "repl"
+    state_root.mkdir()
+
+    result = repl_admin.cmd_connector_export(
+        connector="nonexistent",
+        out=str(tmp_path / "pkg.zip"),
+        connector_root=connector_root,
+        state_root=state_root,
+    )
+    assert result["ok"] is False
+    assert "nonexistent" in result["error"]
