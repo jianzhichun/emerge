@@ -653,3 +653,68 @@ def test_connector_import_overwrite_replaces_files_and_registry(tmp_path):
     assert existing_file.read_text() == "# state"
     reg = json.loads((dest_state_root / "pipelines-registry.json").read_text())
     assert reg["pipelines"]["pipeline::mycon.read.state"]["status"] == "explore"
+
+
+def test_cli_connector_export(tmp_path):
+    """connector-export sub-command produces a zip via CLI."""
+    connector_root = tmp_path / "connectors"
+    connector_dir = connector_root / "mycon" / "pipelines" / "read"
+    connector_dir.mkdir(parents=True)
+    (connector_dir / "state.py").write_text("# state")
+    (connector_dir / "state.yaml").write_text("pipeline: state")
+
+    state_root = tmp_path / "repl"
+    state_root.mkdir()
+    (state_root / "pipelines-registry.json").write_text(json.dumps({"pipelines": {}}))
+
+    out_zip = tmp_path / "mycon-pkg.zip"
+    env = {
+        **os.environ,
+        "EMERGE_CONNECTOR_ROOT": str(connector_root),
+        "EMERGE_STATE_ROOT": str(state_root),
+    }
+    result = _run_admin(
+        ["connector-export", "--connector", "mycon", "--out", str(out_zip)],
+        env=env,
+    )
+    assert result["ok"] is True
+    assert out_zip.exists()
+
+
+def test_cli_connector_import(tmp_path):
+    """connector-import sub-command extracts files via CLI."""
+    src_connector_root = tmp_path / "src_connectors"
+    connector_dir = src_connector_root / "mycon" / "pipelines" / "read"
+    connector_dir.mkdir(parents=True)
+    (connector_dir / "state.py").write_text("# state")
+    (connector_dir / "state.yaml").write_text("pipeline: state")
+    src_state_root = tmp_path / "src_repl"
+    src_state_root.mkdir()
+    (src_state_root / "pipelines-registry.json").write_text(json.dumps({
+        "pipelines": {"pipeline::mycon.read.state": {"status": "explore", "rollout_pct": 0}}
+    }))
+    pkg = tmp_path / "mycon-pkg.zip"
+    repl_admin.cmd_connector_export(
+        connector="mycon",
+        out=str(pkg),
+        connector_root=src_connector_root,
+        state_root=src_state_root,
+    )
+
+    dest_connector_root = tmp_path / "dest_connectors"
+    dest_connector_root.mkdir()
+    dest_state_root = tmp_path / "dest_repl"
+    dest_state_root.mkdir()
+    (dest_state_root / "pipelines-registry.json").write_text(json.dumps({"pipelines": {}}))
+
+    env = {
+        **os.environ,
+        "EMERGE_CONNECTOR_ROOT": str(dest_connector_root),
+        "EMERGE_STATE_ROOT": str(dest_state_root),
+    }
+    result = _run_admin(
+        ["connector-import", "--pkg", str(pkg)],
+        env=env,
+    )
+    assert result["ok"] is True
+    assert (dest_connector_root / "mycon" / "pipelines" / "read" / "state.py").exists()

@@ -892,9 +892,11 @@ def main() -> None:
             "runner-config-set",
             "runner-config-unset",
             "runner-bootstrap",
-        "runner-deploy",
-        "pipeline-delete",
-        "pipeline-set",
+            "runner-deploy",
+            "pipeline-delete",
+            "pipeline-set",
+            "connector-export",
+            "connector-import",
         ],
     )
     parser.add_argument("--pretty", action="store_true", help="Render human-readable output")
@@ -921,6 +923,10 @@ def main() -> None:
     parser.add_argument("--pipeline-key", default="", help="Pipeline key for pipeline-delete/pipeline-set (e.g. mock.read.layers)")
     parser.add_argument("--set", dest="set_fields", action="append", metavar="FIELD=VALUE",
                         help="Field to patch for pipeline-set (repeatable, e.g. --set status=explore --set rollout_pct=0)")
+    parser.add_argument("--connector", default="", help="Connector name for connector-export")
+    parser.add_argument("--out", default="", help="Output zip path for connector-export")
+    parser.add_argument("--pkg", default="", help="Package zip path for connector-import")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing connector/registry on import")
     args = parser.parse_args()
 
     if args.command == "status":
@@ -975,6 +981,16 @@ def main() -> None:
                 except ValueError:
                     fields[k] = v
         out = cmd_pipeline_set(key=str(args.pipeline_key), fields=fields)
+    elif args.command == "connector-export":
+        out = cmd_connector_export(
+            connector=str(args.connector),
+            out=str(args.out) if args.out else f"{args.connector}-emerge-pkg.zip",
+        )
+    elif args.command == "connector-import":
+        out = cmd_connector_import(
+            pkg=str(args.pkg),
+            overwrite=bool(args.overwrite),
+        )
     else:
         out = cmd_clear()
 
