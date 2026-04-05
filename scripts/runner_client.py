@@ -96,28 +96,15 @@ class RunnerClient:
             raise RuntimeError("runner result must be an object")
         return result
 
-    def notify(
-        self,
-        stage: str,
-        message: str,
-        intent_draft: str = "",
-        timeout_s: int = 0,
-    ) -> dict[str, Any]:
+    def notify(self, ui_spec: dict) -> dict[str, Any]:
         """Send a notification request to the runner's /notify endpoint.
 
-        Blocks until the operator responds or timeout_s elapses.
-        Returns {action: str, intent: str}.
-        Raises RuntimeError on HTTP error or connection failure.
+        Blocks until the operator responds. POST body: {"ui_spec": {...}}.
+        Returns {action, value}. Raises RuntimeError on HTTP error.
         """
-        payload = {
-            "stage": stage,
-            "message": message,
-            "intent_draft": intent_draft,
-            "timeout_s": timeout_s,
-        }
+        payload = {"ui_spec": ui_spec}
         body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
-        # Use a longer timeout than the dialog so the HTTP connection stays open
-        # while the user is deciding.
+        timeout_s = int(ui_spec.get("timeout_s", 0))
         http_timeout = max(self.timeout_s, float(timeout_s) + 10.0)
         req = urllib.request.Request(
             url=f"{self.base_url}/notify",
