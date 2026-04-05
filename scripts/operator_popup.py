@@ -3,113 +3,69 @@ from __future__ import annotations
 from typing import Any
 
 
-def show_notify(
-    stage: str,
-    message: str,
-    intent_draft: str = "",
-    timeout_s: int = 0,
-) -> dict[str, Any]:
-    """Show OS-native blocking dialog. Returns {action, intent}.
+def show_notify(ui_spec: dict) -> dict[str, Any]:
+    """Show OS-native blocking dialog driven by ui_spec.
 
-    stage="explore"  → intent capture dialog, action: confirm|skip|later
-    stage="canary"   → lightweight confirm,   action: takeover|manual
-    stage="stable"   → canary + countdown,    action: takeover|manual
-    Falls back to {action: skip} when Tkinter is unavailable.
+    ui_spec fields:
+      type     : "choice" | "input" | "confirm" | "info"
+      body     : str  — main message text
+      title    : str  — window title (default "emerge")
+      options  : list[str]  — button labels (required for type="choice")
+      prefill  : str  — pre-filled text (type="input")
+      timeout_s: int  — >0 auto-selects options[0] after countdown (default 0)
+
+    Returns:
+      {"action": "selected"|"confirmed"|"dismissed"|"skip", "value": str}
     """
-    if stage not in ("explore", "canary", "stable"):
-        return {"action": "skip", "intent": ""}
+    ui_type = ui_spec.get("type", "")
+    if ui_type not in ("choice", "input", "confirm", "info"):
+        return {"action": "skip", "value": ""}
     try:
-        if stage == "explore":
-            return _show_explore(message, intent_draft)
-        else:
-            return _show_canary(message, timeout_s)
+        title = str(ui_spec.get("title", "emerge"))
+        body = str(ui_spec.get("body", ""))
+        timeout_s = int(ui_spec.get("timeout_s", 0))
+        if ui_type == "choice":
+            options = [str(o) for o in ui_spec.get("options", [])]
+            if not options:
+                return {"action": "skip", "value": ""}
+            return _render_choice(body=body, options=options, title=title, timeout_s=timeout_s)
+        if ui_type == "input":
+            prefill = str(ui_spec.get("prefill", ""))
+            return _render_input(body=body, prefill=prefill, title=title)
+        if ui_type == "confirm":
+            return _render_confirm(body=body, title=title)
+        # info
+        return _render_info(body=body, title=title)
     except Exception as exc:
-        return {"action": "skip", "intent": "", "error": str(exc)}
+        return {"action": "skip", "value": "", "error": str(exc)}
 
 
-def _show_explore(message: str, intent_draft: str) -> dict[str, Any]:
+def _render_choice(*, body: str, options: list[str], title: str, timeout_s: int) -> dict[str, Any]:
     import tkinter as tk
 
     root = tk.Tk()
-    root.title("emerge · explore")
+    root.title(title)
     root.attributes("-topmost", True)
     root.resizable(False, False)
-    result: dict[str, Any] = {"action": "later", "intent": ""}
+    result: dict[str, Any] = {"action": "dismissed", "value": ""}
 
-    tk.Label(root, text="🔍 发现重复模式", font=("", 13, "bold")).pack(
-        pady=(12, 4), padx=16, anchor="w"
-    )
-    tk.Label(root, text=message, wraplength=340, justify="left").pack(
-        padx=16, anchor="w"
-    )
-    tk.Label(root, text="AI 的理解：", font=("", 10)).pack(
-        pady=(10, 2), padx=16, anchor="w"
-    )
-    entry = tk.Text(root, height=2, width=44, relief="solid", bd=1)
-    entry.insert("1.0", intent_draft)
-    entry.pack(padx=16)
-    tk.Label(
-        root,
-        text="你做这件事的目的是？（可直接修改上面的描述）",
-        font=("", 9),
-        fg="gray",
-    ).pack(pady=(4, 8), padx=16, anchor="w")
-
-    btn_frame = tk.Frame(root)
-    btn_frame.pack(pady=(0, 12))
-
-    def on_confirm() -> None:
-        result["action"] = "confirm"
-        result["intent"] = entry.get("1.0", "end-1c").strip()
-        root.destroy()
-
-    def on_skip() -> None:
-        result["action"] = "skip"
-        root.destroy()
-
-    def on_later() -> None:
-        result["action"] = "later"
-        root.destroy()
-
-    tk.Button(btn_frame, text="确认", command=on_confirm, width=8).pack(
-        side="left", padx=4
-    )
-    tk.Button(btn_frame, text="跳过", command=on_skip, width=8).pack(
-        side="left", padx=4
-    )
-    tk.Button(btn_frame, text="以后再说", command=on_later, width=8).pack(
-        side="left", padx=4
+    tk.Label(root, text=body, wraplength=300, font=("", 11), justify="center").pack(
+        pady=(16, 8), padx=16
     )
 
-    root.mainloop()
-    return result
-
-
-def _show_canary(message: str, timeout_s: int) -> dict[str, Any]:
-    import tkinter as tk
-
-    is_stable = timeout_s > 0
-    root = tk.Tk()
-    root.title("emerge · stable" if is_stable else "emerge · canary")
-    root.attributes("-topmost", True)
-    root.resizable(False, False)
-    result: dict[str, Any] = {"action": "takeover", "intent": ""}
-
-    tk.Label(root, text="⚡ " + message, wraplength=300, font=("", 11),
-             justify="center").pack(pady=(16, 8), padx=16)
-
-    if is_stable:
-        countdown_var = tk.StringVar(value=f"（{timeout_s}s 后自动接管）")
+    if timeout_s > 0:
+        countdown_var = tk.StringVar(value=f"（{timeout_s}s 后自动选择 {options[0]}）")
         tk.Label(root, textvariable=countdown_var, font=("", 9), fg="gray").pack()
         remaining = [timeout_s]
 
         def update_countdown() -> None:
             remaining[0] -= 1
             if remaining[0] <= 0:
-                result["action"] = "takeover"
+                result["action"] = "selected"
+                result["value"] = options[0]
                 root.destroy()
                 return
-            countdown_var.set(f"（{remaining[0]}s 后自动接管）")
+            countdown_var.set(f"（{remaining[0]}s 后自动选择 {options[0]}）")
             root.after(1000, update_countdown)
 
         root.after(1000, update_countdown)
@@ -117,20 +73,94 @@ def _show_canary(message: str, timeout_s: int) -> dict[str, Any]:
     btn_frame = tk.Frame(root)
     btn_frame.pack(pady=(8, 14))
 
-    def on_takeover() -> None:
-        result["action"] = "takeover"
-        root.destroy()
+    for opt in options:
+        def make_handler(o: str) -> Any:
+            def handler() -> None:
+                result["action"] = "selected"
+                result["value"] = o
+                root.destroy()
+            return handler
 
-    def on_manual() -> None:
-        result["action"] = "manual"
-        root.destroy()
-
-    tk.Button(btn_frame, text="接管", command=on_takeover, width=10).pack(
-        side="left", padx=6
-    )
-    tk.Button(btn_frame, text="我来做", command=on_manual, width=10).pack(
-        side="left", padx=6
-    )
+        tk.Button(btn_frame, text=opt, command=make_handler(opt), width=10).pack(
+            side="left", padx=6
+        )
 
     root.mainloop()
     return result
+
+
+def _render_input(*, body: str, prefill: str, title: str) -> dict[str, Any]:
+    import tkinter as tk
+
+    root = tk.Tk()
+    root.title(title)
+    root.attributes("-topmost", True)
+    root.resizable(False, False)
+    result: dict[str, Any] = {"action": "dismissed", "value": ""}
+
+    tk.Label(root, text=body, wraplength=340, justify="left").pack(
+        pady=(12, 4), padx=16, anchor="w"
+    )
+    entry = tk.Text(root, height=2, width=44, relief="solid", bd=1)
+    entry.insert("1.0", prefill)
+    entry.pack(padx=16, pady=(4, 8))
+
+    btn_frame = tk.Frame(root)
+    btn_frame.pack(pady=(0, 12))
+
+    def on_confirm() -> None:
+        result["action"] = "confirmed"
+        result["value"] = entry.get("1.0", "end-1c").strip()
+        root.destroy()
+
+    def on_dismiss() -> None:
+        result["action"] = "dismissed"
+        root.destroy()
+
+    tk.Button(btn_frame, text="确认", command=on_confirm, width=8).pack(side="left", padx=4)
+    tk.Button(btn_frame, text="跳过", command=on_dismiss, width=8).pack(side="left", padx=4)
+    root.mainloop()
+    return result
+
+
+def _render_confirm(*, body: str, title: str) -> dict[str, Any]:
+    import tkinter as tk
+
+    root = tk.Tk()
+    root.title(title)
+    root.attributes("-topmost", True)
+    root.resizable(False, False)
+    result: dict[str, Any] = {"action": "dismissed", "value": ""}
+
+    tk.Label(root, text=body, wraplength=300, font=("", 11), justify="center").pack(
+        pady=(16, 8), padx=16
+    )
+    btn_frame = tk.Frame(root)
+    btn_frame.pack(pady=(8, 14))
+
+    def on_confirm() -> None:
+        result["action"] = "confirmed"
+        root.destroy()
+
+    def on_dismiss() -> None:
+        root.destroy()
+
+    tk.Button(btn_frame, text="确认", command=on_confirm, width=10).pack(side="left", padx=6)
+    tk.Button(btn_frame, text="取消", command=on_dismiss, width=10).pack(side="left", padx=6)
+    root.mainloop()
+    return result
+
+
+def _render_info(*, body: str, title: str) -> dict[str, Any]:
+    import tkinter as tk
+
+    root = tk.Tk()
+    root.title(title)
+    root.attributes("-topmost", True)
+    root.resizable(False, False)
+    tk.Label(root, text=body, wraplength=300, font=("", 11), justify="center").pack(
+        pady=(16, 8), padx=16
+    )
+    tk.Button(root, text="关闭", command=root.destroy, width=10).pack(pady=(0, 14))
+    root.mainloop()
+    return {"action": "dismissed", "value": ""}

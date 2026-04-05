@@ -8,65 +8,71 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def test_show_notify_unknown_stage_returns_skip():
+def test_show_notify_unknown_type_returns_skip():
     from scripts.operator_popup import show_notify
-    result = show_notify(stage="unknown", message="test")
-    assert result == {"action": "skip", "intent": ""}
+    assert show_notify({"type": "unknown", "body": "x"}) == {"action": "skip", "value": ""}
+
+
+def test_show_notify_missing_type_or_empty_options_returns_skip():
+    from scripts.operator_popup import show_notify
+    # missing type
+    assert show_notify({"body": "x"}) == {"action": "skip", "value": ""}
+    # choice with no options
+    assert show_notify({"type": "choice", "body": "x", "options": []}) == {"action": "skip", "value": ""}
 
 
 def test_show_notify_graceful_on_no_display(monkeypatch):
-    """When tkinter has no display, show_notify returns skip with error field."""
     import scripts.operator_popup as popup_mod
     import tkinter as tk
 
-    def bad_tk(*args, **kwargs):
-        raise RuntimeError("no display")
-
-    monkeypatch.setattr(tk, "Tk", bad_tk)
-    result = popup_mod.show_notify(stage="canary", message="test msg")
+    monkeypatch.setattr(tk, "Tk", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("no display")))
+    result = popup_mod.show_notify({"type": "choice", "body": "test", "options": ["A"]})
     assert result["action"] == "skip"
     assert "error" in result
 
 
-def test_show_notify_explore_confirm(monkeypatch):
-    """Simulate user editing intent and clicking 确认."""
+def test_show_notify_choice_selected(monkeypatch):
     import scripts.operator_popup as popup_mod
 
-    def mock_show_explore(message, intent_draft):
-        return {"action": "confirm", "intent": "edited: " + intent_draft}
-
-    monkeypatch.setattr(popup_mod, "_show_explore", mock_show_explore)
-    result = popup_mod.show_notify(
-        stage="explore",
-        message="重复 5 次",
-        intent_draft="AI 草稿",
-    )
-    assert result["action"] == "confirm"
-    assert result["intent"] == "edited: AI 草稿"
+    monkeypatch.setattr(popup_mod, "_render_choice",
+        lambda *, body, options, title, timeout_s: {"action": "selected", "value": options[0]})
+    result = popup_mod.show_notify({"type": "choice", "body": "接管？", "options": ["好", "不用"]})
+    assert result == {"action": "selected", "value": "好"}
 
 
-def test_show_notify_canary_takeover(monkeypatch):
-    """Simulate user clicking 接管 in canary dialog."""
+def test_show_notify_choice_with_timeout(monkeypatch):
     import scripts.operator_popup as popup_mod
-
-    def mock_show_canary(message, timeout_s):
-        return {"action": "takeover", "intent": ""}
-
-    monkeypatch.setattr(popup_mod, "_show_canary", mock_show_canary)
-    result = popup_mod.show_notify(stage="canary", message="接管？", timeout_s=0)
-    assert result["action"] == "takeover"
-
-
-def test_show_notify_stable_auto_takeover(monkeypatch):
-    """Stable passes timeout_s to _show_canary."""
-    import scripts.operator_popup as popup_mod
-
     captured = {}
-
-    def mock_show_canary(message, timeout_s):
-        captured["timeout_s"] = timeout_s
-        return {"action": "takeover", "intent": ""}
-
-    monkeypatch.setattr(popup_mod, "_show_canary", mock_show_canary)
-    popup_mod.show_notify(stage="stable", message="stable msg", timeout_s=10)
+    monkeypatch.setattr(popup_mod, "_render_choice",
+        lambda *, body, options, title, timeout_s: (
+            captured.update({"timeout_s": timeout_s}) or {"action": "selected", "value": options[0]}
+        ))
+    popup_mod.show_notify({"type": "choice", "body": "x", "options": ["A"], "timeout_s": 10})
     assert captured["timeout_s"] == 10
+
+
+def test_show_notify_input_confirmed(monkeypatch):
+    import scripts.operator_popup as popup_mod
+
+    monkeypatch.setattr(popup_mod, "_render_input",
+        lambda *, body, prefill, title: {"action": "confirmed", "value": "edited: " + prefill})
+    result = popup_mod.show_notify({"type": "input", "body": "你在做什么？", "prefill": "草稿"})
+    assert result == {"action": "confirmed", "value": "edited: 草稿"}
+
+
+def test_show_notify_confirm(monkeypatch):
+    import scripts.operator_popup as popup_mod
+
+    monkeypatch.setattr(popup_mod, "_render_confirm",
+        lambda *, body, title: {"action": "confirmed", "value": ""})
+    result = popup_mod.show_notify({"type": "confirm", "body": "确认？"})
+    assert result == {"action": "confirmed", "value": ""}
+
+
+def test_show_notify_info(monkeypatch):
+    import scripts.operator_popup as popup_mod
+
+    monkeypatch.setattr(popup_mod, "_render_info",
+        lambda *, body, title: {"action": "dismissed", "value": ""})
+    result = popup_mod.show_notify({"type": "info", "body": "完成"})
+    assert result == {"action": "dismissed", "value": ""}
