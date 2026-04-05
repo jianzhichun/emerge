@@ -55,6 +55,7 @@ Integration tests go in `test_mcp_tools_integration.py` and call `EmergeDaemon.c
 - `EMERGE_OPERATOR_MONITOR=1` enables `OperatorMonitor` thread in the daemon. Off by default. Polls remote runners via `GET /operator-events`, runs `PatternDetector`, pushes to CC via MCP channel notification (explore) or `ElicitRequest` (canary/stable).
 - `ObserverPlugin` (`scripts/observer_plugin.py`) is the ABC for all operator observation. `AdapterRegistry` loads built-in observers (`scripts/observers/`) and crystallized vertical adapters from `~/.emerge/adapters/<vertical>/adapter.py`. Vertical adapters are built via `icc_crystallize mode=adapter` (not shipped, crystallized per-user).
 - `EventBus`: `~/.emerge/operator-events/<machine_id>/events.jsonl` — append-only. Written via `POST /operator-event` on the remote runner. `session_role=monitor_sub` events are filtered by `PatternDetector` to prevent AI self-monitoring.
+- **Silence principle (operator interruption):** Show a popup (`show_notify`) only when the operator's input genuinely changes the outcome — intent is unclear, or the action is irreversible and high-risk. Never show a popup for: execution started/in-progress/completed, read-only operations (`icc_read`, state queries), status updates, or errors CC can resolve autonomously. Default is silence; interrupt only when necessary.
 
 ## Documentation Update Rules
 
