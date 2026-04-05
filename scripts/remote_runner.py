@@ -67,14 +67,15 @@ class RunnerExecutor:
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
     def show_notify(self, params: dict) -> dict:
-        """Show OS-native notification dialog. Blocks until user responds."""
+        """Show OS-native notification dialog. Blocks until user responds.
+
+        Expects params = {"ui_spec": {...}}. Passes ui_spec to show_notify.
+        """
         from scripts.operator_popup import show_notify
-        return show_notify(
-            stage=str(params.get("stage", "canary")),
-            message=str(params.get("message", "")),
-            intent_draft=str(params.get("intent_draft", "")),
-            timeout_s=int(params.get("timeout_s", 0)),
-        )
+        ui_spec = params.get("ui_spec", {})
+        if not isinstance(ui_spec, dict):
+            ui_spec = {}
+        return show_notify(ui_spec)
 
     def read_operator_events(self, machine_id: str, since_ms: int = 0, limit: int = 200) -> list[dict]:
         _validate_machine_id(machine_id)
