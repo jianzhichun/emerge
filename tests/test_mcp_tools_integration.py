@@ -1017,34 +1017,6 @@ def test_run_stdio_starts_operator_monitor_when_env_set(monkeypatch, tmp_path):
     assert started, "run_stdio did not call start_operator_monitor()"
 
 
-def test_build_elicit_params_schema_is_valid_json_schema(tmp_path):
-    """requestedSchema must be a valid JSON Schema object with type=object and properties."""
-    import os
-    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
-    try:
-        from scripts.emerge_daemon import EmergeDaemon
-        from scripts.pattern_detector import PatternSummary
-        daemon = EmergeDaemon(root=tmp_path)
-        summary = PatternSummary(
-            machine_ids=["m1"],
-            intent_signature="zwcad.entity_added",
-            occurrences=5,
-            window_minutes=10.0,
-            detector_signals=["frequency"],
-            context_hint={"app": "zwcad"},
-            policy_stage="canary",
-        )
-        params = daemon._build_elicit_params("canary", {"app": "zwcad"}, summary)
-        schema = params["requestedSchema"]
-        assert schema.get("type") == "object"
-        assert "properties" in schema
-        assert "action" in schema["properties"]
-        assert "note" in schema["properties"]
-        assert schema.get("required") == ["action"]
-    finally:
-        os.environ.pop("EMERGE_STATE_ROOT", None)
-
-
 # ---------------------------------------------------------------------------
 # HyperMesh vertical flywheel tests
 # ---------------------------------------------------------------------------
@@ -1141,8 +1113,8 @@ def test_hypermesh_icc_write_participates_in_pipeline_lifecycle_registry(tmp_pat
         os.environ.pop("EMERGE_SESSION_ID", None)
 
 
-def test_push_pattern_explore_sends_channel_notification(monkeypatch, tmp_path):
-    """_push_pattern for explore stage sends a channel notification. (Task 5 will extend to all stages.)"""
+def test_push_pattern_sends_channel_notification_for_all_stages(monkeypatch, tmp_path):
+    """_push_pattern sends a single channel notification carrying policy_stage in meta."""
     from scripts.pattern_detector import PatternSummary
     from scripts.emerge_daemon import EmergeDaemon
 
@@ -1150,19 +1122,26 @@ def test_push_pattern_explore_sends_channel_notification(monkeypatch, tmp_path):
     mcp_calls = []
     monkeypatch.setattr(daemon, "_write_mcp_push", lambda payload: mcp_calls.append(payload))
 
-    summary = PatternSummary(
-        machine_ids=["local"],
-        intent_signature="hypermesh.node_create",
-        occurrences=5,
-        window_minutes=10.0,
-        detector_signals=["frequency"],
-        context_hint={"app": "hypermesh", "samples": []},
-        policy_stage="explore",
-    )
-    daemon._push_pattern("explore", {"app": "hypermesh"}, summary)
+    for stage in ("explore", "canary", "stable"):
+        mcp_calls.clear()
+        summary = PatternSummary(
+            machine_ids=["local"],
+            intent_signature="hypermesh.node_create",
+            occurrences=5,
+            window_minutes=10.0,
+            detector_signals=["frequency"],
+            context_hint={"app": "hypermesh", "samples": []},
+            policy_stage=stage,
+        )
+        daemon._push_pattern(stage, {"app": "hypermesh"}, summary)
 
-    assert len(mcp_calls) == 1
-    assert mcp_calls[0]["method"] == "notifications/claude/channel"
+        assert len(mcp_calls) == 1, f"stage={stage}: expected 1 MCP call, got {len(mcp_calls)}"
+        payload = mcp_calls[0]
+        assert payload["method"] == "notifications/claude/channel", f"stage={stage}: wrong method"
+        meta = payload["params"]["meta"]
+        assert meta["policy_stage"] == stage
+        assert meta["intent_signature"] == "hypermesh.node_create"
+        assert "machine_ids" in meta
 
 
 def test_runner_client_notify_posts_ui_spec(tmp_path):
