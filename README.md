@@ -22,7 +22,7 @@ flowchart TB
   CC[Claude Code<br/>Agent + Hooks]
   D[EmergeDaemon<br/>tools + resources + OperatorMonitor]
   C[Runtime Core<br/>ExecSession · PipelineEngine · Policy Registry<br/>StateTracker · Metrics · RunnerRouter]
-  R[Remote Runner optional<br/>RunnerClient -> remote_runner.py]
+  R[Remote Runner optional<br/>RunnerClient to remote_runner.py]
   P[Local Persistence<br/>session · pipelines-registry · plugin-data · operator-events]
   X[PatternDetector + Distiller]
 
