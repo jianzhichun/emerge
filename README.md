@@ -228,17 +228,20 @@ flowchart LR
 
 | Tool              | Purpose                                                                                                                                                                                      |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `icc_exec`        | Execute Python in a persistent local session. Tracks `intent_signature` for flywheel policy. Optionally routes to a remote runner when `target_profile` is mapped — local is the default. Supports `result_var` to return structured JSON from a named global variable (missing/non-serializable `result_var` is an error). |
-| `icc_read`        | Run a read pipeline locally (default) or via remote runner. Returns `{ rows, verify_result, verification_state }`. Returns a structured `pipeline_missing` hint when no pipeline exists yet. |
-| `icc_write`       | Run a write pipeline locally (default) or via remote runner, with verification and rollback/stop policy enforcement.                                                                         |
-| `icc_crystallize` | Generate `.py` + `.yaml` pipeline files from WAL history. Call when `synthesis_ready: true` appears in `policy://current`. Always writes locally.                                            |
+| `icc_span_open`   | Open an intent span to track a multi-step MCP tool call sequence. PostToolUse records every subsequent tool call into the span buffer. At stable, bridges directly to PipelineEngine (zero LLM inference). |
+| `icc_span_close`  | Close the current span and commit to the span WAL. At stable, auto-generates a Python skeleton in `_pending/` for human review.                                                              |
+| `icc_span_approve` | Move the completed skeleton from `_pending/` to the real pipeline directory and generate YAML metadata. Activates the span bridge for future calls.                                         |
+| `icc_exec`        | Execute Python in a persistent local session. Tracks `intent_signature` for flywheel policy. Optionally routes to a remote runner when `target_profile` is mapped — local is the default. Supports `result_var` to return structured JSON from a named global variable. At synthesis_ready, auto-crystallizes WAL into a pipeline. |
+| `icc_crystallize` | Generate `.py` + `.yaml` pipeline files from WAL history (manual override). Always writes locally; force-overwrites existing files.                                                          |
 | `icc_reconcile`   | Confirm or correct a state delta. `outcome=correct` + `intent_signature` increments `human_fix_rate` on the most-recently-used matching candidate.                                           |
 | `icc_goal_ingest` | Submit goal events (`human_edit` / `hook_payload` / `system_*`) to Goal Control Plane. Returns acceptance decision + active snapshot metadata.                                               |
 | `icc_goal_read`   | Read active goal snapshot plus recent goal ledger events.                                                                                                                                    |
 | `icc_goal_rollback` | Roll back active goal to a previous goal event id and produce a new snapshot version.                                                                                                      |
 
+> `icc_read` / `icc_write` are deprecated and removed from schema. Use `icc_span_open` instead — the span bridge executes the pipeline automatically when stable.
 
-**Resources:** `policy://current` · `runner://status` · `state://deltas` · `state://goal` · `state://goal-ledger` · `pipeline://{connector}/{mode}/{name}` · `connector://{vertical}/notes`
+
+**Resources:** `policy://current` · `runner://status` · `state://deltas` · `state://goal` · `state://goal-ledger` · `pipeline://{connector}/{mode}/{name}` · `connector://{vertical}/notes` · `connector://{vertical}/spans`
 
 **Prompts:** `icc_explore`
 

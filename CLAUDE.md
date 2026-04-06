@@ -27,11 +27,21 @@ python3 scripts/repl_admin.py runner-status --pretty
 
 ## Architecture
 
-**Single control plane**: `EmergeDaemon` (`scripts/emerge_daemon.py`) is the only MCP server. It handles all goal + flywheel tools (`icc_exec`, `icc_read`, `icc_write`, `icc_crystallize`, `icc_reconcile`, `icc_goal_ingest`, `icc_goal_read`, `icc_goal_rollback`) and all resources (`policy://`, `runner://`, `state://deltas`, `state://goal`, `state://goal-ledger`, `pipeline://`, `connector://`). There is no second server.
+**Single control plane**: `EmergeDaemon` (`scripts/emerge_daemon.py`) is the only MCP server. It handles all goal + flywheel tools (`icc_span_open`, `icc_span_close`, `icc_span_approve`, `icc_exec`, `icc_crystallize`, `icc_reconcile`, `icc_goal_ingest`, `icc_goal_read`, `icc_goal_rollback`) and all resources (`policy://`, `runner://`, `state://deltas`, `state://goal`, `state://goal-ledger`, `pipeline://`, `connector://`). There is no second server.
 
-**Two execution paths for pipelines**: `icc_read`/`icc_write` run locally by default (daemon calls `PipelineEngine` in-process). When `RunnerRouter` resolves a client for the request, the daemon loads pipeline `.py`+`.yaml` locally, builds a self-contained inline `exec()` payload, and POSTs it as `icc_exec` to the remote runner. The runner never receives pipeline files — switching machines is a URL change only.
+**Two execution paths for pipelines**: `PipelineEngine` is called in-process by the span bridge (`icc_span_open` when stable) and directly by `icc_read`/`icc_write` (internal, schema-hidden). When `RunnerRouter` resolves a client, the daemon builds a self-contained inline `exec()` payload and POSTs to the remote runner. The runner never receives pipeline files — switching machines is a URL change only.
 
-**`connector://` resource**: `connector://<name>/notes` reads `~/.emerge/connectors/<name>/NOTES.md` — operational notes, COM patterns, API quirks, and known issues for a vertical. Listed automatically when a `NOTES.md` file is present.
+**Auto-crystallize**: `icc_exec` synthesis_ready triggers daemon to auto-extract WAL code and write `.py`+`.yaml` pipeline (intent_signature encodes connector/mode/name). Skipped if file exists; `icc_crystallize` manual call can force-overwrite.
+
+**Span path**: `icc_span_open` → [any MCP tool calls, PostToolUse records] → `icc_span_close` → span-wal + span-candidates update policy. At stable, auto-generates Python skeleton to `_pending/`. `icc_span_approve` moves skeleton to real dir and generates YAML, activating the bridge.
+
+**Span bridge**: `icc_span_open` detects stable + pipeline exists → PipelineEngine executes directly and returns result, zero LLM inference. `_record_pipeline_event` called, pipeline quality enters pipelines-registry normal tracking.
+
+**Single span constraint**: at most one active span at any time. SessionStart hook clears stale `active_span_id`. `icc_exec` calls are excluded from span action recording.
+
+**Deprecated**: `icc_read`, `icc_write` removed from schema. Replaced by `icc_span_open` bridge path. Still callable internally for backward compatibility.
+
+**`connector://` resource**: `connector://<name>/notes` reads `~/.emerge/connectors/<name>/NOTES.md` — operational notes, COM patterns, API quirks, and known issues for a vertical. `connector://<name>/spans` — JSON index of span intent policy states for that connector. Listed automatically when data is present.
 
 **Goal Control Plane**: active goal no longer lives in `state.json`. Writers submit append-only events to `goal-ledger.jsonl`; decision output is persisted in `goal-snapshot.json` (versioned, auditable). Hooks and policy-status read the snapshot.
 
