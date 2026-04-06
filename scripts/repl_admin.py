@@ -35,8 +35,13 @@ from scripts.policy_config import (
     derive_session_id,
     default_hook_state_root,
     default_exec_root,
+    pin_plugin_data_path_if_present,
 )
 from scripts.runner_client import RunnerClient, RunnerRouter
+from scripts.goal_control_plane import (
+    EVENT_HUMAN_EDIT,
+    GoalControlPlane,
+)
 
 
 def _local_plugin_version() -> str:
@@ -84,20 +89,27 @@ def _session_paths() -> tuple[Path, Path, Path]:
 
 
 def _load_hook_state_summary() -> dict[str, str]:
-    state_path = Path(
-        os.environ.get("CLAUDE_PLUGIN_DATA", str(default_hook_state_root()))
-    ) / "state.json"
-    if not state_path.exists():
-        return {"goal": "", "goal_source": "unset"}
-    try:
-        data = json.loads(state_path.read_text(encoding="utf-8"))
-    except Exception:
-        return {"goal": "", "goal_source": "unset"}
-    if not isinstance(data, dict):
-        return {"goal": "", "goal_source": "unset"}
-    goal = str(data.get("goal", "") or "")
-    goal_source = str(data.get("goal_source", "unset") or "unset")
-    return {"goal": goal, "goal_source": goal_source}
+    pin_plugin_data_path_if_present()
+    root = Path(default_hook_state_root())
+    cp = GoalControlPlane(root)
+    legacy_state = root / "state.json"
+    if legacy_state.exists():
+        try:
+            raw = json.loads(legacy_state.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                cp.migrate_legacy_goal(
+                    legacy_goal=str(raw.get("goal", "")),
+                    legacy_source=str(raw.get("goal_source", "legacy")),
+                )
+        except Exception:
+            pass
+    snap = cp.read_snapshot()
+    return {
+        "goal": str(snap.get("text", "") or ""),
+        "goal_source": str(snap.get("source", "unset") or "unset"),
+        "goal_version": str(snap.get("version", 0)),
+        "goal_updated_at_ms": str(snap.get("updated_at_ms", 0)),
+    }
 
 
 def cmd_status() -> dict:
@@ -190,22 +202,39 @@ def _load_registry(state_root: Path) -> tuple[Path, dict]:
     return registry_path, data
 
 
-def _save_registry(registry_path: Path, data: dict) -> None:
-    """Atomic write: temp file + os.replace to prevent half-written state on crash."""
-    import tempfile as _tempfile
-    fd, tmp = _tempfile.mkstemp(prefix=".registry-", dir=str(registry_path.parent))
+def _atomic_write_json(
+    path: Path,
+    data: dict,
+    *,
+    prefix: str,
+    suffix: str = "",
+    ensure_ascii: bool,
+    indent: int | None,
+) -> None:
+    """Atomically write JSON to path (temp file + fsync + replace)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=str(path.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+            json.dump(data, f, ensure_ascii=ensure_ascii, indent=indent)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, registry_path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+        os.replace(tmp_path, path)
+        tmp_path = ""
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+def _save_registry(registry_path: Path, data: dict) -> None:
+    """Atomic write: temp file + os.replace to prevent half-written state on crash."""
+    _atomic_write_json(
+        registry_path,
+        data,
+        prefix=".registry-",
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 def cmd_pipeline_delete(*, key: str) -> dict:
@@ -403,6 +432,70 @@ def cmd_connector_import(
     }
 
 
+def _normalize_intent_signature(value: str) -> str:
+    """Normalize legacy intent format read.<connector>.<name> to <connector>.read.<name>."""
+    sig = str(value or "").strip().strip("'\"")
+    m = re.fullmatch(r"(read|write)\.([a-z][a-z0-9_-]*)\.([a-z][a-z0-9_./-]*)", sig)
+    if not m:
+        return sig
+    mode, connector, name = m.groups()
+    return f"{connector}.{mode}.{name}"
+
+
+def cmd_normalize_intents(*, connector: str = "", connector_root: Path | None = None) -> dict:
+    """Normalize legacy intent_signature values in connector pipeline YAML files."""
+    c_root = connector_root if connector_root is not None else _resolve_connector_root()
+    if not c_root.exists():
+        return {
+            "ok": True,
+            "connector_root": str(c_root),
+            "connector": connector or "*",
+            "normalized_files": 0,
+            "scanned_files": 0,
+            "changes": [],
+        }
+
+    connector = str(connector or "").strip()
+    if connector:
+        connectors = [c_root / connector]
+    else:
+        connectors = [p for p in sorted(c_root.iterdir()) if p.is_dir()]
+
+    changes: list[dict[str, str]] = []
+    scanned = 0
+    for conn_dir in connectors:
+        if not conn_dir.exists():
+            continue
+        for yaml_path in sorted((conn_dir / "pipelines").glob("*/*.yaml")):
+            scanned += 1
+            text = yaml_path.read_text(encoding="utf-8")
+            lines = text.splitlines()
+            updated = False
+            for i, line in enumerate(lines):
+                m = re.match(r"^(\s*intent_signature\s*:\s*)(.+?)\s*$", line)
+                if not m:
+                    continue
+                prefix, raw_val = m.groups()
+                normalized = _normalize_intent_signature(raw_val)
+                raw_clean = raw_val.strip().strip("'\"")
+                if normalized != raw_clean:
+                    lines[i] = f"{prefix}{normalized}"
+                    updated = True
+                    changes.append({"file": str(yaml_path), "from": raw_clean, "to": normalized})
+                break
+            if updated:
+                yaml_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    return {
+        "ok": True,
+        "connector_root": str(c_root),
+        "connector": connector or "*",
+        "normalized_files": len(changes),
+        "scanned_files": scanned,
+        "changes": changes,
+    }
+
+
 def cmd_runner_status() -> dict:
     router = RunnerRouter.from_env()
     if router is None:
@@ -444,18 +537,14 @@ def _load_runner_config() -> dict:
 
 def _save_runner_config(data: dict) -> None:
     path = RunnerRouter.persisted_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix="runner-map-", suffix=".json", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=True, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, path)
-        tmp_path = ""
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+    _atomic_write_json(
+        path,
+        data,
+        prefix="runner-map-",
+        suffix=".json",
+        ensure_ascii=True,
+        indent=2,
+    )
 
 
 def cmd_runner_config_status() -> dict:
@@ -1026,18 +1115,65 @@ def cmd_submit_actions(actions: list) -> dict:
 
 
 def _cmd_set_goal(body: dict) -> dict:
-    """Write the goal to the hook-state tracker so CC sees it in every prompt."""
-    from scripts.state_tracker import load_tracker, save_tracker
+    """Submit a human_edit goal event and return the active snapshot."""
     goal = str(body.get("goal", "")).strip()
     if len(goal) > 120:
         return {"ok": False, "error": "goal must be ≤ 120 characters"}
-    state_path = Path(
-        os.environ.get("CLAUDE_PLUGIN_DATA", str(default_hook_state_root()))
-    ) / "state.json"
-    tracker = load_tracker(state_path)
-    tracker.set_goal(goal, source="cockpit")
-    save_tracker(state_path, tracker)
-    return {"ok": True, "goal": goal, "goal_source": "cockpit"}
+    lock_window_ms = int(body.get("lock_window_ms", 10 * 60 * 1000) or 0)
+    force = bool(body.get("force", False))
+    cp = GoalControlPlane(Path(default_hook_state_root()))
+    outcome = cp.ingest(
+        event_type=EVENT_HUMAN_EDIT,
+        source="cockpit",
+        actor="cockpit",
+        text=goal,
+        rationale="cockpit manual goal update",
+        confidence=1.0,
+        lock_window_ms=lock_window_ms,
+        force=force,
+    )
+    snap = outcome.get("snapshot", {})
+    return {
+        "ok": True,
+        "accepted": bool(outcome.get("accepted", False)),
+        "reason": str(outcome.get("reason", "")),
+        "goal": str(snap.get("text", "")),
+        "goal_source": str(snap.get("source", "unset")),
+        "goal_version": int(snap.get("version", 0)),
+        "goal_updated_at_ms": int(snap.get("updated_at_ms", 0)),
+        "event_id": str(outcome.get("event_id", "")),
+    }
+
+
+def _cmd_goal_history(limit: int = 50) -> dict:
+    cp = GoalControlPlane(Path(default_hook_state_root()))
+    return {"ok": True, "events": cp.read_ledger(limit=limit)}
+
+
+def _cmd_goal_rollback(body: dict) -> dict:
+    target_event_id = str(body.get("target_event_id", "")).strip()
+    if not target_event_id:
+        return {"ok": False, "error": "target_event_id is required"}
+    cp = GoalControlPlane(Path(default_hook_state_root()))
+    try:
+        result = cp.rollback(
+            target_event_id=target_event_id,
+            actor="cockpit",
+            rationale="cockpit rollback request",
+        )
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    snap = result.get("snapshot", {})
+    return {
+        "ok": True,
+        "accepted": bool(result.get("accepted", False)),
+        "reason": str(result.get("reason", "")),
+        "goal": str(snap.get("text", "")),
+        "goal_source": str(snap.get("source", "unset")),
+        "goal_version": int(snap.get("version", 0)),
+        "goal_updated_at_ms": int(snap.get("updated_at_ms", 0)),
+        "event_id": str(result.get("event_id", "")),
+    }
 
 
 def _cmd_save_settings(patch: dict) -> dict:
@@ -1055,7 +1191,7 @@ def _cmd_save_settings(patch: dict) -> dict:
         _POLICY_INT_KEYS,
         _POLICY_FLOAT_KEYS,
     )
-    import copy, tempfile as _tmp, os as _os
+    import copy
 
     policy_patch = patch.get("policy")
     if not isinstance(policy_patch, dict):
@@ -1093,21 +1229,14 @@ def _cmd_save_settings(patch: dict) -> dict:
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = _tmp.mkstemp(prefix="settings-", suffix=".json", dir=str(path.parent))
-    try:
-        with _os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(merged, f, indent=2, ensure_ascii=False)
-            f.flush()
-            _os.fsync(f.fileno())
-        _os.replace(tmp, path)
-        tmp = ""
-    finally:
-        if tmp:
-            try:
-                _os.unlink(tmp)
-            except OSError:
-                pass
+    _atomic_write_json(
+        path,
+        merged,
+        prefix="settings-",
+        suffix=".json",
+        ensure_ascii=False,
+        indent=2,
+    )
 
     _reset_settings_cache()
     updated = load_settings()
@@ -1167,6 +1296,13 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self._json({"ok": True, "settings": s, "path": str(default_settings_path())})
         elif path == "/api/goal":
             self._json({"ok": True, **_load_hook_state_summary()})
+        elif path == "/api/goal-history":
+            raw_limit = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("limit", ["50"])[0]
+            try:
+                limit = max(1, min(500, int(raw_limit)))
+            except Exception:
+                limit = 50
+            self._json(_cmd_goal_history(limit=limit))
         elif path.startswith("/api/components/"):
             self._serve_component(path)
         else:
@@ -1182,6 +1318,8 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self._json(_cmd_save_settings(body))
         elif path == "/api/goal":
             self._json(_cmd_set_goal(body))
+        elif path == "/api/goal/rollback":
+            self._json(_cmd_goal_rollback(body))
         elif path == "/api/inject-component":
             connector = str(body.get("connector", ""))
             html = str(body.get("html", ""))
@@ -1352,28 +1490,20 @@ def _cc_listening_path() -> "Path":
 
 def _write_cc_listening(deadline: float) -> None:
     """Write/refresh the CC-listening heartbeat file (atomic)."""
-    import os as _os, tempfile as _tmp
-    body = json.dumps({
-        "pid": _os.getpid(),
+    body = {
+        "pid": os.getpid(),
         "deadline": deadline,
         "last_ping_ms": int(time.time() * 1000),
-    }, ensure_ascii=True)
+    }
     p = _cc_listening_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = _tmp.mkstemp(prefix="cc-listening-", suffix=".json", dir=str(p.parent))
-    try:
-        with _os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(body)
-            f.flush()
-            _os.fsync(f.fileno())
-        _os.replace(tmp, p)
-        tmp = ""
-    finally:
-        if tmp:
-            try:
-                _os.unlink(tmp)
-            except OSError:
-                pass
+    _atomic_write_json(
+        p,
+        body,
+        prefix="cc-listening-",
+        suffix=".json",
+        ensure_ascii=True,
+        indent=None,
+    )
 
 
 def _remove_cc_listening() -> None:
@@ -1445,6 +1575,7 @@ def main() -> None:
             "pipeline-set",
             "connector-export",
             "connector-import",
+            "normalize-intents",
             "serve",
             "serve-stop",
             "wait-for-submit",
@@ -1543,6 +1674,10 @@ def main() -> None:
         out = cmd_connector_import(
             pkg=str(args.pkg),
             overwrite=bool(args.overwrite),
+        )
+    elif args.command == "normalize-intents":
+        out = cmd_normalize_intents(
+            connector=str(args.connector),
         )
     elif args.command == "serve":
         port = getattr(args, "port", 0) or 0

@@ -86,7 +86,12 @@ class StateTracker:
     def can_auto_chain_high_risk_write(self) -> bool:
         return self.state.get("verification_state") != "degraded"
 
-    def format_context(self, budget_chars: int | None = None) -> dict[str, str]:
+    def format_context(
+        self,
+        budget_chars: int | None = None,
+        goal_override: str | None = None,
+        goal_source_override: str | None = None,
+    ) -> dict[str, str]:
         critical, secondary, peripheral = self._partition_deltas()
 
         delta_lines = [f"- {d['message']}" for d in critical]
@@ -109,13 +114,30 @@ class StateTracker:
         risks = self.state["open_risks"]
         risks_text = "\n".join(f"- {r}" for r in risks) if risks else "- None."
 
+        goal_text = (
+            str(goal_override).strip()
+            if goal_override is not None
+            else str(self.state.get("goal", "") or "").strip()
+        )
+        goal_source = (
+            str(goal_source_override).strip()
+            if goal_source_override is not None
+            else str(self.state.get("goal_source", "unset") or "unset")
+        )
+
         return {
-            "Goal": self.state.get("goal") or "Not set.",
+            "Goal": goal_text or "Not set.",
+            "Goal Source": goal_source or "unset",
             "Delta": delta_text,
             "Open Risks": risks_text,
         }
 
-    def format_recovery_token(self, budget_chars: int | None = None) -> dict[str, Any]:
+    def format_recovery_token(
+        self,
+        budget_chars: int | None = None,
+        goal_override: str | None = None,
+        goal_source_override: str | None = None,
+    ) -> dict[str, Any]:
         critical, secondary, peripheral = self._partition_deltas()
         selected: list[dict[str, Any]] = [*critical, *secondary, *peripheral]
         aggregated_secondary = 0
@@ -163,10 +185,21 @@ class StateTracker:
                 }
             )
 
+        goal_text = (
+            str(goal_override).strip()
+            if goal_override is not None
+            else str(self.state.get("goal", "") or "").strip()
+        )
+        goal_source = (
+            str(goal_source_override).strip()
+            if goal_source_override is not None
+            else str(self.state.get("goal_source", "unset") or "unset")
+        )
+
         token: dict[str, Any] = {
             "schema_version": "flywheel.v1",
-            "goal": self.state.get("goal") or "",
-            "goal_source": self.state.get("goal_source", "unset"),
+            "goal": goal_text,
+            "goal_source": goal_source,
             "verification_state": self.state.get("verification_state", "verified"),
             "consistency_window_ms": int(self.state.get("consistency_window_ms", 0) or 0),
             "open_risks": [str(r) for r in self.state.get("open_risks", [])],
@@ -192,9 +225,22 @@ class StateTracker:
                 token["deltas"] = kept
         return token
 
-    def format_additional_context(self, budget_chars: int | None = None) -> str:
-        context = self.format_context(budget_chars=budget_chars)
-        token = self.format_recovery_token(budget_chars=budget_chars)
+    def format_additional_context(
+        self,
+        budget_chars: int | None = None,
+        goal_override: str | None = None,
+        goal_source_override: str | None = None,
+    ) -> str:
+        context = self.format_context(
+            budget_chars=budget_chars,
+            goal_override=goal_override,
+            goal_source_override=goal_source_override,
+        )
+        token = self.format_recovery_token(
+            budget_chars=budget_chars,
+            goal_override=goal_override,
+            goal_source_override=goal_source_override,
+        )
         token_json = json.dumps(token, ensure_ascii=True, separators=(",", ":"))
         return (
             f"Goal\n{context['Goal']}\n\n"

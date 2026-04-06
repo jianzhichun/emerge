@@ -720,6 +720,61 @@ def test_cli_connector_import(tmp_path):
     assert (dest_connector_root / "mycon" / "pipelines" / "read" / "state.py").exists()
 
 
+def test_cmd_normalize_intents_rewrites_legacy_yaml(tmp_path):
+    connector_root = tmp_path / "connectors"
+    read_dir = connector_root / "demo" / "pipelines" / "read"
+    write_dir = connector_root / "demo" / "pipelines" / "write"
+    read_dir.mkdir(parents=True)
+    write_dir.mkdir(parents=True)
+    read_yaml = read_dir / "state.yaml"
+    write_yaml = write_dir / "apply.yaml"
+    read_yaml.write_text(
+        "intent_signature: read.demo.state\n"
+        "read_steps:\n"
+        "  - run_read\n"
+        "verify_steps:\n"
+        "  - verify_read\n"
+        "rollback_or_stop_policy: stop\n",
+        encoding="utf-8",
+    )
+    write_yaml.write_text(
+        "intent_signature: write.demo.apply\n"
+        "write_steps:\n"
+        "  - run_write\n"
+        "verify_steps:\n"
+        "  - verify_write\n"
+        "rollback_or_stop_policy: stop\n",
+        encoding="utf-8",
+    )
+
+    out = repl_admin.cmd_normalize_intents(connector="demo", connector_root=connector_root)
+    assert out["ok"] is True
+    assert out["normalized_files"] == 2
+    assert "demo.read.state" in read_yaml.read_text(encoding="utf-8")
+    assert "demo.write.apply" in write_yaml.read_text(encoding="utf-8")
+
+
+def test_cli_normalize_intents(tmp_path):
+    connector_root = tmp_path / "connectors"
+    read_dir = connector_root / "demo" / "pipelines" / "read"
+    read_dir.mkdir(parents=True)
+    read_yaml = read_dir / "state.yaml"
+    read_yaml.write_text(
+        "intent_signature: read.demo.state\n"
+        "read_steps:\n"
+        "  - run_read\n"
+        "verify_steps:\n"
+        "  - verify_read\n"
+        "rollback_or_stop_policy: stop\n",
+        encoding="utf-8",
+    )
+    env = {**os.environ, "EMERGE_CONNECTOR_ROOT": str(connector_root)}
+    out = _run_admin(["normalize-intents", "--connector", "demo"], env)
+    assert out["ok"] is True
+    assert out["normalized_files"] == 1
+    assert "demo.read.state" in read_yaml.read_text(encoding="utf-8")
+
+
 def test_enrich_actions_injects_notes_content_for_notes_comment(tmp_path):
     """_enrich_actions enriches notes-comment with current_notes, notes_path, instruction."""
     connector_root = tmp_path / "connectors"

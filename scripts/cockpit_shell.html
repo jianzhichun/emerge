@@ -16,6 +16,10 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .goal-input::placeholder { color: #484f58; }
 .goal-save-btn { background: none; border: none; color: #484f58; font-size: 11px; cursor: pointer; padding: 0 4px; flex-shrink: 0; }
 .goal-save-btn:hover { color: #3fb950; }
+.goal-meta { font-size: 10px; color: #8b949e; margin-left: 6px; white-space: nowrap; }
+.goal-history-select { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 4px; font-size: 11px; padding: 2px 4px; max-width: 220px; }
+.goal-rollback-btn { background: none; border: 1px solid #30363d; color: #8b949e; border-radius: 4px; font-size: 11px; cursor: pointer; padding: 2px 6px; }
+.goal-rollback-btn:hover { color: #f0f6fc; border-color: #8b949e; }
 .thresholds-bar { background: #0d1117; border-bottom: 1px solid #21262d; padding: 5px 16px; display: flex; gap: 16px; flex-wrap: wrap; font-size: 11px; color: #8b949e; align-items: center; }
 .thresholds-bar span b { color: #79c0ff; }
 .thresh-edit-btn { background: #161b22; border: 1px solid #388bfd; border-radius: 4px; color: #388bfd; font-size: 10px; padding: 2px 9px; cursor: pointer; flex-shrink: 0; font-family: inherit; }
@@ -75,6 +79,53 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .sec-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #484f58; margin: 16px 0 6px; display: flex; align-items: center; gap: 8px; }
 .sec-label:first-child { margin-top: 0; }
 .sec-label .sec-count { color: #8b949e; }
+/* Connector panel tabs (inside connector tab) */
+.connector-panel-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 8px 0 9px;
+  border-bottom: 1px solid #21262d;
+  position: sticky;
+  top: -12px;
+  background: #0d1117;
+  z-index: 2;
+}
+.connector-panel-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid #30363d;
+  border-radius: 999px;
+  background: #161b22;
+  color: #8b949e;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.connector-panel-tab:hover { border-color: #58a6ff; color: #58a6ff; }
+.connector-panel-tab.active {
+  border-color: #1f6feb;
+  background: #0d1f33;
+  color: #e6edf3;
+}
+.connector-panel-tab-count {
+  min-width: 16px;
+  padding: 0 6px;
+  border-radius: 10px;
+  border: 1px solid #30363d;
+  background: #0d1117;
+  color: #8b949e;
+  font-size: 10px;
+  line-height: 1.4;
+  text-align: center;
+}
+.connector-panel-tab.active .connector-panel-tab-count {
+  border-color: #1f6feb;
+  color: #79c0ff;
+}
 /* Overview section headers */
 .section-header { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin: 14px 0 6px; }
 .section-header.critical { color: #f85149; }
@@ -227,6 +278,9 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
       onkeydown="if(event.key==='Enter'){saveGoal();event.preventDefault()}"
       oninput="document.getElementById('goal-save-btn').style.color='#58a6ff'">
     <button class="goal-save-btn" id="goal-save-btn" onclick="saveGoal()" title="Save goal (Enter)">✓</button>
+    <span class="goal-meta" id="goal-meta">v0 · unset</span>
+    <select class="goal-history-select" id="goal-history-select" title="Recent goal events"></select>
+    <button class="goal-rollback-btn" onclick="rollbackGoalToSelected()" title="Rollback to selected event">Rollback</button>
   </div>
   <span class="session-info" id="session-info">loading...</span>
 </div>
@@ -374,18 +428,27 @@ let policyData = null;
 let assetsData = null;
 let queue = [];
 let currentTab = 'overview';
+let connectorPanelByTab = {};
 let queueIdSeq = 0;
 let ccListening = false;  // whether wait-for-submit is active in CC
 let ccListeningSignalKnown = true; // false when connected to legacy /api/status
+let goalHistory = [];
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
 const REFRESH_INTERVAL_S = 5;
 let _refreshCountdown = REFRESH_INTERVAL_S;
 
 async function init() {
-  await Promise.all([refreshPolicy(), refreshAssets(), refreshStatus(), refreshGoal()]);
+  await Promise.all([refreshPolicy(), refreshAssets(), refreshStatus(), refreshGoal(), refreshGoalHistory()]);
+  applyViewStateFromUrl();
   renderTabs();
   renderCurrentTab();
+  syncUrlWithViewState();
+  window.addEventListener('popstate', () => {
+    applyViewStateFromUrl();
+    renderTabs();
+    renderCurrentTab();
+  });
   _resetRefreshTimer();
   setInterval(async () => {
     await refreshPolicy();
@@ -456,7 +519,30 @@ async function refreshGoal() {
     const r = await fetch('/api/goal');
     const d = await r.json();
     const inp = document.getElementById('goal-input');
-    if (inp && d.goal) inp.value = d.goal;
+    if (inp) inp.value = d.goal || '';
+    const meta = document.getElementById('goal-meta');
+    if (meta) {
+      const v = d.goal_version != null ? d.goal_version : '?';
+      meta.textContent = `v${v} · ${d.goal_source || 'unset'}`;
+    }
+  } catch(e) {}
+}
+
+async function refreshGoalHistory() {
+  try {
+    const r = await fetch('/api/goal-history?limit=30');
+    const d = await r.json();
+    goalHistory = (d && d.events) ? d.events : [];
+    const sel = document.getElementById('goal-history-select');
+    if (!sel) return;
+    const options = goalHistory.slice().reverse().map(ev => {
+      const id = escHtml(ev.event_id || '');
+      const type = escHtml(ev.event_type || '');
+      const text = escHtml((ev.text || '').slice(0, 40));
+      const reason = escHtml((ev.decision && ev.decision.reason) ? ev.decision.reason : '');
+      return `<option value="${id}">${type} · ${text}${reason ? ' · ' + reason : ''}</option>`;
+    });
+    sel.innerHTML = options.length ? options.join('') : '<option value="">(no goal events)</option>';
   } catch(e) {}
 }
 
@@ -473,10 +559,38 @@ async function saveGoal() {
     const d = await r.json();
     if (d.ok) {
       if (btn) { btn.style.color = '#3fb950'; setTimeout(() => { btn.style.color = '#484f58'; }, 1200); }
-      document.getElementById('status-msg').textContent = goal ? `Goal saved` : 'Goal cleared';
+      document.getElementById('status-msg').textContent = d.accepted ? `Goal accepted (v${d.goal_version})` : `Goal rejected: ${d.reason || 'policy'}`;
+      await refreshGoal();
+      await refreshGoalHistory();
     }
   } catch(e) {
     document.getElementById('status-msg').textContent = 'Failed to save goal: ' + e.message;
+  }
+}
+
+async function rollbackGoalToSelected() {
+  const sel = document.getElementById('goal-history-select');
+  const eventId = sel ? sel.value : '';
+  if (!eventId) {
+    document.getElementById('status-msg').textContent = 'Select a goal event first';
+    return;
+  }
+  try {
+    const r = await fetch('/api/goal/rollback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_event_id: eventId }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      document.getElementById('status-msg').textContent = `Rolled back goal to v${d.goal_version}`;
+      await refreshGoal();
+      await refreshGoalHistory();
+      return;
+    }
+    document.getElementById('status-msg').textContent = 'Rollback failed: ' + (d.error || JSON.stringify(d));
+  } catch(e) {
+    document.getElementById('status-msg').textContent = 'Rollback network error: ' + e.message;
   }
 }
 
@@ -511,15 +625,20 @@ function refreshPolicyDisplay() {
     return;
   }
   // Connector tab: only update the pipelines div if it exists, leaving notes/controls intact
+  const panel = getActiveConnectorPanel(currentTab);
+  const allPipelines = policyData.pipelines || [];
+  const connPipelines = allPipelines.filter(p => (p.key || '').startsWith(currentTab + '.'));
+  const pipTabCount = document.getElementById('conn-panel-pipelines-count');
+  if (pipTabCount) pipTabCount.textContent = connPipelines.length;
+  if (panel !== 'pipelines') return;
+
   const pipDiv = document.getElementById('conn-pipelines');
   const pipLabel = document.getElementById('conn-pipelines-label');
   if (!pipDiv) {
-    // First load or tab not yet rendered — do full render
+    // First load or pipelines panel not yet rendered — do full render
     renderConnectorTab(currentTab);
     return;
   }
-  const allPipelines = policyData.pipelines || [];
-  const connPipelines = allPipelines.filter(p => (p.key || '').startsWith(currentTab + '.'));
   const queuedKeys = new Set(queue.map(q => q.data && q.data.key).filter(Boolean));
   if (pipLabel) pipLabel.textContent = connPipelines.length;
   let html = '';
@@ -540,7 +659,7 @@ function renderTabs() {
   let html = `<div class="tab ${currentTab === 'overview' ? 'active' : ''}" onclick="switchTab('overview')">Overview</div>`;
 
   connectors.forEach(name => {
-    const connPipelines = allPipelines.filter(p => (p.key || '').includes(name));
+    const connPipelines = allPipelines.filter(p => (p.key || '').startsWith(name + '.'));
     const hasCritical = connPipelines.some(p => (p.consecutive_failures || 0) >= threshold);
     const warn = hasCritical ? '<span class="warn">⚠</span>' : '';
     html += `<div class="tab ${currentTab === name ? 'active' : ''}" onclick="switchTab('${name.replace(/'/g, "\\'")}')">${escHtml(name)}${warn}</div>`;
@@ -553,11 +672,77 @@ function switchTab(tab) {
   currentTab = tab;
   renderTabs();
   renderCurrentTab();
+  syncUrlWithViewState({ push: true });
+}
+
+function getAvailableConnectorPanels(connectorName) {
+  const connector = assetsData && assetsData.connectors ? assetsData.connectors[connectorName] : null;
+  const panels = ['pipelines'];
+  if (connector && connector.notes) panels.push('notes');
+  const hasControls = connector && ((connector.scenarios && connector.scenarios.length) || (connector.components && connector.components.length));
+  if (hasControls) panels.push('controls');
+  return panels;
+}
+
+function getActiveConnectorPanel(connectorName) {
+  const availablePanels = getAvailableConnectorPanels(connectorName);
+  const selected = connectorPanelByTab[connectorName] || 'pipelines';
+  if (!availablePanels.includes(selected)) {
+    connectorPanelByTab[connectorName] = 'pipelines';
+    return 'pipelines';
+  }
+  return selected;
+}
+
+function switchConnectorPanel(panelName) {
+  if (currentTab === 'overview') return;
+  const availablePanels = getAvailableConnectorPanels(currentTab);
+  if (!availablePanels.includes(panelName)) return;
+  connectorPanelByTab[currentTab] = panelName;
+  renderConnectorTab(currentTab);
+  syncUrlWithViewState({ push: true });
 }
 
 function renderCurrentTab() {
+  if (currentTab !== 'overview') {
+    const connectors = assetsData ? Object.keys(assetsData.connectors || {}) : [];
+    if (!connectors.includes(currentTab)) currentTab = 'overview';
+  }
   if (currentTab === 'overview') renderOverviewTab();
   else renderConnectorTab(currentTab);
+}
+
+function applyViewStateFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const requestedTab = params.get('tab');
+  const connectors = assetsData ? Object.keys(assetsData.connectors || {}) : [];
+  if (requestedTab === 'overview' || !requestedTab) {
+    currentTab = 'overview';
+  } else if (connectors.includes(requestedTab)) {
+    currentTab = requestedTab;
+  } else {
+    currentTab = 'overview';
+  }
+
+  if (currentTab !== 'overview') {
+    const requestedPanel = params.get('panel');
+    if (requestedPanel) connectorPanelByTab[currentTab] = requestedPanel;
+    // Normalize to available panels (e.g. shared URL points to missing panel)
+    getActiveConnectorPanel(currentTab);
+  }
+}
+
+function syncUrlWithViewState(opts) {
+  const push = !!(opts && opts.push);
+  const url = new URL(window.location.href);
+  url.searchParams.set('tab', currentTab);
+  if (currentTab === 'overview') {
+    url.searchParams.delete('panel');
+  } else {
+    url.searchParams.set('panel', getActiveConnectorPanel(currentTab));
+  }
+  if (push) window.history.pushState({}, '', url);
+  else window.history.replaceState({}, '', url);
 }
 
 // ── Thresholds bar ────────────────────────────────────────────────────────────
@@ -914,15 +1099,49 @@ function renderConnectorTab(name) {
     return;
   }
   const allPipelines = policyData ? (policyData.pipelines || []) : [];
-  const connPipelines = allPipelines.filter(p => (p.key || '').includes(name));
+  const connPipelines = allPipelines.filter(p => (p.key || '').startsWith(name + '.'));
   const queuedKeys = new Set(queue.map(q => q.data && q.data.key).filter(Boolean));
   const safeN = name.replace(/'/g, "\\'");
+  const hasNotes = !!c.notes;
+  const hasControls = (c.scenarios && c.scenarios.length) || (c.components && c.components.length);
+  const panel = getActiveConnectorPanel(name);
+  const panelDefs = [
+    { id: 'pipelines', label: 'Pipelines', count: connPipelines.length, visible: true },
+    { id: 'notes', label: 'Notes', count: hasNotes ? 1 : 0, visible: hasNotes },
+    { id: 'controls', label: 'Controls', count: hasControls ? ((c.scenarios || []).length + (c.components || []).length) : 0, visible: hasControls },
+  ].filter(p => p.visible);
 
-  let html = '';
+  let html = `<div class="connector-panel-tabs" role="tablist" aria-label="Connector sections">`;
+  panelDefs.forEach(p => {
+    const active = panel === p.id;
+    const panelId = `conn-panel-${p.id}`;
+    const countId = p.id === 'pipelines' ? ' id="conn-panel-pipelines-count"' : '';
+    html += `<button
+      class="connector-panel-tab ${active ? 'active' : ''}"
+      role="tab"
+      aria-selected="${active ? 'true' : 'false'}"
+      aria-controls="${panelId}"
+      id="conn-tab-${p.id}"
+      onclick="switchConnectorPanel('${p.id}')">${escHtml(p.label)}
+      <span class="connector-panel-tab-count"${countId}>${p.count}</span>
+    </button>`;
+  });
+  html += `</div>`;
 
-  // ── NOTES ──
-  if (c.notes) {
-    html += `<div class="sec-label">Notes</div>
+  if (panel === 'pipelines') {
+    let pipHtml = '';
+    if (connPipelines.length) {
+      connPipelines.forEach(p => { pipHtml += renderPipelineCard(p, queuedKeys, { hideConnector: true }); });
+    } else {
+      pipHtml = `<div style="color:#484f58;font-size:11px;padding:6px 0">No pipelines for this connector.</div>`;
+    }
+    html += `<div role="tabpanel" id="conn-panel-pipelines" aria-labelledby="conn-tab-pipelines">
+    <div class="sec-label">Pipelines <span id="conn-pipelines-label" class="sec-count">${connPipelines.length}</span></div>
+    <div id="conn-pipelines">${pipHtml}</div>
+    </div>`;
+  } else if (panel === 'notes' && hasNotes) {
+    html += `<div role="tabpanel" id="conn-panel-notes" aria-labelledby="conn-tab-notes">
+    <div class="sec-label">Notes</div>
     <div class="notes-block">${renderMarkdown(c.notes)}</div>
     <div class="notes-actions">
       <button class="btn-sm" onclick="queueNotesComment('${safeN}')">+ Add comment</button>
@@ -933,23 +1152,11 @@ function renderConnectorTab(name) {
         <button class="btn-sm" onclick="cancelNotesComment('${safeN}')">Cancel</button>
         <button class="btn-sm" style="border-color:#58a6ff;color:#58a6ff" onclick="submitNotesComment('${safeN}')">Submit to CC</button>
       </div>
+    </div>
     </div>`;
-  }
-
-  // ── PIPELINES — stable IDs so policy refresh can update only this section ──
-  let pipHtml = '';
-  if (connPipelines.length) {
-    connPipelines.forEach(p => { pipHtml += renderPipelineCard(p, queuedKeys, { hideConnector: true }); });
-  } else {
-    pipHtml = `<div style="color:#484f58;font-size:11px;padding:6px 0">No pipelines for this connector.</div>`;
-  }
-  html += `<div class="sec-label">Pipelines <span id="conn-pipelines-label" class="sec-count">${connPipelines.length}</span></div>
-  <div id="conn-pipelines">${pipHtml}</div>`;
-
-  // ── CONTROLS (Scenarios + injected components) ──
-  const hasControls = (c.scenarios && c.scenarios.length) || (c.components && c.components.length);
-  if (hasControls) {
-    html += `<div class="sec-label">Controls</div>`;
+  } else if (panel === 'controls' && hasControls) {
+    html += `<div role="tabpanel" id="conn-panel-controls" aria-labelledby="conn-tab-controls">
+    <div class="sec-label">Controls</div>`;
 
     if (c.scenarios && c.scenarios.length) {
       c.scenarios.forEach((s, idx) => {
@@ -977,6 +1184,7 @@ function renderConnectorTab(name) {
         </div>`;
       });
     }
+    html += `</div>`;
   }
 
   document.getElementById('main-panel').innerHTML = html;

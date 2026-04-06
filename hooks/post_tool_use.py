@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -9,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from scripts.goal_control_plane import GoalControlPlane  # noqa: E402
 from scripts.policy_config import default_hook_state_root  # noqa: E402
 from scripts.state_tracker import (  # noqa: E402
     LEVEL_CORE_CRITICAL,
@@ -37,10 +37,15 @@ def main() -> None:
     tool_name = payload.get("tool_name", "")
     raw_result = payload.get("tool_result", {})
     result = raw_result if isinstance(raw_result, dict) else {}
-    state_path = Path(
-        os.environ.get("CLAUDE_PLUGIN_DATA", str(default_hook_state_root()))
-    ) / "state.json"
+    state_root = Path(default_hook_state_root())
+    state_path = state_root / "state.json"
     tracker = load_tracker(state_path)
+    goal_cp = GoalControlPlane(state_root)
+    goal_cp.ensure_initialized()
+    goal_cp.migrate_legacy_goal(
+        legacy_goal=str(tracker.to_dict().get("goal", "")),
+        legacy_source=str(tracker.to_dict().get("goal_source", "legacy")),
+    )
 
     message = payload.get("delta_message") or f"Tool used: {tool_name or 'unknown'}"
     level = _classify_level(tool_name)
@@ -83,7 +88,12 @@ def main() -> None:
             budget_chars = None
     except Exception:
         budget_chars = None
-    context_text = tracker.format_additional_context(budget_chars=budget_chars)
+    snap = goal_cp.read_snapshot()
+    context_text = tracker.format_additional_context(
+        budget_chars=budget_chars,
+        goal_override=str(snap.get("text", "")),
+        goal_source_override=str(snap.get("source", "unset")),
+    )
     save_tracker(state_path, tracker)
 
     # Do NOT echo updatedMCPToolOutput — we have no modifications to make,

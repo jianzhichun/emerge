@@ -45,6 +45,7 @@ class ExecSession:
         *,
         metadata: dict[str, Any] | None = None,
         inject_vars: dict[str, Any] | None = None,
+        result_var: str | None = None,
     ) -> dict[str, Any]:
         """Execute *code* in the persistent global namespace.
 
@@ -166,6 +167,30 @@ class ExecSession:
                 payload["error_summary"] = parsed["error_summary"]
                 payload["failed_line"] = parsed["failed_line"]
                 payload["recovery_suggestion"] = "exec"
+            elif result_var:
+                payload["result_var_name"] = result_var
+                if result_var not in self._globals:
+                    result_error = f"result var not found: {result_var}"
+                    payload["result_var_error"] = result_error
+                    payload["isError"] = True
+                    payload["content"] = [{"type": "text", "text": result_error}]
+                    payload["error_class"] = "ResultVarError"
+                    payload["error_summary"] = result_error
+                    payload["failed_line"] = 0
+                    payload["recovery_suggestion"] = "exec"
+                else:
+                    encoded = self._serialize_value(self._globals.get(result_var))
+                    if encoded is None:
+                        result_error = f"result var not serializable: {result_var}"
+                        payload["result_var_error"] = result_error
+                        payload["isError"] = True
+                        payload["content"] = [{"type": "text", "text": result_error}]
+                        payload["error_class"] = "ResultVarError"
+                        payload["error_summary"] = result_error
+                        payload["failed_line"] = 0
+                        payload["recovery_suggestion"] = "exec"
+                    else:
+                        payload["result_var_value"] = encoded
             return payload
 
     def _ensure_paths(self) -> None:

@@ -65,6 +65,27 @@ def default_hook_state_root() -> Path:
     return resolve_plugin_data_root()
 
 
+def default_goal_snapshot_path() -> Path:
+    return default_hook_state_root() / "goal-snapshot.json"
+
+
+def default_goal_ledger_path() -> Path:
+    return default_hook_state_root() / "goal-ledger.jsonl"
+
+
+def pin_plugin_data_path_if_present() -> None:
+    """Keep ~/.emerge/plugin_data_path in sync with current hook env when available."""
+    plugin_data = _os.environ.get("CLAUDE_PLUGIN_DATA", "").strip()
+    if not plugin_data:
+        return
+    pin = _plugin_data_pin_path()
+    try:
+        pin.parent.mkdir(parents=True, exist_ok=True)
+        pin.write_text(plugin_data, encoding="utf-8")
+    except OSError:
+        pass
+
+
 def stable_token(raw: str, *, max_prefix: int = 48) -> str:
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", raw).strip("._-") or "token"
     digest = sha1(raw.encode("utf-8")).hexdigest()[:10]

@@ -49,6 +49,7 @@ class RunnerExecutor:
     def __init__(self, root: Path | None = None, state_root: Path | None = None) -> None:
         resolved_root = root or ROOT
         self._root = resolved_root
+        self._script_roots = self._resolve_script_roots()
         self._state_root = (state_root or default_exec_root()).expanduser().resolve()
         self._base_session_id = derive_session_id(os.environ.get("EMERGE_SESSION_ID"), resolved_root)
         self._sessions_by_profile: dict[str, ExecSession] = {}
@@ -118,6 +119,7 @@ class RunnerExecutor:
                     "no_replay": bool(arguments.get("no_replay", False)),
                 },
                 inject_vars={"__args": arguments.get("script_args", {})},
+                result_var=str(arguments.get("result_var", "")).strip() or None,
             )
         return {"isError": True, "content": [{"type": "text", "text": f"Unknown tool: {tool_name}"}]}
 
@@ -147,8 +149,31 @@ class RunnerExecutor:
                 script_path = (self._root / script_path).resolve()
             else:
                 script_path = script_path.resolve()
+            if not self._is_allowed_script_path(script_path):
+                raise PermissionError(
+                    f"script_ref path is outside allowed roots: {script_path}"
+                )
             return script_path.read_text(encoding="utf-8")
         return str(arguments.get("code", ""))
+
+    def _resolve_script_roots(self) -> list[Path]:
+        raw = os.environ.get("EMERGE_SCRIPT_ROOTS", "").strip()
+        if raw:
+            return [Path(p).expanduser().resolve() for p in raw.split(",") if p.strip()]
+        return [
+            (self._root / "connectors").resolve(),
+            (Path.home() / ".emerge" / "assets").resolve(),
+        ]
+
+    def _is_allowed_script_path(self, path: Path) -> bool:
+        resolved = path.resolve()
+        for root in self._script_roots:
+            try:
+                resolved.relative_to(root.resolve())
+                return True
+            except ValueError:
+                continue
+        return False
 
 class RunnerHTTPHandler(BaseHTTPRequestHandler):
     executor: RunnerExecutor

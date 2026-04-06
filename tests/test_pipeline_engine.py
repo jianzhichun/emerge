@@ -64,7 +64,12 @@ def test_run_write_requires_verify_write(tmp_path: Path):
     connector_dir = tmp_path / "connectors" / "demo" / "pipelines" / "write"
     connector_dir.mkdir(parents=True, exist_ok=True)
     (connector_dir / "missing-verify.yaml").write_text(
-        '{"intent_signature":"write.demo.missing-verify","write_steps":["a"],"verify_steps":["b"],"rollback_or_stop_policy":"stop"}',
+        "intent_signature: write.demo.missing-verify\n"
+        "write_steps:\n"
+        "  - a\n"
+        "verify_steps:\n"
+        "  - b\n"
+        "rollback_or_stop_policy: stop\n",
         encoding="utf-8",
     )
     (connector_dir / "missing-verify.py").write_text(
@@ -80,7 +85,12 @@ def test_run_write_rollback_missing_handler_triggers_stop(tmp_path: Path):
     connector_dir = tmp_path / "connectors" / "demo" / "pipelines" / "write"
     connector_dir.mkdir(parents=True, exist_ok=True)
     (connector_dir / "rollback-missing.yaml").write_text(
-        '{"intent_signature":"write.demo.rollback-missing","write_steps":["a"],"verify_steps":["b"],"rollback_or_stop_policy":"rollback"}',
+        "intent_signature: write.demo.rollback-missing\n"
+        "write_steps:\n"
+        "  - a\n"
+        "verify_steps:\n"
+        "  - b\n"
+        "rollback_or_stop_policy: rollback\n",
         encoding="utf-8",
     )
     (connector_dir / "rollback-missing.py").write_text(
@@ -99,7 +109,13 @@ def test_run_write_rollback_missing_handler_triggers_stop(tmp_path: Path):
 def test_load_metadata_rejects_missing_intent_signature(tmp_path):
     from scripts.pipeline_engine import PipelineEngine
     bad = tmp_path / "bad.yaml"
-    bad.write_text('{"rollback_or_stop_policy": "stop", "read_steps": ["x"], "verify_steps": ["y"]}')
+    bad.write_text(
+        "rollback_or_stop_policy: stop\n"
+        "read_steps:\n"
+        "  - x\n"
+        "verify_steps:\n"
+        "  - y\n"
+    )
     engine = PipelineEngine()
     with pytest.raises(ValueError, match="intent_signature"):
         engine._load_metadata(bad)
@@ -108,7 +124,14 @@ def test_load_metadata_rejects_missing_intent_signature(tmp_path):
 def test_load_metadata_rejects_invalid_policy(tmp_path):
     from scripts.pipeline_engine import PipelineEngine
     bad = tmp_path / "bad.yaml"
-    bad.write_text('{"intent_signature": "s", "rollback_or_stop_policy": "unknown", "read_steps": ["x"], "verify_steps": ["y"]}')
+    bad.write_text(
+        "intent_signature: s\n"
+        "rollback_or_stop_policy: unknown\n"
+        "read_steps:\n"
+        "  - x\n"
+        "verify_steps:\n"
+        "  - y\n"
+    )
     engine = PipelineEngine()
     with pytest.raises(ValueError, match="rollback_or_stop_policy"):
         engine._load_metadata(bad)
@@ -117,7 +140,12 @@ def test_load_metadata_rejects_invalid_policy(tmp_path):
 def test_load_metadata_rejects_missing_steps(tmp_path):
     from scripts.pipeline_engine import PipelineEngine
     bad = tmp_path / "bad.yaml"
-    bad.write_text('{"intent_signature": "s", "rollback_or_stop_policy": "stop", "verify_steps": ["y"]}')
+    bad.write_text(
+        "intent_signature: s\n"
+        "rollback_or_stop_policy: stop\n"
+        "verify_steps:\n"
+        "  - y\n"
+    )
     engine = PipelineEngine()
     with pytest.raises(ValueError, match="read_steps.*write_steps"):
         engine._load_metadata(bad)
@@ -126,7 +154,16 @@ def test_load_metadata_rejects_missing_steps(tmp_path):
 def test_load_metadata_rejects_both_steps_present(tmp_path):
     from scripts.pipeline_engine import PipelineEngine
     bad = tmp_path / "bad.yaml"
-    bad.write_text('{"intent_signature": "s", "rollback_or_stop_policy": "stop", "read_steps": ["x"], "write_steps": ["y"], "verify_steps": ["z"]}')
+    bad.write_text(
+        "intent_signature: s\n"
+        "rollback_or_stop_policy: stop\n"
+        "read_steps:\n"
+        "  - x\n"
+        "write_steps:\n"
+        "  - y\n"
+        "verify_steps:\n"
+        "  - z\n"
+    )
     engine = PipelineEngine()
     with pytest.raises(ValueError, match="read_steps.*write_steps"):
         engine._load_metadata(bad)
@@ -135,7 +172,12 @@ def test_load_metadata_rejects_both_steps_present(tmp_path):
 def test_load_metadata_rejects_missing_verify_steps(tmp_path):
     from scripts.pipeline_engine import PipelineEngine
     bad = tmp_path / "bad.yaml"
-    bad.write_text('{"intent_signature": "s", "rollback_or_stop_policy": "stop", "read_steps": ["x"]}')
+    bad.write_text(
+        "intent_signature: s\n"
+        "rollback_or_stop_policy: stop\n"
+        "read_steps:\n"
+        "  - x\n"
+    )
     engine = PipelineEngine()
     with pytest.raises(ValueError, match="verify_steps"):
         engine._load_metadata(bad)
@@ -144,7 +186,14 @@ def test_load_metadata_rejects_missing_verify_steps(tmp_path):
 def test_load_metadata_accepts_valid_metadata(tmp_path):
     from scripts.pipeline_engine import PipelineEngine
     good = tmp_path / "good.yaml"
-    good.write_text('{"intent_signature": "read.mock.test", "rollback_or_stop_policy": "stop", "read_steps": ["x"], "verify_steps": ["y"]}')
+    good.write_text(
+        "intent_signature: read.mock.test\n"
+        "rollback_or_stop_policy: stop\n"
+        "read_steps:\n"
+        "  - x\n"
+        "verify_steps:\n"
+        "  - y\n"
+    )
     engine = PipelineEngine()
     data = engine._load_metadata(good)
     assert data["intent_signature"] == "read.mock.test"
@@ -164,28 +213,21 @@ def test_missing_pipeline_raises_pipeline_missing_error(tmp_path):
 
 
 def test_load_metadata_raises_on_non_dict_yaml(tmp_path):
-    """A YAML file that is a list (not a dict) must raise ValueError, not fall through to JSON."""
+    """A YAML file that is a list (not a dict) must raise ValueError."""
     from scripts.pipeline_engine import PipelineEngine
     bad = tmp_path / "bad.yaml"
-    bad.write_text('["not", "a", "dict"]')
-    with pytest.raises((ValueError, Exception)) as exc_info:
+    bad.write_text("- not\n- a\n- dict\n")
+    with pytest.raises(ValueError) as exc_info:
         PipelineEngine._load_metadata(bad)
     assert "object" in str(exc_info.value).lower() or "invalid" in str(exc_info.value).lower()
 
 
-def test_load_metadata_fallback_to_json_when_yaml_unavailable(tmp_path, monkeypatch):
-    """When yaml is not importable, metadata must be parsed as JSON."""
+def test_load_metadata_rejects_json_style_content(tmp_path):
+    """JSON-style content in .yaml is explicitly rejected."""
     from scripts.pipeline_engine import PipelineEngine
-    import builtins
-
-    real_import = builtins.__import__
-    def block_yaml(name, *args, **kwargs):
-        if name == "yaml":
-            raise ImportError("yaml blocked for test")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", block_yaml)
-    good = tmp_path / "meta.yaml"
-    good.write_text('{"intent_signature": "zwcad.read.state", "rollback_or_stop_policy": "stop", "read_steps": ["x"], "verify_steps": ["y"]}')
-    data = PipelineEngine._load_metadata(good)
-    assert data["intent_signature"] == "zwcad.read.state"
+    bad = tmp_path / "meta.yaml"
+    bad.write_text(
+        '{"intent_signature": "zwcad.read.state", "rollback_or_stop_policy": "stop", "read_steps": ["x"], "verify_steps": ["y"]}'
+    )
+    with pytest.raises(ValueError, match="JSON-style content is not allowed"):
+        PipelineEngine._load_metadata(bad)

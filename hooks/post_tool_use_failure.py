@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -22,9 +21,7 @@ def main() -> None:
 
     tool_name = payload.get("tool_name", "unknown")
     error_text = str(payload.get("error", "unknown error"))
-    state_path = Path(
-        os.environ.get("CLAUDE_PLUGIN_DATA", str(default_hook_state_root()))
-    ) / "state.json"
+    state_path = Path(default_hook_state_root()) / "state.json"
 
     try:
         tracker = load_tracker(state_path)

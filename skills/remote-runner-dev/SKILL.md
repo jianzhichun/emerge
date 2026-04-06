@@ -194,8 +194,8 @@ The runner accepts **only `icc_exec`** requests on `/run`. Pipeline operations (
 
 Request / response shape for `/run`:
 ```json
-{"tool_name": "icc_exec", "arguments": {"code": "...", "target_profile": "default", "no_replay": false}}
-{"ok": true,  "result": {"isError": false, "content": [{"type": "text", "text": "..."}]}}
+{"tool_name": "icc_exec", "arguments": {"code": "...", "target_profile": "default", "no_replay": false, "result_var": "__emerge_pipeline_out"}}
+{"ok": true,  "result": {"isError": false, "content": [{"type": "text", "text": "..."}], "result_var_value": {"rows": [], "verify": {"ok": true}}}}
 {"ok": false, "error": "string message"}
 ```
 

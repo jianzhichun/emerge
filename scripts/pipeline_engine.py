@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import os
 from pathlib import Path
 from typing import Any
@@ -54,14 +53,13 @@ class PipelineEngine:
             verify_result = verify_fn(metadata=metadata, args=args, rows=rows)
             if not isinstance(verify_result, dict):
                 raise ValueError("verify_read must return an object")
-        verification_state = "verified" if bool(verify_result.get("ok", False)) else "degraded"
-        return {
-            "pipeline_id": f"{connector}.read.{pipeline}",
-            "intent_signature": metadata.get("intent_signature", ""),
-            "rows": rows,
-            "verify_result": verify_result,
-            "verification_state": verification_state,
-        }
+        return self._build_read_result(
+            connector=connector,
+            pipeline=pipeline,
+            metadata=metadata,
+            rows=rows,
+            verify_result=verify_result,
+        )
 
     def run_write(self, args: dict[str, Any]) -> dict[str, Any]:
         connector = args.get("connector", "").strip()
@@ -104,6 +102,49 @@ class PipelineEngine:
                     stop_triggered = True
             else:
                 stop_triggered = True
+        return self._build_write_result(
+            connector=connector,
+            pipeline=pipeline,
+            metadata=metadata,
+            action_result=action_result,
+            verify_result=verify_result,
+            stop_triggered=stop_triggered,
+            rollback_executed=rollback_executed,
+            rollback_result=rollback_result,
+        )
+
+    @staticmethod
+    def _build_read_result(
+        *,
+        connector: str,
+        pipeline: str,
+        metadata: dict[str, Any],
+        rows: Any,
+        verify_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        verification_state = "verified" if bool(verify_result.get("ok", False)) else "degraded"
+        return {
+            "pipeline_id": f"{connector}.read.{pipeline}",
+            "intent_signature": metadata.get("intent_signature", ""),
+            "rows": rows,
+            "verify_result": verify_result,
+            "verification_state": verification_state,
+        }
+
+    @staticmethod
+    def _build_write_result(
+        *,
+        connector: str,
+        pipeline: str,
+        metadata: dict[str, Any],
+        action_result: Any,
+        verify_result: dict[str, Any],
+        stop_triggered: bool,
+        rollback_executed: bool,
+        rollback_result: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        verification_state = "verified" if bool(verify_result.get("ok", False)) else "degraded"
+        policy = str(metadata.get("rollback_or_stop_policy", "stop"))
         return {
             "pipeline_id": f"{connector}.write.{pipeline}",
             "intent_signature": metadata.get("intent_signature", ""),
@@ -182,17 +223,19 @@ class PipelineEngine:
     @staticmethod
     def _load_metadata(path: Path) -> dict[str, Any]:
         text = path.read_text(encoding="utf-8")
-        loaded = None
+        if text.lstrip().startswith(("{", "[")):
+            raise ValueError(
+                f"pipeline metadata must be YAML (JSON-style content is not allowed) at {path}"
+            )
         try:
             import yaml  # type: ignore
-            loaded = yaml.safe_load(text)
-            # yaml.YAMLError and other yaml-specific errors propagate from here
         except ImportError:
-            pass  # yaml not installed — fall through to JSON
-        if loaded is None:
-            loaded = json.loads(text)
+            raise RuntimeError(
+                "PyYAML is required to load pipeline metadata. Install with: pip install pyyaml"
+            )
+        loaded = yaml.safe_load(text)
         if not isinstance(loaded, dict):
-            raise ValueError(f"pipeline metadata must be a JSON/YAML object at {path}")
+            raise ValueError(f"pipeline metadata must be a YAML object at {path}")
         PipelineEngine._validate_metadata(path, loaded)
         return loaded
 

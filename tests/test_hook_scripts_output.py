@@ -226,8 +226,8 @@ def test_post_tool_use_no_longer_echoes_updated_mcp_tool_output(tmp_path: Path):
     )
 
 
-def test_pre_compact_resets_tracker_state_preserving_goal(tmp_path: Path):
-    """After PreCompact, state.json must be reset: deltas/risks cleared, goal preserved."""
+def test_pre_compact_resets_tracker_state_and_keeps_goal_in_snapshot(tmp_path: Path):
+    """After PreCompact, state.json resets while active goal remains in goal-snapshot."""
     env = os.environ.copy()
     env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
 
@@ -259,8 +259,11 @@ def test_pre_compact_resets_tracker_state_preserving_goal(tmp_path: Path):
         capture_output=True, text=True, env=env, check=True,
     )
 
-    # After compaction: deltas and risks must be cleared, goal preserved
+    # After compaction: deltas and risks must be cleared in state.json
     after = json.loads(state_path.read_text())
     assert after["deltas"] == [], "deltas must be cleared after PreCompact"
     assert after["open_risks"] == [], "open_risks must be cleared after PreCompact"
-    assert after["goal"] == "deploy hypermesh pipeline", "goal must survive PreCompact reset"
+    # Goal ownership moved to goal-snapshot.json
+    snap = json.loads((tmp_path / "goal-snapshot.json").read_text())
+    assert snap["text"] == "deploy hypermesh pipeline"
+    assert snap["source"] == "hook_payload"

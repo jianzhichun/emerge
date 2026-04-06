@@ -27,11 +27,13 @@ python3 scripts/repl_admin.py runner-status --pretty
 
 ## Architecture
 
-**Single control plane**: `EmergeDaemon` (`scripts/emerge_daemon.py`) is the only MCP server. It handles all five tools (`icc_exec`, `icc_read`, `icc_write`, `icc_crystallize`, `icc_reconcile`) and all five resources (`policy://`, `runner://`, `state://`, `pipeline://`, `connector://`). There is no second server.
+**Single control plane**: `EmergeDaemon` (`scripts/emerge_daemon.py`) is the only MCP server. It handles all goal + flywheel tools (`icc_exec`, `icc_read`, `icc_write`, `icc_crystallize`, `icc_reconcile`, `icc_goal_ingest`, `icc_goal_read`, `icc_goal_rollback`) and all resources (`policy://`, `runner://`, `state://deltas`, `state://goal`, `state://goal-ledger`, `pipeline://`, `connector://`). There is no second server.
 
 **Two execution paths for pipelines**: `icc_read`/`icc_write` run locally by default (daemon calls `PipelineEngine` in-process). When `RunnerRouter` resolves a client for the request, the daemon loads pipeline `.py`+`.yaml` locally, builds a self-contained inline `exec()` payload, and POSTs it as `icc_exec` to the remote runner. The runner never receives pipeline files — switching machines is a URL change only.
 
 **`connector://` resource**: `connector://<name>/notes` reads `~/.emerge/connectors/<name>/NOTES.md` — operational notes, COM patterns, API quirks, and known issues for a vertical. Listed automatically when a `NOTES.md` file is present.
+
+**Goal Control Plane**: active goal no longer lives in `state.json`. Writers submit append-only events to `goal-ledger.jsonl`; decision output is persisted in `goal-snapshot.json` (versioned, auditable). Hooks and policy-status read the snapshot.
 
 **Policy never leaves the daemon**: all lifecycle state (`candidates.json`, `pipelines-registry.json`), WAL, and metrics are written locally regardless of whether execution is local or remote.
 
@@ -54,7 +56,9 @@ Integration tests go in `test_mcp_tools_integration.py` and call `EmergeDaemon.c
 ## Key Invariants
 
 - `icc_exec` **requires** `intent_signature` — enforced by `PreToolUse` hook which blocks the call with convention guidance if missing.
+- Goal ownership invariant: active goal comes from `goal-snapshot.json`; `state.json` tracks deltas/risks only.
 - Connector pipelines live in `~/.emerge/connectors/<connector>/pipelines/{read,write}/` (user-space). `tests/connectors/` is test fixture only, not shipped.
+- Pipeline metadata files (`*.yaml`) are strict YAML only. JSON-style object/array payloads in `.yaml` are invalid.
 - Policy state files use atomic writes (temp file + rename). Never write directly.
 - WAL entries with `no_replay=True` are excluded from both replay and crystallization. State setup entries must not use `no_replay`.
 - `EMERGE_OPERATOR_MONITOR=1` enables `OperatorMonitor` thread in the daemon. Off by default. Polls remote runners via `GET /operator-events`, runs `PatternDetector`, pushes to CC via MCP channel notification (explore) or `ElicitRequest` (canary/stable).

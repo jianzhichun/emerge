@@ -3,15 +3,16 @@
 ![Version](https://img.shields.io/badge/version-v0.3.17-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-215%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-255%20passing-brightgreen?logo=pytest)
 
 **Emerge** is a Claude Code plugin that implements a **muscle-memory flywheel**: repeated work is tracked via `icc_exec`, promoted through a **policy registry** (explore → canary → stable), and can be **crystallized** into connector pipelines so the same tasks run as structured `icc_read` / `icc_write` instead of ad-hoc code.
 
 Design anchors:
 
-- **Connector pipelines** — YAML + Python under `~/.emerge/connectors/<connector>/pipelines/`, with verification and rollback policy baked in.
+- **Connector pipelines** — strict YAML metadata + Python under `~/.emerge/connectors/<connector>/pipelines/`, with verification and rollback policy baked in.
 - **Persistent exec** — `icc_exec` runs Python in a durable local session (WAL + profiles). A remote runner is optional — local is the default.
-- **State delta** — hooks and `state://deltas` keep goals, deltas, and open risks for context budgeting (`Goal` / `Delta` / `Open Risks`).
+- **Goal control plane** — active goal is decided by an append-only event ledger (`goal-ledger.jsonl`) and versioned snapshot (`goal-snapshot.json`), then injected into hook context.
+- **State delta** — hooks and `state://deltas` keep deltas and open risks for context budgeting (`Goal` / `Delta` / `Open Risks`).
 
 ## Architecture
 
@@ -45,9 +46,10 @@ flowchart TB
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **EmergeDaemon**    | MCP JSON-RPC control plane: routes tool calls, orchestrates exec, pipelines, policy updates, and crystallization.                                                                                                                                                                    |
 | **ExecSession**     | Persistent Python execution per profile. WAL records every successful code path for replay and crystallization. One session per `target_profile`.                                                                                                                                    |
-| **PipelineEngine**  | Resolves `~/.emerge/connectors/` (or `EMERGE_CONNECTOR_ROOT`), loads YAML metadata + Python steps, runs `run_read`/`run_write`/`verify`/`rollback`. Also provides `_load_pipeline_source()` for remote inline execution.                                                             |
-| **Policy Registry** | Tracks per-candidate lifecycle (`explore → canary → stable`), rollout %, `synthesis_ready` signal, `human_fix_rate`. Written to `pipelines-registry.json`.                                                                                                                           |
-| **StateTracker**    | Maintains `Goal` / `Delta` / `Open Risks` session state. Exposed via `state://deltas` resource and hook `additionalContext`.                                                                                                                                                         |
+| **PipelineEngine**  | Resolves `~/.emerge/connectors/` (or `EMERGE_CONNECTOR_ROOT`), loads strict YAML metadata + Python steps, runs `run_read`/`run_write`/`verify`/`rollback`. Also provides `_load_pipeline_source()` for remote inline execution.                                                      |
+| **Policy Registry** | Tracks per-candidate lifecycle (`explore → canary → stable`), rollout %, `synthesis_ready` signal, `human_fix_rate`, and `last_execution_path` (`local`/`remote`). Written to `pipelines-registry.json`.                                                                                                                           |
+| **GoalControlPlane** | Owns active goal decisioning (`goal-snapshot.json`) and append-only audit trail (`goal-ledger.jsonl`). All writers submit events; readers consume snapshot.                                                                                                                          |
+| **StateTracker**    | Maintains `Delta` / `Open Risks` session state and recovery token budgeting. Goal text is injected from GoalControlPlane snapshot.                                                                                                                                                |
 | **RunnerRouter**    | Selects a `RunnerClient` by `target_profile` / `runner_id` (map), consistent hash (pool), or default URL. Returns `None` when no runner is configured → local execution.                                                                                                             |
 | **Flywheel bridge** | Short-circuit inside `icc_exec`: when the matching candidate is `stable`, execution is redirected to the pipeline result without LLM inference. Zero overhead path once a pattern is trusted.                                                                                        |
 | **Hooks**           | Inject minimal context at session/prompt boundaries; record `Delta` after each `icc_`* call; preserve critical state across **PreCompact**. `PreToolUse` enforces `intent_signature` required on `icc_exec` and blocks calls that violate exec conventions. Not a second MCP server. |
@@ -101,7 +103,7 @@ icc_read { connector, pipeline }
   → { rows, verify_result, verification_state }
 ```
 
-**Remote.** When `RunnerRouter` resolves a client for the request, the daemon loads the pipeline source locally, builds a self-contained `icc_exec` payload, and dispatches it over HTTP. The runner machine never needs connector files — a machine change is a URL change only.
+**Remote.** When `RunnerRouter` resolves a client for the request, the daemon loads the pipeline source locally, builds a self-contained `icc_exec` payload, and dispatches it over HTTP. The runner machine never needs connector files — a machine change is a URL change only. Pipeline calls request a structured `result_var` from the runner, so parsing does not depend on stdout text. Local and remote paths return the same response shape and verification semantics.
 
 ```mermaid
 sequenceDiagram
@@ -117,8 +119,8 @@ sequenceDiagram
   D->>PE: load pipeline source + metadata
   PE-->>D: py_source + metadata dict
   Note over D: strip __future__ imports, build inline exec payload
-  D->>R: POST /run { tool_name: icc_exec, code: inline }
-  R-->>D: { ok: true, result: stdout JSON }
+  D->>R: POST /run { tool_name: icc_exec, code: inline, result_var: __emerge_pipeline_out }
+  R-->>D: { ok: true, result: { result_var_value: {...} } }
   D-->>CC: { rows, verify_result, verification_state }
 ```
 
@@ -159,7 +161,7 @@ The runner is a **stateless Python executor** — it accepts `icc_exec` only. Al
 | `EMERGE_TARGET_PROFILE`     | Default runner target profile for `repl_admin` commands              | `default` |
 | `EMERGE_COCKPIT_DISABLE`    | `1` to disable the `PendingActionMonitor` thread in the daemon       | enabled   |
 | `EMERGE_REPL_ROOT`          | Override the repl state root directory                               | `~/.emerge/repl` |
-| `CLAUDE_PLUGIN_DATA`        | Hook-state root used by `icc_reconcile` and hooks                    | `~/.claude/plugin-data` |
+| `CLAUDE_PLUGIN_DATA`        | Hook + Goal Control state root (state tracker + goal snapshot/ledger) | `~/.claude/plugin-data` |
 
 
 Persisted route map (`~/.emerge/runner-map.json`):
@@ -226,14 +228,17 @@ flowchart LR
 
 | Tool              | Purpose                                                                                                                                                                                      |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `icc_exec`        | Execute Python in a persistent local session. Tracks `intent_signature` for flywheel policy. Optionally routes to a remote runner when `target_profile` is mapped — local is the default.    |
+| `icc_exec`        | Execute Python in a persistent local session. Tracks `intent_signature` for flywheel policy. Optionally routes to a remote runner when `target_profile` is mapped — local is the default. Supports `result_var` to return structured JSON from a named global variable (missing/non-serializable `result_var` is an error). |
 | `icc_read`        | Run a read pipeline locally (default) or via remote runner. Returns `{ rows, verify_result, verification_state }`. Returns a structured `pipeline_missing` hint when no pipeline exists yet. |
 | `icc_write`       | Run a write pipeline locally (default) or via remote runner, with verification and rollback/stop policy enforcement.                                                                         |
 | `icc_crystallize` | Generate `.py` + `.yaml` pipeline files from WAL history. Call when `synthesis_ready: true` appears in `policy://current`. Always writes locally.                                            |
 | `icc_reconcile`   | Confirm or correct a state delta. `outcome=correct` + `intent_signature` increments `human_fix_rate` on the most-recently-used matching candidate.                                           |
+| `icc_goal_ingest` | Submit goal events (`human_edit` / `hook_payload` / `system_*`) to Goal Control Plane. Returns acceptance decision + active snapshot metadata.                                               |
+| `icc_goal_read`   | Read active goal snapshot plus recent goal ledger events.                                                                                                                                    |
+| `icc_goal_rollback` | Roll back active goal to a previous goal event id and produce a new snapshot version.                                                                                                      |
 
 
-**Resources:** `policy://current` · `runner://status` · `state://deltas` · `pipeline://{connector}/{mode}/{name}` · `connector://{vertical}/notes`
+**Resources:** `policy://current` · `runner://status` · `state://deltas` · `state://goal` · `state://goal-ledger` · `pipeline://{connector}/{mode}/{name}` · `connector://{vertical}/notes`
 
 **Prompts:** `icc_explore`
 
@@ -285,7 +290,7 @@ flowchart LR
 python -m pytest tests -q
 ```
 
-Current baseline: **215** tests passing.
+Current baseline: **255** tests passing.
 
 ## Repository layout
 
@@ -327,7 +332,7 @@ references/         External reference codebases (git submodule)
 | **ObserverPlugin (观察插件)**     | Abstract base class for operator behavior observation. Defines four methods: `start(config)`, `stop()`, `get_context(hint) -> dict` (pre-elicitation context read), `execute(intent, params) -> dict` (takeover). Mirrors the `Pipeline` contract for the reverse flywheel.                                                                                                                          |
 | **OperatorMonitor (操作员监控器)**  | Background thread inside `EmergeDaemon` (enabled via `EMERGE_OPERATOR_MONITOR=1`). Polls remote runners for operator events, runs `PatternDetector`, calls `adapter.get_context()` for pre-elicitation context, then pushes to CC via MCP channel notification (explore stage) or `ElicitRequest` (canary/stable).                                                                                   |
 | **PatternDetector (模式检测器)**   | Analyses batches of operator events and emits `PatternSummary` objects when thresholds are crossed. Pluggable strategies: frequency (3 same-type events in 20 min), error-rate (undo ratio ≥ 0.4), cross-machine (same pattern on ≥2 machines). Filters out `session_role=monitor_sub` events to prevent AI self-monitoring.                                                                         |
-| **Pipeline (流水线)**            | YAML + Python pair implementing a deterministic `run_read` / `run_write` / `verify` / `rollback` contract. Lives in the connector directory; never needs to exist on the runner machine.                                                                                                                                                                                                             |
+| **Pipeline (流水线)**            | Strict-YAML metadata + Python pair implementing a deterministic `run_read` / `run_write` / `verify` / `rollback` contract. JSON-style metadata in `.yaml` files is not supported. Lives in the connector directory; never needs to exist on the runner machine.                                                                                                                                      |
 | **Policy lifecycle (策略生命周期)** | Three-stage promotion path: `explore` (accumulating history, 0% rollout) → `canary` (partial rollout, 20%) → `stable` (full trust, 100%). Demotion on consecutive failures or low window success rate.                                                                                                                                                                                               |
 | **Reverse flywheel (反向飞轮)**   | The Operator Intelligence Loop: observes the human operator (not the AI), detects repeated patterns, surfaces a CC dialog to capture intent, and hands off to the AI layer. Feeds the same policy registry and crystallization mechanism as the forward flywheel.                                                                                                                                    |
 | **State delta (状态增量)**        | A recorded change in system state maintained by `StateTracker`. Surfaced via hooks as `additionalContext` to keep the agent aware of what has changed since the last prompt.                                                                                                                                                                                                                         |

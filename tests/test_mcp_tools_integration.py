@@ -98,6 +98,12 @@ def test_tools_list_does_not_expose_admin_state_operations():
     names = [t["name"] for t in listed["result"]["tools"]]
     assert "icc_state_status" not in names
     assert "icc_state_clear" not in names
+    assert "icc_goal_ingest" in names
+    assert "icc_goal_read" in names
+    assert "icc_goal_rollback" in names
+    icc_exec = next(t for t in listed["result"]["tools"] if t["name"] == "icc_exec")
+    props = icc_exec["inputSchema"]["properties"]
+    assert "result_var" in props
 
 
 def test_tools_call_returns_error_payload_for_missing_pipeline_and_script(tmp_path: Path):
@@ -226,6 +232,95 @@ def test_daemon_can_dispatch_tools_via_remote_runner(tmp_path: Path):
         os.environ.pop("EMERGE_SESSION_ID", None)
 
 
+def test_icc_exec_result_var_local_returns_structured_value(tmp_path: Path):
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "result-var-local"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        out = daemon.call_tool(
+            "icc_exec",
+            {
+                "code": "__result = [{'id': 1, 'name': 'ok'}]",
+                "intent_signature": "mock.read.result-var-local",
+                "result_var": "__result",
+            },
+        )
+        assert out.get("isError") is False
+        assert out.get("result_var_name") == "__result"
+        assert out.get("result_var_value") == [{"id": 1, "name": "ok"}]
+        assert not out.get("result_var_error")
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_icc_exec_result_var_remote_returns_structured_value(tmp_path: Path):
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "daemon-state")
+    os.environ["EMERGE_SESSION_ID"] = "result-var-remote"
+    try:
+        with _RunnerServer(tmp_path / "remote-state") as server:
+            os.environ["EMERGE_RUNNER_URL"] = server.url
+            daemon = EmergeDaemon(root=ROOT)
+            out = daemon.call_tool(
+                "icc_exec",
+                {
+                    "code": "__result = [{'id': 2, 'name': 'remote'}]",
+                    "intent_signature": "mock.read.result-var-remote",
+                    "result_var": "__result",
+                },
+            )
+            assert out.get("isError") is False
+            assert out.get("result_var_name") == "__result"
+            assert out.get("result_var_value") == [{"id": 2, "name": "remote"}]
+            assert not out.get("result_var_error")
+    finally:
+        os.environ.pop("EMERGE_RUNNER_URL", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_icc_exec_result_var_missing_is_error(tmp_path: Path):
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "result-var-missing"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        out = daemon.call_tool(
+            "icc_exec",
+            {
+                "code": "x = 1",
+                "intent_signature": "mock.read.result-var-missing",
+                "result_var": "__result",
+            },
+        )
+        assert out.get("isError") is True
+        assert "result var not found" in out["content"][0]["text"]
+        assert out.get("error_class") == "ResultVarError"
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_icc_exec_result_var_not_serializable_is_error(tmp_path: Path):
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "result-var-nonserializable"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        out = daemon.call_tool(
+            "icc_exec",
+            {
+                "code": "__result = set([1, 2, 3])",
+                "intent_signature": "mock.read.result-var-nonserializable",
+                "result_var": "__result",
+            },
+        )
+        assert out.get("isError") is True
+        assert "result var not serializable" in out["content"][0]["text"]
+        assert out.get("error_class") == "ResultVarError"
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
 def test_daemon_can_route_to_multiple_runners_by_target_profile(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "daemon-state")
     os.environ["EMERGE_SESSION_ID"] = "multi-runner"
@@ -281,6 +376,77 @@ def test_daemon_can_use_persisted_runner_config_without_env_url(tmp_path: Path):
             assert "7" in out["result"]["content"][0]["text"]
     finally:
         os.environ.pop("EMERGE_RUNNER_CONFIG_PATH", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_remote_exec_script_ref_outside_allowlist_is_rejected(tmp_path: Path):
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "daemon-state")
+    os.environ["EMERGE_SESSION_ID"] = "remote-script-ref-deny"
+    os.environ["EMERGE_SCRIPT_ROOTS"] = str(tmp_path / "allowed")
+    try:
+        script_path = tmp_path / "outside.py"
+        script_path.write_text("print('outside')\n", encoding="utf-8")
+        with _RunnerServer(tmp_path / "remote-state") as server:
+            os.environ["EMERGE_RUNNER_URL"] = server.url
+            daemon = EmergeDaemon(root=ROOT)
+            out = daemon.call_tool(
+                "icc_exec",
+                {
+                    "mode": "script_ref",
+                    "script_ref": str(script_path),
+                    "intent_signature": "mock.read.outside",
+                },
+            )
+            assert out.get("isError") is True
+            assert "outside allowed roots" in out["content"][0]["text"]
+    finally:
+        os.environ.pop("EMERGE_RUNNER_URL", None)
+        os.environ.pop("EMERGE_SCRIPT_ROOTS", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_icc_read_without_verify_is_consistent_local_and_remote(tmp_path: Path):
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "daemon-state")
+    os.environ["EMERGE_SESSION_ID"] = "read-verify-consistency"
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path / "connectors")
+    try:
+        pipeline_dir = tmp_path / "connectors" / "demo" / "pipelines" / "read"
+        pipeline_dir.mkdir(parents=True, exist_ok=True)
+        (pipeline_dir / "novfy.yaml").write_text(
+            "intent_signature: demo.read.novfy\n"
+            "rollback_or_stop_policy: stop\n"
+            "read_steps:\n"
+            "  - run_read\n"
+            "verify_steps:\n"
+            "  - verify_read\n",
+            encoding="utf-8",
+        )
+        (pipeline_dir / "novfy.py").write_text(
+            "def run_read(metadata, args):\n"
+            "    return [{'id': '1', 'name': 'row'}]\n",
+            encoding="utf-8",
+        )
+
+        daemon_local = EmergeDaemon(root=ROOT)
+        local_out = daemon_local.call_tool("icc_read", {"connector": "demo", "pipeline": "novfy"})
+        assert local_out.get("isError") is False
+        local_body = json.loads(local_out["content"][0]["text"])
+        assert local_body["verification_state"] == "verified"
+        assert local_body["verify_result"]["ok"] is True
+
+        with _RunnerServer(tmp_path / "remote-state") as server:
+            os.environ["EMERGE_RUNNER_URL"] = server.url
+            daemon_remote = EmergeDaemon(root=ROOT)
+            remote_out = daemon_remote.call_tool("icc_read", {"connector": "demo", "pipeline": "novfy"})
+            assert remote_out.get("isError") is False
+            remote_body = json.loads(remote_out["content"][0]["text"])
+            assert remote_body["verification_state"] == "verified"
+            assert remote_body["verify_result"]["ok"] is True
+    finally:
+        os.environ.pop("EMERGE_RUNNER_URL", None)
+        os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
 
@@ -437,6 +603,37 @@ def test_pipeline_policy_metrics_are_recorded_for_stop_and_rollback(tmp_path: Pa
         os.environ.pop("EMERGE_SESSION_ID", None)
 
 
+def test_pipeline_registry_records_last_execution_path_local(tmp_path: Path):
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "path-local"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        daemon.call_tool("icc_read", {"connector": "mock", "pipeline": "layers"})
+        reg = tmp_path / "state" / "pipelines-registry.json"
+        data = json.loads(reg.read_text(encoding="utf-8"))
+        assert data["pipelines"]["mock.read.layers"]["last_execution_path"] == "local"
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_pipeline_registry_records_last_execution_path_remote(tmp_path: Path):
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "daemon-state")
+    os.environ["EMERGE_SESSION_ID"] = "path-remote"
+    try:
+        with _RunnerServer(tmp_path / "remote-state") as server:
+            os.environ["EMERGE_RUNNER_URL"] = server.url
+            daemon = EmergeDaemon(root=ROOT)
+            daemon.call_tool("icc_read", {"connector": "mock", "pipeline": "layers"})
+        reg = tmp_path / "daemon-state" / "pipelines-registry.json"
+        data = json.loads(reg.read_text(encoding="utf-8"))
+        assert data["pipelines"]["mock.read.layers"]["last_execution_path"] == "remote"
+    finally:
+        os.environ.pop("EMERGE_RUNNER_URL", None)
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
 # ── Task 6: MCP resources ────────────────────────────────────────────────────
 
 def test_resources_list_returns_static_and_pipeline_uris():
@@ -446,7 +643,40 @@ def test_resources_list_returns_static_and_pipeline_uris():
     assert "policy://current" in uris
     assert "runner://status" in uris
     assert "state://deltas" in uris
+    assert "state://goal" in uris
+    assert "state://goal-ledger" in uris
     assert any(u.startswith("pipeline://") for u in uris)
+
+
+def test_resources_read_goal_snapshot_and_ledger(tmp_path: Path):
+    os.environ["CLAUDE_PLUGIN_DATA"] = str(tmp_path / "hook-state")
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        raw = daemon.call_tool(
+            "icc_goal_ingest",
+            {
+                "event_type": "system_refine",
+                "source": "system",
+                "actor": "integration-test",
+                "text": "goal for resource test",
+                "confidence": 0.9,
+                "force": True,
+            },
+        )
+        assert raw["isError"] is False
+        snap_resp = daemon.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 65, "method": "resources/read", "params": {"uri": "state://goal"}}
+        )
+        snap = json.loads(snap_resp["result"]["resource"]["text"])
+        assert snap["text"] == "goal for resource test"
+
+        ledger_resp = daemon.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 66, "method": "resources/read", "params": {"uri": "state://goal-ledger"}}
+        )
+        ledger = json.loads(ledger_resp["result"]["resource"]["text"])
+        assert ledger["events"], "goal ledger should contain at least one event"
+    finally:
+        os.environ.pop("CLAUDE_PLUGIN_DATA", None)
 
 
 def test_resources_read_policy_current(tmp_path):
@@ -825,6 +1055,29 @@ def test_runner_only_handles_icc_exec(tmp_path):
         os.environ.pop("EMERGE_SESSION_ID", None)
 
 
+def test_runner_rejects_script_ref_outside_allowed_roots(tmp_path):
+    """Runner enforces script_ref allowlist and rejects outside paths."""
+    os.environ["EMERGE_SCRIPT_ROOTS"] = str(tmp_path / "allowed")
+    try:
+        executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
+        outside = tmp_path / "outside.py"
+        outside.write_text("print('x')\n", encoding="utf-8")
+        try:
+            executor.run(
+                "icc_exec",
+                {
+                    "mode": "script_ref",
+                    "script_ref": str(outside),
+                    "intent_signature": "mock.read.outside",
+                },
+            )
+            assert False, "expected PermissionError for script_ref outside allowed roots"
+        except PermissionError as exc:
+            assert "outside allowed roots" in str(exc)
+    finally:
+        os.environ.pop("EMERGE_SCRIPT_ROOTS", None)
+
+
 def test_run_pipeline_remotely_sends_pipeline_source_as_icc_exec(tmp_path):
     """_run_pipeline_remotely loads local pipeline .py and sends it to runner as icc_exec."""
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
@@ -844,6 +1097,7 @@ def test_run_pipeline_remotely_sends_pipeline_source_as_icc_exec(tmp_path):
         )
         (pipeline_dir / "mydata.py").write_text(
             "def run_read(metadata, args):\n"
+            "    print('debug: read pipeline running')\n"
             "    return [{'val': 99}]\n\n"
             "def verify_read(metadata, args, rows):\n"
             "    return {'ok': bool(rows)}\n"
@@ -854,7 +1108,7 @@ def test_run_pipeline_remotely_sends_pipeline_source_as_icc_exec(tmp_path):
         class _FakeClient:
             def call_tool(self, name, arguments):
                 exec_calls.append({"name": name, "arguments": arguments})
-                # Simulate runner executing the inline code and printing JSON result
+                # Simulate runner executing inline code and returning structured result_var_value.
                 code = arguments.get("code", "")
                 globs: dict = {}
                 import sys as _sys, io
@@ -865,13 +1119,19 @@ def test_run_pipeline_remotely_sends_pipeline_source_as_icc_exec(tmp_path):
                     exec(code, globs)
                 finally:
                     _sys.stdout = old
-                return {"isError": False, "content": [{"type": "text", "text": f"stdout:\n{buf.getvalue()}"}]}
+                result_var = arguments.get("result_var", "")
+                return {
+                    "isError": False,
+                    "content": [{"type": "text", "text": f"stdout:\n{buf.getvalue()}"}],
+                    "result_var_value": globs.get(result_var),
+                }
 
         daemon = EmergeDaemon(root=ROOT)
         result = daemon._run_pipeline_remotely("read", {"connector": "myconn", "pipeline": "mydata"}, _FakeClient())
 
         assert len(exec_calls) == 1
         assert exec_calls[0]["name"] == "icc_exec"
+        assert exec_calls[0]["arguments"].get("result_var") == "__emerge_pipeline_out"
         assert "run_read" in exec_calls[0]["arguments"]["code"]
         assert result["pipeline_id"] == "myconn.read.mydata"
         assert result["rows"] == [{"val": 99}]
@@ -916,10 +1176,15 @@ def test_run_pipeline_remotely_strips_future_imports(tmp_path):
                 old = _sys.stdout
                 _sys.stdout = buf
                 try:
-                    exec(arguments.get("code", ""), {})
+                    globs: dict = {}
+                    exec(arguments.get("code", ""), globs)
                 finally:
                     _sys.stdout = old
-                return {"isError": False, "content": [{"type": "text", "text": f"stdout:\n{buf.getvalue()}"}]}
+                return {
+                    "isError": False,
+                    "content": [{"type": "text", "text": f"stdout:\n{buf.getvalue()}"}],
+                    "result_var_value": globs.get(arguments.get("result_var", "")),
+                }
 
         daemon = EmergeDaemon(root=ROOT)
         result = daemon._run_pipeline_remotely("read", {"connector": "fc", "pipeline": "items"}, _FakeClient())
@@ -962,10 +1227,15 @@ def test_run_pipeline_remotely_write_verified(tmp_path):
                 old = _sys.stdout
                 _sys.stdout = buf
                 try:
-                    exec(arguments.get("code", ""), {})
+                    globs: dict = {}
+                    exec(arguments.get("code", ""), globs)
                 finally:
                     _sys.stdout = old
-                return {"isError": False, "content": [{"type": "text", "text": f"stdout:\n{buf.getvalue()}"}]}
+                return {
+                    "isError": False,
+                    "content": [{"type": "text", "text": f"stdout:\n{buf.getvalue()}"}],
+                    "result_var_value": globs.get(arguments.get("result_var", "")),
+                }
 
         daemon = EmergeDaemon(root=ROOT)
         result = daemon._run_pipeline_remotely("write", {"connector": "wc", "pipeline": "do-thing"}, _FakeClient())
@@ -1769,6 +2039,27 @@ def test_pre_tool_use_rejects_two_part_intent_signature():
     assert out["decision"] == "block"
 
 
+def test_pre_tool_use_rejects_legacy_read_connector_name_order():
+    """Legacy read.<connector>.<name> format must be blocked."""
+    import subprocess, json as _json, sys as _sys
+    hook = str(ROOT / "hooks" / "pre_tool_use.py")
+    payload = {
+        "tool_name": "mcp__plugin_emerge_emerge__icc_exec",
+        "tool_input": {
+            "code": "result = 1",
+            "intent_signature": "read.mock.layers",
+        },
+    }
+    result = subprocess.run(
+        [_sys.executable, hook],
+        input=_json.dumps(payload),
+        capture_output=True, text=True,
+    )
+    out = _json.loads(result.stdout)
+    assert out["decision"] == "block"
+    assert "Must be <connector>.(read|write).<name>" in out["reason"]
+
+
 def test_pre_tool_use_accepts_valid_intent_signature():
     """Valid intent_signature with 3 lowercase dot-parts must pass."""
     import subprocess, json as _json, sys as _sys
@@ -1787,6 +2078,49 @@ def test_pre_tool_use_accepts_valid_intent_signature():
     )
     out = _json.loads(result.stdout)
     assert out.get("decision") != "block", f"Should not block valid signature: {out}"
+
+
+def test_pre_tool_use_rejects_invalid_result_var():
+    """result_var must be a valid Python identifier."""
+    import subprocess, json as _json, sys as _sys
+    hook = str(ROOT / "hooks" / "pre_tool_use.py")
+    payload = {
+        "tool_name": "mcp__plugin_emerge_emerge__icc_exec",
+        "tool_input": {
+            "code": "__result = 1",
+            "intent_signature": "zwcad.read.state",
+            "result_var": "bad-var",
+        },
+    }
+    result = subprocess.run(
+        [_sys.executable, hook],
+        input=_json.dumps(payload),
+        capture_output=True, text=True,
+    )
+    out = _json.loads(result.stdout)
+    assert out["decision"] == "block"
+    assert "result_var" in out["reason"]
+
+
+def test_pre_tool_use_accepts_valid_result_var():
+    """Valid identifier-shaped result_var should pass."""
+    import subprocess, json as _json, sys as _sys
+    hook = str(ROOT / "hooks" / "pre_tool_use.py")
+    payload = {
+        "tool_name": "mcp__plugin_emerge_emerge__icc_exec",
+        "tool_input": {
+            "code": "__result = 1",
+            "intent_signature": "zwcad.read.state",
+            "result_var": "__result",
+        },
+    }
+    result = subprocess.run(
+        [_sys.executable, hook],
+        input=_json.dumps(payload),
+        capture_output=True, text=True,
+    )
+    out = _json.loads(result.stdout)
+    assert out.get("decision") != "block", f"Should not block valid result_var: {out}"
 
 
 def test_wal_uses_unix_newlines(tmp_path: Path):
