@@ -1,6 +1,6 @@
 {
   "name": "emerge",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "description": "Emerge — policy-driven crystallization flywheel for Claude Code: exec patterns promote to stable pipelines, PreToolUse enforcement, optional remote runner",
   "mcpServers": {
     "emerge": {
