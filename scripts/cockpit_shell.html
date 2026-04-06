@@ -273,7 +273,7 @@ async function refreshPolicy() {
     policyData = await r.json();
     renderThresholds();
     renderTabs();
-    renderCurrentTab();
+    refreshPolicyDisplay();
     document.getElementById('last-refresh').textContent = '刷新: ' + new Date().toLocaleTimeString();
   } catch(e) {
     document.getElementById('status-msg').textContent = '连接失败: ' + e.message;
@@ -287,6 +287,40 @@ async function refreshAssets() {
     renderTabs();
     renderCurrentTab();
   } catch(e) {}
+}
+
+// Refresh only policy-driven content without disturbing static sections (notes, controls).
+// Called by the 5-second interval. renderCurrentTab() is used for full redraws (tab switch,
+// initial load, queue changes).
+function refreshPolicyDisplay() {
+  if (!policyData) return;
+  if (currentTab === 'overview') {
+    // Overview is all policy-driven — full redraw, but preserve scroll position
+    const panel = document.getElementById('main-panel');
+    const scrollTop = panel ? panel.scrollTop : 0;
+    renderOverviewTab();
+    if (panel) panel.scrollTop = scrollTop;
+    return;
+  }
+  // Connector tab: only update the pipelines div if it exists, leaving notes/controls intact
+  const pipDiv = document.getElementById('conn-pipelines');
+  const pipLabel = document.getElementById('conn-pipelines-label');
+  if (!pipDiv) {
+    // First load or tab not yet rendered — do full render
+    renderConnectorTab(currentTab);
+    return;
+  }
+  const allPipelines = policyData.pipelines || [];
+  const connPipelines = allPipelines.filter(p => (p.key || '').startsWith(currentTab + '.'));
+  const queuedKeys = new Set(queue.map(q => q.data && q.data.key).filter(Boolean));
+  if (pipLabel) pipLabel.textContent = connPipelines.length;
+  let html = '';
+  if (connPipelines.length) {
+    connPipelines.forEach(p => { html += renderPipelineCard(p, queuedKeys, { hideConnector: true }); });
+  } else {
+    html = `<div style="color:#484f58;font-size:11px;padding:6px 0">No pipelines for this connector.</div>`;
+  }
+  pipDiv.innerHTML = html;
 }
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
@@ -637,13 +671,15 @@ function renderConnectorTab(name) {
     </div>`;
   }
 
-  // ── PIPELINES ──
-  html += `<div class="sec-label">Pipelines <span class="sec-count">${connPipelines.length}</span></div>`;
+  // ── PIPELINES — stable IDs so policy refresh can update only this section ──
+  let pipHtml = '';
   if (connPipelines.length) {
-    connPipelines.forEach(p => { html += renderPipelineCard(p, queuedKeys, { hideConnector: true }); });
+    connPipelines.forEach(p => { pipHtml += renderPipelineCard(p, queuedKeys, { hideConnector: true }); });
   } else {
-    html += `<div style="color:#484f58;font-size:11px;padding:6px 0">No pipelines for this connector.</div>`;
+    pipHtml = `<div style="color:#484f58;font-size:11px;padding:6px 0">No pipelines for this connector.</div>`;
   }
+  html += `<div class="sec-label">Pipelines <span id="conn-pipelines-label" class="sec-count">${connPipelines.length}</span></div>
+  <div id="conn-pipelines">${pipHtml}</div>`;
 
   // ── CONTROLS (Scenarios + injected components) ──
   const hasControls = (c.scenarios && c.scenarios.length) || (c.components && c.components.length);
@@ -871,19 +907,19 @@ function submitScenarioForm(formId, connector, scenarioName) {
 function enqueue(item) {
   queue.push(item);
   renderQueue();
-  if (currentTab === 'overview') renderOverviewTab();
+  refreshPolicyDisplay();
 }
 
 function dequeue(id) {
   queue = queue.filter(q => q.id !== id);
   renderQueue();
-  if (currentTab === 'overview') renderOverviewTab();
+  refreshPolicyDisplay();
 }
 
 function clearQueue() {
   queue = [];
   renderQueue();
-  if (currentTab === 'overview') renderOverviewTab();
+  refreshPolicyDisplay();
 }
 
 function renderQueue() {
@@ -930,7 +966,7 @@ async function submitQueue() {
       queue = [];
       renderQueue();
       document.getElementById('status-msg').textContent = `✓ 已提交 ${result.action_count} 条操作给 CC`;
-      if (currentTab === 'overview') renderOverviewTab();
+      refreshPolicyDisplay();
     } else {
       document.getElementById('status-msg').textContent = '提交失败: ' + JSON.stringify(result);
       btn.disabled = false;
