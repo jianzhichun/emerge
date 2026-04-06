@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Emerge Cockpit</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', monospace; font-size: 13px; }
+.header { background: #161b22; border-bottom: 1px solid #30363d; padding: 10px 16px; display: flex; align-items: center; gap: 12px; }
+.header h1 { font-size: 14px; color: #e6edf3; }
+.session-info { font-size: 11px; color: #8b949e; margin-left: auto; }
+.thresholds-bar { background: #0d1117; border-bottom: 1px solid #21262d; padding: 6px 16px; display: flex; gap: 20px; flex-wrap: wrap; font-size: 11px; color: #8b949e; }
+.thresholds-bar span b { color: #79c0ff; }
+.tabs { display: flex; border-bottom: 1px solid #30363d; background: #161b22; }
+.tab { padding: 8px 16px; cursor: pointer; font-size: 12px; color: #8b949e; border-bottom: 2px solid transparent; }
+.tab.active { color: #e6edf3; border-bottom-color: #58a6ff; }
+.layout { display: flex; height: calc(100vh - 90px); }
+.main-panel { flex: 1; overflow-y: auto; padding: 12px 16px; }
+.queue-panel { width: 280px; border-left: 1px solid #21262d; display: flex; flex-direction: column; }
+.queue-header { padding: 10px 14px; font-size: 11px; color: #58a6ff; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #21262d; }
+.queue-items { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+.queue-item { background: #0d1a0d; border: 1px solid #2a4a2a; border-radius: 4px; padding: 6px 8px; font-size: 11px; display: flex; align-items: flex-start; gap: 6px; }
+.queue-item.delete { background: #1a0d0d; border-color: #4a1a1a; }
+.queue-item .action-label { flex: 1; }
+.queue-item .action-label b { color: #58a6ff; display: block; }
+.queue-item .action-label b.del { color: #f85149; }
+.queue-item .action-label b.promote { color: #3fb950; }
+.queue-item .action-label span { color: #8b949e; font-size: 10px; }
+.queue-item button.remove { background: none; border: none; color: #484f58; cursor: pointer; font-size: 14px; line-height: 1; padding: 0; }
+.queue-item button.remove:hover { color: #f85149; }
+.queue-footer { padding: 10px 12px; border-top: 1px solid #21262d; }
+.submit-btn { width: 100%; padding: 8px; background: #1a3a2a; border: 1px solid #3fb950; border-radius: 5px; color: #3fb950; font-size: 13px; font-weight: 600; cursor: pointer; }
+.submit-btn:hover { background: #2a4a3a; }
+.submit-btn:disabled { opacity: 0.4; cursor: default; }
+.clear-btn { width: 100%; padding: 4px; background: none; border: none; color: #484f58; font-size: 11px; cursor: pointer; margin-top: 4px; }
+.section-header { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin: 14px 0 6px; }
+.section-header.critical { color: #f85149; }
+.section-header.canary { color: #d29922; }
+.section-header.stable { color: #3fb950; }
+.section-header.explore { color: #8b949e; }
+.pipeline-card { background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 8px 12px; margin-bottom: 4px; }
+.pipeline-card.critical { border-left: 3px solid #f85149; }
+.pipeline-card.canary { border-left: 3px solid #d29922; }
+.pipeline-card.stable { border-left: 3px solid #3fb950; }
+.pipeline-card.queued { opacity: 0.6; }
+.pipeline-card-row { display: flex; align-items: center; gap: 8px; }
+.pipeline-key { flex: 1; font-size: 12px; color: #e6edf3; word-break: break-all; }
+.pipeline-badge { padding: 1px 7px; border-radius: 10px; font-size: 10px; flex-shrink: 0; }
+.badge-stable { background: #1b2d1b; color: #3fb950; border: 1px solid #2a4a2a; }
+.badge-canary { background: #2d2208; color: #d29922; border: 1px solid #4a3a10; }
+.badge-explore { background: #1c2128; color: #8b949e; border: 1px solid #30363d; }
+.pipeline-metrics { font-size: 10px; color: #8b949e; margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; }
+.pipeline-metrics .warn { color: #f85149; }
+.pipeline-metrics .good { color: #3fb950; }
+.action-select { font-size: 11px; background: #1c2128; border: 1px solid #30363d; color: #8b949e; border-radius: 3px; padding: 2px 4px; cursor: pointer; }
+.action-select.active { border-color: #58a6ff; color: #58a6ff; }
+.connector-block { background: #161b22; border: 1px solid #21262d; border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
+.connector-header { background: #1c2128; padding: 10px 14px; display: flex; align-items: center; gap: 10px; }
+.connector-name { font-size: 13px; font-weight: 700; color: #ce93d8; }
+.connector-body { padding: 10px 14px; }
+.notes-block { background: #0d1117; border: 1px solid #1b2d1b; border-radius: 4px; padding: 8px 10px; font-size: 11px; color: #8b949e; white-space: pre-wrap; margin-bottom: 8px; }
+.notes-actions { display: flex; gap: 6px; margin-bottom: 8px; }
+.btn-sm { padding: 3px 10px; font-size: 11px; background: #1c2128; border: 1px solid #30363d; border-radius: 3px; color: #8b949e; cursor: pointer; }
+.btn-sm:hover { border-color: #58a6ff; color: #58a6ff; }
+.scenario-card { background: #0d1117; border: 1px solid #1a2a3a; border-radius: 4px; padding: 7px 10px; margin-bottom: 5px; display: flex; align-items: flex-start; gap: 8px; }
+.scenario-info { flex: 1; }
+.scenario-name { font-size: 12px; color: #e6edf3; font-weight: 600; }
+.scenario-desc { font-size: 10px; color: #8b949e; margin-top: 2px; }
+.scenario-meta { font-size: 10px; color: #484f58; margin-top: 2px; }
+.add-btn { padding: 3px 10px; background: #1a2a3a; border: 1px solid #58a6ff; border-radius: 3px; color: #58a6ff; font-size: 11px; cursor: pointer; flex-shrink: 0; }
+.add-btn:hover { background: #1f3a5a; }
+.component-slot { border: 1px dashed #30363d; border-radius: 4px; padding: 6px; margin-top: 6px; }
+.component-slot iframe { width: 100%; border: none; min-height: 200px; }
+.component-label { font-size: 10px; color: #484f58; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+.status-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 22px; background: #161b22; border-top: 1px solid #21262d; display: flex; align-items: center; padding: 0 12px; font-size: 10px; color: #8b949e; gap: 16px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🌀 Emerge Cockpit</h1>
+  <span class="session-info" id="session-info">loading...</span>
+</div>
+
+<div class="thresholds-bar" id="thresholds-bar">loading thresholds...</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('status')">By Status</div>
+  <div class="tab" onclick="switchTab('connector')">By Connector</div>
+</div>
+
+<div class="layout">
+  <div class="main-panel" id="main-panel">loading...</div>
+  <div class="queue-panel">
+    <div class="queue-header">📋 待提交操作 (<span id="queue-count">0</span>)</div>
+    <div class="queue-items" id="queue-items"></div>
+    <div class="queue-footer">
+      <button class="submit-btn" id="submit-btn" onclick="submitQueue()" disabled>✓ 提交给 CC 执行 (0)</button>
+      <button class="clear-btn" onclick="clearQueue()">清空队列</button>
+    </div>
+  </div>
+</div>
+
+<div class="status-bar">
+  <span id="status-msg">就绪</span>
+  <span id="last-refresh"></span>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+let policyData = null;
+let assetsData = null;
+let queue = [];
+let currentTab = 'status';
+let queueIdSeq = 0;
+
+// ── Bootstrap ────────────────────────────────────────────────────────────────
+async function init() {
+  await Promise.all([refreshPolicy(), refreshAssets()]);
+  renderCurrentTab();
+  setInterval(refreshPolicy, 5000);
+}
+
+async function refreshPolicy() {
+  try {
+    const r = await fetch('/api/policy');
+    policyData = await r.json();
+    renderThresholds();
+    if (currentTab === 'status') renderStatusTab();
+    document.getElementById('last-refresh').textContent = '刷新: ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    document.getElementById('status-msg').textContent = '连接失败: ' + e.message;
+  }
+}
+
+async function refreshAssets() {
+  try {
+    const r = await fetch('/api/assets');
+    assetsData = await r.json();
+    if (currentTab === 'connector') renderConnectorTab();
+  } catch(e) {}
+}
+
+// ── Tabs ─────────────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach((el, i) => {
+    el.classList.toggle('active', (i === 0 && tab === 'status') || (i === 1 && tab === 'connector'));
+  });
+  renderCurrentTab();
+}
+
+function renderCurrentTab() {
+  if (currentTab === 'status') renderStatusTab();
+  else renderConnectorTab();
+}
+
+// ── Thresholds bar ────────────────────────────────────────────────────────────
+function renderThresholds() {
+  if (!policyData) return;
+  const t = policyData.thresholds || {};
+  const bar = document.getElementById('thresholds-bar');
+  bar.innerHTML = [
+    `promote success≥<b>${t.promote_min_success_rate}</b>`,
+    `verify≥<b>${t.promote_min_verify_rate}</b>`,
+    `attempts≥<b>${t.promote_min_attempts}</b>`,
+    `rollback_failures=<b>${t.rollback_consecutive_failures}</b>`,
+    `stable_attempts≥<b>${t.stable_min_attempts}</b>`,
+  ].map(s => `<span>${s}</span>`).join('');
+  document.getElementById('session-info').textContent =
+    `Session: ${(policyData.session_id || '').slice(0,20)} · Goal: ${policyData.goal || 'unset'}`;
+}
+
+// ── By Status tab ─────────────────────────────────────────────────────────────
+function renderStatusTab() {
+  if (!policyData) return;
+  const pipelines = policyData.pipelines || [];
+  const groups = { critical: [], canary: [], stable: [], explore: [] };
+  const threshold = policyData.thresholds ? (policyData.thresholds.rollback_consecutive_failures || 2) : 2;
+  pipelines.forEach(p => {
+    if ((p.consecutive_failures || 0) >= threshold || ((p.consecutive_failures || 0) > 0 && p.success_rate === 0))
+      groups.critical.push(p);
+    else if (p.status === 'canary') groups.canary.push(p);
+    else if (p.status === 'stable') groups.stable.push(p);
+    else groups.explore.push(p);
+  });
+
+  let html = '';
+  const queuedKeys = new Set(queue.map(q => q.data && q.data.key).filter(Boolean));
+
+  if (groups.critical.length) {
+    html += `<div class="section-header critical">⚠ Critical (${groups.critical.length})</div>`;
+    groups.critical.forEach(p => { html += renderPipelineCard(p, queuedKeys); });
+  }
+  if (groups.stable.length) {
+    html += `<div class="section-header stable">✓ Stable (${groups.stable.length})</div>`;
+    groups.stable.forEach(p => { html += renderPipelineCard(p, queuedKeys); });
+  }
+  if (groups.canary.length) {
+    html += `<div class="section-header canary">⟳ Canary (${groups.canary.length})</div>`;
+    groups.canary.forEach(p => { html += renderPipelineCard(p, queuedKeys); });
+  }
+  if (groups.explore.length) {
+    html += `<div class="section-header explore">◯ Explore (${groups.explore.length})</div>`;
+    groups.explore.forEach(p => { html += renderPipelineCard(p, queuedKeys); });
+  }
+  if (!html) html = '<div style="color:#8b949e;padding:20px">No pipelines found.</div>';
+  document.getElementById('main-panel').innerHTML = html;
+}
+
+function renderPipelineCard(p, queuedKeys) {
+  const key = p.key || '';
+  const status = p.status || 'explore';
+  const isQueued = queuedKeys.has(key);
+  const cf = p.consecutive_failures || 0;
+  const sr = p.success_rate != null ? p.success_rate.toFixed(2) : '?';
+  const vr = p.verify_rate != null ? p.verify_rate.toFixed(2) : '?';
+  const actionOptions = {
+    explore: ['— action —', 'promote-canary', 'reset-failures', 'delete'],
+    canary:  ['— action —', 'promote-stable', 'demote-explore', 'delete'],
+    stable:  ['— action —', 'demote-canary', 'delete'],
+  };
+  const opts = (actionOptions[status] || actionOptions.explore)
+    .map(a => `<option value="${a}">${a}</option>`).join('');
+  const cfClass = cf >= 2 ? 'warn' : cf > 0 ? 'warn' : '';
+  return `
+<div class="pipeline-card ${cf >= 2 ? 'critical' : status} ${isQueued ? 'queued' : ''}">
+  <div class="pipeline-card-row">
+    <div class="pipeline-key">${escHtml(key)}</div>
+    <span class="pipeline-badge badge-${status}">${status}${p.rollout_pct != null ? ' · ' + p.rollout_pct + '%' : ''}</span>
+    <select class="action-select" onchange="onActionSelect(this,'${escHtml(key).replace(/'/g,"\\'")}','${status}')">
+      ${opts}
+    </select>
+  </div>
+  <div class="pipeline-metrics">
+    <span>success: <b class="${parseFloat(sr) >= 0.95 ? 'good' : 'warn'}">${sr}</b></span>
+    <span>verify: <b class="${parseFloat(vr) >= 0.95 ? 'good' : 'warn'}">${vr}</b></span>
+    <span>failures: <b class="${cfClass}">${cf}</b></span>
+    ${p.rollback_executed_count ? `<span>rollbacks: <b class="warn">${p.rollback_executed_count}</b></span>` : ''}
+  </div>
+</div>`;
+}
+
+function onActionSelect(select, key, currentStatus) {
+  const action = select.value;
+  if (action === '— action —') return;
+  select.value = '— action —';
+
+  const actionMap = {
+    'promote-canary': { label: 'Promote → canary', type: 'pipeline-set', fields: {status:'canary', rollout_pct:20} },
+    'promote-stable': { label: 'Promote → stable', type: 'pipeline-set', fields: {status:'stable', rollout_pct:100} },
+    'demote-explore': { label: 'Demote → explore', type: 'pipeline-set', fields: {status:'explore', rollout_pct:0} },
+    'demote-canary':  { label: 'Demote → canary',  type: 'pipeline-set', fields: {status:'canary', rollout_pct:20} },
+    'reset-failures': { label: 'Reset failures',   type: 'pipeline-set', fields: {consecutive_failures:0} },
+    'delete':         { label: 'Delete pipeline',  type: 'pipeline-delete' },
+  };
+  const def = actionMap[action];
+  if (!def) return;
+
+  enqueue({
+    id: ++queueIdSeq,
+    type: def.type,
+    label: def.label,
+    subLabel: key.replace('pipeline::', ''),
+    command: def.type === 'pipeline-delete'
+      ? `pipeline-delete ${key}`
+      : `pipeline-set ${key} ${JSON.stringify(def.fields)}`,
+    data: def.type === 'pipeline-delete'
+      ? { type: 'pipeline-delete', key }
+      : { type: 'pipeline-set', key, fields: def.fields },
+  });
+}
+
+// ── By Connector tab ──────────────────────────────────────────────────────────
+function renderConnectorTab() {
+  if (!assetsData) { document.getElementById('main-panel').innerHTML = '<div style="color:#8b949e;padding:20px">Loading...</div>'; return; }
+  const connectors = assetsData.connectors || {};
+  const pipelines = policyData ? (policyData.pipelines || []) : [];
+
+  let html = '';
+  Object.entries(connectors).forEach(([name, c]) => {
+    const connPipelines = pipelines.filter(p => (p.key || '').includes(name));
+    const hasCritical = connPipelines.some(p => (p.consecutive_failures || 0) >= 2);
+
+    html += `<div class="connector-block">
+      <div class="connector-header">
+        <span class="connector-name">${escHtml(name)}</span>
+        <span style="font-size:11px;color:#8b949e">${connPipelines.length} pipelines</span>
+        ${hasCritical ? '<span style="color:#f85149;font-size:11px">⚠ critical</span>' : ''}
+        ${c.scenarios && c.scenarios.length ? `<span style="font-size:10px;color:#58a6ff">${c.scenarios.length} scenarios</span>` : ''}
+      </div>
+      <div class="connector-body">`;
+
+    if (c.notes) {
+      html += `<div class="notes-block">${escHtml(c.notes.slice(0, 600))}${c.notes.length > 600 ? '\n...' : ''}</div>
+        <div class="notes-actions">
+          <button class="btn-sm" onclick="queueNotesComment('${escHtml(name)}')">+ Add comment</button>
+        </div>`;
+    }
+
+    if (c.scenarios && c.scenarios.length) {
+      html += `<div style="font-size:10px;color:#58a6ff;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;margin-top:8px;">▶ Scenarios</div>`;
+      c.scenarios.forEach(s => {
+        const argsJson = JSON.stringify(s.required_args || []);
+        html += `<div class="scenario-card">
+          <div class="scenario-info">
+            <div class="scenario-name">${escHtml(s.name)}</div>
+            <div class="scenario-desc">${escHtml((s.description || '').slice(0, 100))}</div>
+            <div class="scenario-meta">${s.step_count} steps${s.has_rollback ? ' · has rollback' : ''} · args: ${escHtml((s.required_args || []).join(', ') || 'none')}</div>
+          </div>
+          <button class="add-btn" onclick="queueScenario('${escHtml(name)}','${escHtml(s.name)}',${argsJson})">+ 加入队列</button>
+        </div>`;
+      });
+    }
+
+    if (c.components) {
+      c.components.forEach(comp => {
+        html += `<div class="component-slot">
+          <div class="component-label">📦 ${escHtml(comp.filename)} <span>${escHtml((comp.context || '').slice(0, 60))}</span></div>
+          <iframe src="/api/components/${escHtml(name)}/${escHtml(comp.filename)}" onload="resizeIframe(this)"></iframe>
+        </div>`;
+      });
+    }
+
+    if (connPipelines.length) {
+      html += `<div style="margin-top:8px;">`;
+      connPipelines.forEach(p => {
+        const cf = p.consecutive_failures || 0;
+        const dotColor = p.status === 'stable' ? '#3fb950' : p.status === 'canary' ? '#d29922' : cf >= 2 ? '#f85149' : '#8b949e';
+        html += `<div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:3px;">
+          <span style="width:7px;height:7px;border-radius:50%;background:${dotColor};flex-shrink:0"></span>
+          <span style="flex:1;color:#ccc">${escHtml(p.key || '')}</span>
+          <span style="color:#8b949e">${p.status}${cf > 0 ? ' · ⚠' + cf : ''}</span>
+        </div>`;
+      });
+      html += `</div>`;
+    }
+
+    html += `</div></div>`;
+  });
+
+  if (!html) html = '<div style="color:#8b949e;padding:20px">No connectors found in ~/.emerge/connectors/</div>';
+  document.getElementById('main-panel').innerHTML = html;
+}
+
+function queueNotesComment(connector) {
+  const comment = prompt(`Add comment to ${connector} NOTES.md:`);
+  if (!comment) return;
+  enqueue({
+    id: ++queueIdSeq,
+    type: 'notes-comment',
+    label: 'Add NOTES comment',
+    subLabel: `${connector}: ${comment.slice(0, 40)}`,
+    command: `notes-comment ${connector}`,
+    data: { type: 'notes-comment', connector, comment },
+  });
+}
+
+function queueScenario(connector, scenarioName, requiredArgs) {
+  const args = {};
+  for (const arg of requiredArgs) {
+    if (['token', 'password', 'secret', 'key'].some(s => arg.toLowerCase().includes(s))) {
+      args[arg] = '(provide via CC)';
+    } else {
+      const val = prompt(`Arg for scenario "${scenarioName}": ${arg}`);
+      if (val === null) return;
+      args[arg] = val;
+    }
+  }
+  enqueue({
+    id: ++queueIdSeq,
+    type: 'scenario-run',
+    label: `Run scenario: ${scenarioName}`,
+    subLabel: connector,
+    command: `icc_exec intent=write.${connector}.apply-test scenario=${scenarioName}`,
+    data: { type: 'scenario-run', connector, scenario: scenarioName, args },
+  });
+}
+
+// ── Action Queue ──────────────────────────────────────────────────────────────
+function enqueue(item) {
+  queue.push(item);
+  renderQueue();
+  if (currentTab === 'status') renderStatusTab();
+}
+
+function dequeue(id) {
+  queue = queue.filter(q => q.id !== id);
+  renderQueue();
+  if (currentTab === 'status') renderStatusTab();
+}
+
+function clearQueue() {
+  queue = [];
+  renderQueue();
+  if (currentTab === 'status') renderStatusTab();
+}
+
+function renderQueue() {
+  const count = queue.length;
+  document.getElementById('queue-count').textContent = count;
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = count === 0;
+  btn.textContent = `✓ 提交给 CC 执行 (${count})`;
+
+  const container = document.getElementById('queue-items');
+  if (!count) {
+    container.innerHTML = '<div style="color:#484f58;font-size:11px;padding:8px">队列为空</div>';
+    return;
+  }
+  container.innerHTML = queue.map(item => {
+    const isDel = item.type === 'pipeline-delete';
+    const isPromote = item.label.includes('stable') || item.label.includes('canary');
+    const labelClass = isDel ? 'del' : isPromote ? 'promote' : '';
+    return `<div class="queue-item ${isDel ? 'delete' : ''}">
+      <div class="action-label">
+        <b class="${labelClass}">${escHtml(item.label)}</b>
+        <span>${escHtml(item.subLabel)}</span>
+        <span style="color:#30363d;font-size:9px">${escHtml(item.command.slice(0, 50))}</span>
+      </div>
+      <button class="remove" onclick="dequeue(${item.id})" title="移除">✕</button>
+    </div>`;
+  }).join('');
+}
+
+async function submitQueue() {
+  if (!queue.length) return;
+  const actions = queue.map(q => q.data);
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true;
+  document.getElementById('status-msg').textContent = '提交中...';
+  try {
+    const r = await fetch('/api/submit', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ actions }),
+    });
+    const result = await r.json();
+    if (result.ok) {
+      queue = [];
+      renderQueue();
+      document.getElementById('status-msg').textContent = `✓ 已提交 ${result.action_count} 条操作给 CC`;
+      if (currentTab === 'status') renderStatusTab();
+    } else {
+      document.getElementById('status-msg').textContent = '提交失败: ' + JSON.stringify(result);
+      btn.disabled = false;
+    }
+  } catch(e) {
+    document.getElementById('status-msg').textContent = '网络错误: ' + e.message;
+    btn.disabled = false;
+  }
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function resizeIframe(iframe) {
+  try { iframe.style.height = iframe.contentDocument.body.scrollHeight + 'px'; } catch(e) {}
+}
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
