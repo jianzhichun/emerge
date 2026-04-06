@@ -49,6 +49,16 @@ def main() -> None:
                 "Side-effectful calls (COM, file writes, network) must use no_replay=True. "
                 "State setup calls (imports, object creation) must NOT use no_replay."
             )
+        else:
+            import re as _re
+            _sig_pattern = _re.compile(r'^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*){2,}$')
+            if not _sig_pattern.match(intent_signature):
+                error_msg = (
+                    f"icc_exec: intent_signature {intent_signature!r} is invalid. "
+                    "Must be lowercase dot-notation with at least 3 parts: connector.mode.operation "
+                    "(e.g. 'zwcad.read.state', 'hypermesh.write.apply-change'). "
+                    "Check connector://notes to see existing intents for this connector."
+                )
 
     if tool_name.endswith("__icc_reconcile"):
         delta_id = str(arguments.get("delta_id", "")).strip()

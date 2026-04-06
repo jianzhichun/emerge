@@ -96,6 +96,11 @@ class EmergeDaemon:
 
     def _try_flywheel_bridge(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
         base_pipeline_id = str(arguments.get("base_pipeline_id", "")).strip()
+        # Fall back to intent_signature — with unified keys they are the same thing.
+        # This means the bridge fires automatically once an intent reaches stable,
+        # without requiring CC to explicitly pass base_pipeline_id.
+        if not base_pipeline_id:
+            base_pipeline_id = str(arguments.get("intent_signature", "")).strip()
         if not base_pipeline_id:
             return None
 
@@ -149,33 +154,46 @@ class EmergeDaemon:
 
         # --- find synthesizable WAL entry ---
         normalized = (target_profile or "default").strip() or "default"
-        profile_key = "__default__" if normalized == "default" else derive_profile_token(normalized)
-        if normalized == "default":
-            session_id = self._base_session_id
-        else:
-            session_id = f"{self._base_session_id}__{profile_key}"
+        profile_suffix = "" if normalized == "default" else f"__{derive_profile_token(normalized)}"
 
-        session_dir = self._state_root / session_id
-        wal_path = session_dir / "wal.jsonl"
-
+        # Scan ALL session dirs for this profile suffix — crystallize must work even
+        # when the synthesizable exec ran in a prior daemon session.
         best_code: str | None = None
-        if wal_path.exists():
-            with wal_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
+        best_ts: int = 0
+        if self._state_root.exists():
+            for session_dir in sorted(self._state_root.iterdir()):
+                if not session_dir.is_dir():
+                    continue
+                # Match profile: default dirs have no suffix, profiled dirs end with __<token>
+                dir_name = session_dir.name
+                if profile_suffix:
+                    if not dir_name.endswith(profile_suffix):
                         continue
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
+                else:
+                    # default profile: dir must NOT contain __ (no profile suffix)
+                    if "__" in dir_name:
                         continue
-                    if (
-                        entry.get("status") == "success"
-                        and not entry.get("no_replay", False)
-                        and entry.get("metadata", {}).get("intent_signature") == intent_signature
-                    ):
-                        best_code = str(entry.get("code", "")).strip()
-                        # keep scanning — we want the LAST (most recent) match
+                wal_path = session_dir / "wal.jsonl"
+                if not wal_path.exists():
+                    continue
+                with wal_path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            entry = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if (
+                            entry.get("status") == "success"
+                            and not entry.get("no_replay", False)
+                            and entry.get("metadata", {}).get("intent_signature") == intent_signature
+                        ):
+                            ts = int(entry.get("finished_at_ms", 0))
+                            if ts > best_ts:
+                                best_ts = ts
+                                best_code = str(entry.get("code", "")).strip()
 
         if not best_code:
             return {
@@ -190,6 +208,12 @@ class EmergeDaemon:
         # --- generate pipeline harness ---
         ts = int(_time.time())
         indented = textwrap.indent(best_code, "    ")
+
+        # Pull description from pipeline registry (populated during exec tracking)
+        _registry_path = self._state_root / "pipelines-registry.json"
+        _registry = self._load_json_object(_registry_path, root_key="pipelines")
+        description = str(_registry["pipelines"].get(intent_signature, {}).get("description", "")).strip()
+        yaml_desc_line = f"description: {description}\n" if description else ""
 
         if mode == "read":
             py_src = (
@@ -210,6 +234,7 @@ class EmergeDaemon:
             )
             yaml_src = (
                 f"intent_signature: {intent_signature}\n"
+                f"{yaml_desc_line}"
                 f"rollback_or_stop_policy: stop\n"
                 f"read_steps:\n"
                 f"  - run_read\n"
@@ -237,6 +262,7 @@ class EmergeDaemon:
             )
             yaml_src = (
                 f"intent_signature: {intent_signature}\n"
+                f"{yaml_desc_line}"
                 f"rollback_or_stop_policy: stop\n"
                 f"write_steps:\n"
                 f"  - run_write\n"
@@ -272,18 +298,30 @@ class EmergeDaemon:
                 if tmp_path and os.path.exists(tmp_path):
                     os.unlink(tmp_path)
 
+        # Clear synthesis_ready — pipeline is now on disk, no need to re-crystallize
+        if intent_signature in _registry["pipelines"]:
+            _registry["pipelines"][intent_signature].pop("synthesis_ready", None)
+            self._atomic_write_json(_registry_path, _registry)
+
         preview_lines = py_src.splitlines()[:20]
         code_preview = "\n".join(preview_lines)
 
+        next_step = (
+            f"Pipeline crystallized. Switch to pipeline path now:\n"
+            f"  icc_{'read' if mode == 'read' else 'write'} connector={connector!r} pipeline={pipeline_name!r}\n"
+            f"Do NOT call icc_exec for this intent again — the pipeline handles it."
+        )
         return {
             "ok": True,
             "py_path": str(py_path),
             "yaml_path": str(yaml_path),
             "code_preview": code_preview,
+            "next_step": next_step,
             "content": [{"type": "text", "text": json.dumps({
                 "ok": True,
                 "py_path": str(py_path),
                 "yaml_path": str(yaml_path),
+                "next_step": next_step,
             })}],
         }
 
@@ -562,7 +600,8 @@ class EmergeDaemon:
                                     "code": {"type": "string", "description": "Python code to execute (inline_code mode)"},
                                     "mode": {"type": "string", "enum": ["inline_code", "script_ref"], "default": "inline_code"},
                                     "target_profile": {"type": "string", "description": "Execution profile / remote runner key", "default": "default"},
-                                    "intent_signature": {"type": "string", "description": "Stable dot-notation identifier for this exec pattern (e.g. zwcad.read.state). Required for flywheel tracking."},
+                                    "intent_signature": {"type": "string", "description": "Stable dot-notation identifier for this exec pattern (e.g. zwcad.read.state). Required for flywheel tracking. Use connector://notes to see existing intents before choosing."},
+                                    "description": {"type": "string", "description": "Human-readable description of what this intent does. Stored in registry and surfaced in connector://notes. Only needed the first time a new intent is introduced."},
                                     "no_replay": {"type": "boolean", "description": "If true, exclude this call from WAL replay and crystallization. Use for side-effectful calls only.", "default": False},
                                     "script_ref": {"type": "string", "description": "Path to script file (script_ref mode)"},
                                     "script_args": {"type": "object", "description": "Arguments injected as __args in script scope"},
@@ -727,6 +766,9 @@ class EmergeDaemon:
                 "description": "Session goal, recorded deltas, and open risks",
             },
         ]
+        # Collect connector names from both NOTES.md files and tracked pipeline entries
+        # (single pass — avoids scanning _connector_roots twice)
+        connector_names: set[str] = set()
         for connector_root in self.pipeline._connector_roots:
             if not connector_root.exists():
                 continue
@@ -738,9 +780,25 @@ class EmergeDaemon:
                     uri = f"pipeline://{connector}/{mode}/{name}"
                     static.append({"uri": uri, "name": f"{connector} {mode} pipeline: {name}", "mimeType": "application/json", "description": f"Pipeline metadata for {connector}/{mode}/{name}"})
             for notes in connector_root.glob("*/NOTES.md"):
-                connector = notes.parent.name
-                uri = f"connector://{connector}/notes"
-                static.append({"uri": uri, "name": f"{connector} connector notes", "mimeType": "text/markdown", "description": f"Operational notes for the {connector} vertical: COM patterns, API quirks, known issues"})
+                cname = notes.parent.name
+                connector_names.add(cname)
+                uri = f"connector://{cname}/notes"
+                static.append({"uri": uri, "name": f"{cname} connector notes", "mimeType": "text/markdown", "description": f"Operational notes for the {cname} vertical: COM patterns, API quirks, known issues. Includes tracked intent_signature list."})
+        # Add connectors that have flywheel tracking but no NOTES.md yet
+        registry_path = self._state_root / "pipelines-registry.json"
+        registry = self._load_json_object(registry_path, root_key="pipelines")
+        for key in registry["pipelines"]:
+            parts = key.split(".", 1)
+            if len(parts) == 2:
+                connector_names.add(parts[0])
+        already_noted = {r["uri"] for r in static}
+        for cname in sorted(connector_names):
+            uri = f"connector://{cname}/intents"
+            static.append({"uri": uri, "name": f"{cname} tracked intents", "mimeType": "application/json", "description": f"JSON index of all flywheel-tracked intent_signature values for {cname}, with status and description"})
+            notes_uri = f"connector://{cname}/notes"
+            if notes_uri not in already_noted:
+                # Connector has tracked entries but no NOTES.md — expose notes so CC can read intents table
+                static.append({"uri": notes_uri, "name": f"{cname} connector notes", "mimeType": "text/markdown", "description": f"Tracked intents for {cname} connector (no NOTES.md yet)."})
         return static
 
     def _read_resource(self, uri: str) -> dict[str, Any]:
@@ -781,7 +839,10 @@ class EmergeDaemon:
             parts = rest.split("/", 1)
             if len(parts) == 2:
                 connector, resource = parts
-                if resource == "notes" and ".." not in connector and not connector.startswith("/"):
+                if ".." in connector or connector.startswith("/"):
+                    raise KeyError(f"Resource not found: {uri}")
+                if resource == "notes":
+                    notes_text = ""
                     for connector_root in self.pipeline._connector_roots:
                         notes = connector_root / connector / "NOTES.md"
                         try:
@@ -789,8 +850,66 @@ class EmergeDaemon:
                         except ValueError:
                             continue
                         if notes.exists():
-                            return {"uri": uri, "mimeType": "text/markdown", "text": notes.read_text(encoding="utf-8")}
+                            notes_text = notes.read_text(encoding="utf-8")
+                            break
+                    intents_section = self._build_intents_section(connector)
+                    if intents_section:
+                        notes_text = (notes_text.rstrip() + "\n\n" + intents_section).lstrip()
+                    if notes_text:
+                        return {"uri": uri, "mimeType": "text/markdown", "text": notes_text}
+                    raise KeyError(f"Resource not found: {uri}")
+                if resource == "intents":
+                    data = self._get_connector_intents(connector)
+                    return {"uri": uri, "mimeType": "application/json", "text": json.dumps(data)}
         raise KeyError(f"Resource not found: {uri}")
+
+    def _get_connector_intents(self, connector: str) -> dict[str, Any]:
+        """Return all tracked intent entries for a connector from pipelines-registry.json.
+
+        source='pipeline' means a crystallized pipeline exists (icc_read/write path).
+        source='exec' means only icc_exec tracking so far.
+        """
+        registry_path = self._state_root / "pipelines-registry.json"
+        registry = self._load_json_object(registry_path, root_key="pipelines")
+        prefix = f"{connector}."
+        result: dict[str, Any] = {}
+        for key, pipeline in registry["pipelines"].items():
+            if key.startswith(prefix):
+                result[key] = {
+                    "status": pipeline.get("status", "explore"),
+                    "success_rate": pipeline.get("success_rate", 0.0),
+                    "verify_rate": pipeline.get("verify_rate", 0.0),
+                    "attempts": pipeline.get("attempts_at_transition", 0),
+                    "description": pipeline.get("description", ""),
+                    "source": pipeline.get("source", "exec"),
+                }
+        return result
+
+    def _build_intents_section(self, connector: str) -> str:
+        """Build a markdown table of tracked intents for injection into connector://notes."""
+        intents = self._get_connector_intents(connector)
+        if not intents:
+            return ""
+        status_icon = {"stable": "✓", "canary": "⟳", "explore": "…"}
+        rows = []
+        for key in sorted(intents):
+            info = intents[key]
+            icon = status_icon.get(info["status"], "?")
+            success_pct = f"{info['success_rate'] * 100:.0f}%"
+            desc = info["description"] or ""
+            # Show whether intent has a crystallized pipeline or is still exec-only
+            path = "`icc_read/write`" if info["source"] == "pipeline" else "`icc_exec`"
+            rows.append(f"| `{key}` | {info['status']} {icon} | {success_pct} | {path} | {desc} |")
+        header = (
+            "---\n"
+            "## Tracked Intents (Emerge flywheel)\n"
+            "- Intents with `icc_read/write` path are crystallized pipelines — use `icc_read`/`icc_write`, NOT `icc_exec`.\n"
+            "- Intents with `icc_exec` path are still in explore/canary — use `icc_exec` with the exact `intent_signature`.\n"
+            "- Do NOT invent new intent names — pick from this list whenever the intent matches.\n\n"
+            "| Intent | Status | Success | Path | Description |\n"
+            "|--------|--------|---------|------|-------------|"
+        )
+        return header + "\n" + "\n".join(rows)
 
     _PROMPTS = [
         {
@@ -860,6 +979,7 @@ class EmergeDaemon:
         intent_signature = str(arguments.get("intent_signature", ""))
         script_ref = str(arguments.get("script_ref", ""))
         base_pipeline_id = str(arguments.get("base_pipeline_id", "")).strip()
+        description = str(arguments.get("description", "")).strip()
         trusted_verify_passed = not is_error
         event = {
             "ts_ms": int(time.time() * 1000),
@@ -918,6 +1038,9 @@ class EmergeDaemon:
                 "last_ts_ms": 0,
             },
         )
+        # Store description if provided (first call wins; subsequent calls with description update it)
+        if description:
+            entry["description"] = description
         entry["total_calls"] = int(entry.get("total_calls", 0)) + 1
         if is_error:
             sampled_in_policy = True
@@ -963,6 +1086,17 @@ class EmergeDaemon:
         pipeline_id = str(result.get("pipeline_id", f"{connector}.{mode}.{pipeline}"))
         intent_signature = str(result.get("intent_signature", ""))
         target_profile = str(arguments.get("target_profile", "default"))
+        # Read description from pipeline YAML if available
+        pipeline_description = ""
+        for _cr in self.pipeline._connector_roots:
+            _meta = _cr / connector / "pipelines" / mode / f"{pipeline}.yaml"
+            if _meta.exists():
+                try:
+                    _data = PipelineEngine._load_metadata(_meta)
+                    pipeline_description = str(_data.get("description", "")).strip()
+                except Exception:
+                    pass
+                break
         verify_passed = str(result.get("verification_state", "")).lower() == "verified"
         key = self._resolve_pipeline_candidate_key(arguments=arguments, pipeline_id=pipeline_id)
         sampled_in_policy = self._should_sample(key)
@@ -1031,6 +1165,9 @@ class EmergeDaemon:
         # Pipeline path is authoritative: always mark source=pipeline so
         # synthesis_ready is never set for an already-crystallized intent.
         entry["source"] = "pipeline"
+        # Store description from YAML (never overwrite existing)
+        if pipeline_description and not entry.get("description"):
+            entry["description"] = pipeline_description
         policy_enforced = bool(result.get("policy_enforced", False))
         stop_triggered = bool(result.get("stop_triggered", False))
         rollback_executed = bool(result.get("rollback_executed", False))
@@ -1088,6 +1225,12 @@ class EmergeDaemon:
                 "attempts_at_transition": 0,
             },
         )
+        # Propagate description from candidate entry into pipeline registry (if set, never cleared)
+        if entry.get("description") and not pipeline.get("description"):
+            pipeline["description"] = entry["description"]
+        # Propagate source: 'pipeline' once set takes precedence over 'exec'
+        if entry.get("source") == "pipeline" or pipeline.get("source") != "pipeline":
+            pipeline["source"] = entry.get("source", "exec")
 
         attempts = int(entry.get("attempts", 0))
         if attempts == 0:
@@ -1432,39 +1575,54 @@ class EmergeDaemon:
         result["content"] = [{"type": "text", "text": f"warning:\n{warning}"}]
 
     def _has_synthesizable_wal_entry(self, intent_signature: str, target_profile: str = "default") -> bool:
-        """Return True if the WAL for the given profile has at least one success entry
+        """Return True if any session WAL for the given profile has at least one success entry
         with no_replay=False for the given intent_signature.
+
+        Scans ALL session dirs (not just current) so sessions from previous restarts are included.
         """
         if not intent_signature:
             return False
         normalized = (target_profile or "default").strip() or "default"
-        profile_key = "__default__" if normalized == "default" else derive_profile_token(normalized)
-        session_id = (
-            self._base_session_id
-            if normalized == "default"
-            else f"{self._base_session_id}__{profile_key}"
-        )
-        wal_path = self._state_root / session_id / "wal.jsonl"
-        if not wal_path.exists():
+        profile_suffix = "" if normalized == "default" else f"__{derive_profile_token(normalized)}"
+
+        if not self._state_root.exists():
             return False
         try:
-            with wal_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if (
-                        entry.get("status") == "success"
-                        and not entry.get("no_replay", False)
-                        and entry.get("metadata", {}).get("intent_signature") == intent_signature
-                    ):
-                        return True
+            session_dirs = list(self._state_root.iterdir())
         except OSError:
-            pass
+            return False
+
+        for session_dir in session_dirs:
+            if not session_dir.is_dir():
+                continue
+            dir_name = session_dir.name
+            if profile_suffix:
+                if not dir_name.endswith(profile_suffix):
+                    continue
+            else:
+                if "__" in dir_name:
+                    continue
+            wal_path = session_dir / "wal.jsonl"
+            if not wal_path.exists():
+                continue
+            try:
+                with wal_path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            entry = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if (
+                            entry.get("status") == "success"
+                            and not entry.get("no_replay", False)
+                            and entry.get("metadata", {}).get("intent_signature") == intent_signature
+                        ):
+                            return True
+            except OSError:
+                continue
         return False
 
     @staticmethod

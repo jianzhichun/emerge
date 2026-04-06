@@ -161,3 +161,31 @@ def test_missing_pipeline_raises_pipeline_missing_error(tmp_path):
         assert "nonexistent" in str(exc_info.value)
     finally:
         os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+
+
+def test_load_metadata_raises_on_non_dict_yaml(tmp_path):
+    """A YAML file that is a list (not a dict) must raise ValueError, not fall through to JSON."""
+    from scripts.pipeline_engine import PipelineEngine
+    bad = tmp_path / "bad.yaml"
+    bad.write_text('["not", "a", "dict"]')
+    with pytest.raises((ValueError, Exception)) as exc_info:
+        PipelineEngine._load_metadata(bad)
+    assert "object" in str(exc_info.value).lower() or "invalid" in str(exc_info.value).lower()
+
+
+def test_load_metadata_fallback_to_json_when_yaml_unavailable(tmp_path, monkeypatch):
+    """When yaml is not importable, metadata must be parsed as JSON."""
+    from scripts.pipeline_engine import PipelineEngine
+    import builtins
+
+    real_import = builtins.__import__
+    def block_yaml(name, *args, **kwargs):
+        if name == "yaml":
+            raise ImportError("yaml blocked for test")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", block_yaml)
+    good = tmp_path / "meta.yaml"
+    good.write_text('{"intent_signature": "zwcad.read.state", "rollback_or_stop_policy": "stop", "read_steps": ["x"], "verify_steps": ["y"]}')
+    data = PipelineEngine._load_metadata(good)
+    assert data["intent_signature"] == "zwcad.read.state"

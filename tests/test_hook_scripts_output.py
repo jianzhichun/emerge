@@ -177,3 +177,90 @@ def test_pre_compact_emits_recovery_token(tmp_path: Path):
     assert token["schema_version"] == "flywheel.v1"
     assert isinstance(token["deltas"], list)
     assert len(ctx) <= 900  # budget enforced
+
+
+def test_post_tool_use_reads_verification_state_from_content_json(tmp_path: Path):
+    """verification_state must be parsed from content[0]["text"] JSON, not the outer wrapper."""
+    inner = json.dumps({
+        "rows": [{"id": "L0"}],
+        "verification_state": "degraded",
+        "verify_result": {"ok": False},
+    })
+    out = _run(
+        "post_tool_use.py",
+        {
+            "tool_name": "mcp__plugin_emerge__icc_read",
+            "tool_result": {
+                "isError": False,
+                "content": [{"type": "text", "text": inner}],
+            },
+            "delta_message": "Read layers — verification failed",
+        },
+        tmp_path,
+    )
+    parsed = json.loads(out)
+    token = _extract_flywheel_token(parsed["hookSpecificOutput"]["additionalContext"])
+    # degraded verification_state in content must propagate to the tracker
+    assert token["verification_state"] == "degraded", (
+        "verification_state inside content[0]['text'] must be read, not the outer wrapper"
+    )
+    assert any("pipeline verification failed" in r for r in token.get("open_risks", [])), (
+        "degraded verification must add an open_risk entry"
+    )
+
+
+def test_post_tool_use_no_longer_echoes_updated_mcp_tool_output(tmp_path: Path):
+    """PostToolUse hook must NOT include updatedMCPToolOutput (no-op echo wastes bandwidth)."""
+    out = _run(
+        "post_tool_use.py",
+        {
+            "tool_name": "mcp__plugin_emerge__icc_write",
+            "tool_result": {"isError": False, "content": [{"type": "text", "text": "ok"}]},
+            "delta_message": "Write applied",
+        },
+        tmp_path,
+    )
+    parsed = json.loads(out)
+    assert "updatedMCPToolOutput" not in parsed.get("hookSpecificOutput", {}), (
+        "PostToolUse must not echo updatedMCPToolOutput when result is unchanged"
+    )
+
+
+def test_pre_compact_resets_tracker_state_preserving_goal(tmp_path: Path):
+    """After PreCompact, state.json must be reset: deltas/risks cleared, goal preserved."""
+    env = os.environ.copy()
+    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+
+    # Seed goal + some deltas + a risk
+    subprocess.run(
+        ["python3", str(ROOT / "hooks" / "session_start.py")],
+        input=json.dumps({"goal": "deploy hypermesh pipeline"}),
+        capture_output=True, text=True, env=env, check=True,
+    )
+    subprocess.run(
+        ["python3", str(ROOT / "hooks" / "post_tool_use.py")],
+        input=json.dumps({
+            "tool_name": "mcp__plugin_emerge__icc_write",
+            "tool_result": {"isError": False, "content": [{"type": "text", "text": "ok"}]},
+            "delta_message": "Wrote mesh to HyperMesh",
+        }),
+        capture_output=True, text=True, env=env, check=True,
+    )
+
+    # Verify state has deltas before compaction
+    state_path = tmp_path / "state.json"
+    before = json.loads(state_path.read_text())
+    assert before["deltas"], "must have deltas before compaction"
+
+    # Run pre_compact
+    subprocess.run(
+        ["python3", str(ROOT / "hooks" / "pre_compact.py")],
+        input="{}",
+        capture_output=True, text=True, env=env, check=True,
+    )
+
+    # After compaction: deltas and risks must be cleared, goal preserved
+    after = json.loads(state_path.read_text())
+    assert after["deltas"] == [], "deltas must be cleared after PreCompact"
+    assert after["open_risks"] == [], "open_risks must be cleared after PreCompact"
+    assert after["goal"] == "deploy hypermesh pipeline", "goal must survive PreCompact reset"

@@ -1366,3 +1366,527 @@ def test_pending_action_monitor_detects_and_notifies(tmp_path: Path):
     assert "pipeline-delete" in n["params"]["content"]
     assert not (tmp_path / "pending-actions.json").exists()
     assert (tmp_path / "pending-actions.processed.json").exists()
+
+
+# ── Description + connector://notes intent injection ──────────────────────────
+
+def test_description_stored_on_icc_exec(tmp_path: Path):
+    """description param is stored in candidates.json and propagated to pipelines-registry."""
+    import os
+    env = {**os.environ, "EMERGE_STATE_ROOT": str(tmp_path), "EMERGE_SESSION_ID": "test-desc-exec"}
+    daemon = EmergeDaemon(root=ROOT)
+    daemon._state_root = tmp_path
+    daemon._base_session_id = "test-desc-exec"
+
+    daemon.call_tool(
+        "icc_exec",
+        {
+            "code": "result = 1",
+            "intent_signature": "mock.read.state",
+            "description": "Read current state from mock connector",
+        },
+    )
+
+    session_dir = tmp_path / "test-desc-exec"
+    registry = json.loads((session_dir / "candidates.json").read_text())
+    entry = registry["candidates"].get("mock.read.state")
+    assert entry is not None, "candidate entry not found"
+    assert entry["description"] == "Read current state from mock connector"
+
+    pipeline_registry = json.loads((tmp_path / "pipelines-registry.json").read_text())
+    pipeline = pipeline_registry["pipelines"].get("mock.read.state")
+    assert pipeline is not None, "pipeline registry entry not found"
+    assert pipeline["description"] == "Read current state from mock connector"
+
+
+def test_description_not_overwritten_on_second_exec(tmp_path: Path):
+    """Subsequent icc_exec calls without description do not clear existing description."""
+    daemon = EmergeDaemon(root=ROOT)
+    daemon._state_root = tmp_path
+    daemon._base_session_id = "test-desc-nooverwrite"
+
+    daemon.call_tool(
+        "icc_exec",
+        {
+            "code": "result = 1",
+            "intent_signature": "mock.read.state",
+            "description": "Original description",
+        },
+    )
+    daemon.call_tool(
+        "icc_exec",
+        {
+            "code": "result = 2",
+            "intent_signature": "mock.read.state",
+            # No description this time
+        },
+    )
+
+    session_dir = tmp_path / "test-desc-nooverwrite"
+    registry = json.loads((session_dir / "candidates.json").read_text())
+    entry = registry["candidates"]["mock.read.state"]
+    assert entry["description"] == "Original description"
+
+
+def test_connector_notes_injects_intent_table(tmp_path: Path):
+    """connector://notes appends tracked intents table when intents exist."""
+    daemon = EmergeDaemon(root=ROOT)
+    daemon._state_root = tmp_path
+    daemon._base_session_id = "test-notes-inject"
+
+    # Run exec to create a tracked intent
+    daemon.call_tool(
+        "icc_exec",
+        {
+            "code": "result = 42",
+            "intent_signature": "mock.read.layers",
+            "description": "Read all layers from mock",
+        },
+    )
+
+    # connector://notes for mock connector (has NOTES.md in tests/connectors)
+    resource = daemon._read_resource("connector://mock/notes")
+    text = resource["text"]
+    assert "## Tracked Intents" in text
+    assert "mock.read.layers" in text
+    assert "Read all layers from mock" in text
+    assert "intent_signature" in text
+
+
+def test_connector_intents_resource_returns_json(tmp_path: Path):
+    """connector://<name>/intents returns JSON dict of tracked intents."""
+    daemon = EmergeDaemon(root=ROOT)
+    daemon._state_root = tmp_path
+    daemon._base_session_id = "test-intents-resource"
+
+    daemon.call_tool(
+        "icc_exec",
+        {
+            "code": "result = 1",
+            "intent_signature": "mock.write.apply",
+            "description": "Apply changes to mock",
+        },
+    )
+
+    resource = daemon._read_resource("connector://mock/intents")
+    assert resource["mimeType"] == "application/json"
+    data = json.loads(resource["text"])
+    assert "mock.write.apply" in data
+    entry = data["mock.write.apply"]
+    assert entry["status"] in ("explore", "canary", "stable")
+    assert entry["description"] == "Apply changes to mock"
+
+
+def test_list_resources_includes_intents_uri(tmp_path: Path):
+    """_list_resources advertises connector://<name>/intents after first exec."""
+    daemon = EmergeDaemon(root=ROOT)
+    daemon._state_root = tmp_path
+    daemon._base_session_id = "test-list-intents"
+
+    daemon.call_tool(
+        "icc_exec",
+        {
+            "code": "result = 1",
+            "intent_signature": "mock.read.state",
+        },
+    )
+
+    resources = daemon._list_resources()
+    uris = {r["uri"] for r in resources}
+    assert "connector://mock/intents" in uris
+
+
+def test_connector_notes_no_intents_section_when_no_intents(tmp_path: Path):
+    """connector://notes with a NOTES.md but no tracked intents does not add the intents section."""
+    import os
+    from scripts.pipeline_engine import PipelineEngine
+
+    daemon = EmergeDaemon(root=ROOT)
+    daemon._state_root = tmp_path
+    daemon._base_session_id = "test-notes-no-intents"
+
+    fake_connector_root = tmp_path / "connectors"
+    fake_connector_root.mkdir()
+    (fake_connector_root / "myconn").mkdir()
+    (fake_connector_root / "myconn" / "NOTES.md").write_text("# MyConn Notes\nSome details.", encoding="utf-8")
+
+    old_env = os.environ.get("EMERGE_CONNECTOR_ROOT")
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(fake_connector_root)
+    try:
+        daemon.pipeline = PipelineEngine(root=ROOT)
+        resource = daemon._read_resource("connector://myconn/notes")
+        text = resource["text"]
+        assert "## Tracked Intents" not in text
+        assert "MyConn Notes" in text
+    finally:
+        if old_env is None:
+            os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+        else:
+            os.environ["EMERGE_CONNECTOR_ROOT"] = old_env
+
+
+# ── Crystallization quality fixes ─────────────────────────────────────────────
+
+def test_crystallize_yaml_includes_description(tmp_path: Path):
+    """Generated YAML must include description: field from registry."""
+    import os
+    connector_root = tmp_path / "connectors"
+    connector_root.mkdir()
+    old_env = os.environ.get("EMERGE_CONNECTOR_ROOT")
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(connector_root)
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        daemon._state_root = tmp_path
+        daemon._base_session_id = "test-cryst-desc"
+
+        daemon.call_tool("icc_exec", {
+            "code": "__result = [{'layer': 'L1'}]",
+            "intent_signature": "myconn.read.layers",
+            "description": "Read all layers",
+        })
+
+        session_dir = tmp_path / "test-cryst-desc"
+        wal_path = session_dir / "wal.jsonl"
+        assert wal_path.exists(), "WAL must exist after icc_exec"
+
+        result = daemon._crystallize(
+            intent_signature="myconn.read.layers",
+            connector="myconn",
+            pipeline_name="layers",
+            mode="read",
+        )
+        assert result.get("ok"), f"crystallize failed: {result}"
+
+        yaml_path = Path(result["yaml_path"])
+        yaml_text = yaml_path.read_text(encoding="utf-8")
+        assert "description: Read all layers" in yaml_text
+        assert "intent_signature: myconn.read.layers" in yaml_text
+    finally:
+        if old_env is None:
+            os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+        else:
+            os.environ["EMERGE_CONNECTOR_ROOT"] = old_env
+
+
+def test_crystallize_clears_synthesis_ready(tmp_path: Path):
+    """synthesis_ready must be removed from registry after successful crystallization."""
+    import os
+    connector_root = tmp_path / "connectors"
+    connector_root.mkdir()
+    old_env = os.environ.get("EMERGE_CONNECTOR_ROOT")
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(connector_root)
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        daemon._state_root = tmp_path
+        daemon._base_session_id = "test-cryst-sr"
+
+        daemon.call_tool("icc_exec", {
+            "code": "__result = [{'v': 1}]",
+            "intent_signature": "myconn.read.state",
+            "description": "Read state",
+        })
+
+        # Manually inject synthesis_ready
+        reg_path = tmp_path / "pipelines-registry.json"
+        reg = json.loads(reg_path.read_text()) if reg_path.exists() else {"pipelines": {}}
+        reg["pipelines"].setdefault("myconn.read.state", {})["synthesis_ready"] = True
+        reg_path.write_text(json.dumps(reg), encoding="utf-8")
+
+        result = daemon._crystallize(
+            intent_signature="myconn.read.state",
+            connector="myconn",
+            pipeline_name="state",
+            mode="read",
+        )
+        assert result.get("ok"), f"crystallize failed: {result}"
+
+        reg_after = json.loads(reg_path.read_text())
+        assert "synthesis_ready" not in reg_after["pipelines"].get("myconn.read.state", {})
+    finally:
+        if old_env is None:
+            os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+        else:
+            os.environ["EMERGE_CONNECTOR_ROOT"] = old_env
+
+
+def test_crystallize_return_includes_next_step(tmp_path: Path):
+    """Crystallize result must include next_step directing CC to icc_read/write."""
+    import os
+    connector_root = tmp_path / "connectors"
+    connector_root.mkdir()
+    old_env = os.environ.get("EMERGE_CONNECTOR_ROOT")
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(connector_root)
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        daemon._state_root = tmp_path
+        daemon._base_session_id = "test-cryst-nextstep"
+
+        daemon.call_tool("icc_exec", {
+            "code": "__result = [{'x': 1}]",
+            "intent_signature": "myconn.read.data",
+        })
+
+        result = daemon._crystallize(
+            intent_signature="myconn.read.data",
+            connector="myconn",
+            pipeline_name="data",
+            mode="read",
+        )
+        assert result.get("ok"), f"crystallize failed: {result}"
+        assert "next_step" in result
+        assert "icc_read" in result["next_step"]
+        assert "connector='myconn'" in result["next_step"]
+        assert "pipeline='data'" in result["next_step"]
+    finally:
+        if old_env is None:
+            os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+        else:
+            os.environ["EMERGE_CONNECTOR_ROOT"] = old_env
+
+
+def test_intents_table_shows_source_path(tmp_path: Path):
+    """connector://notes intent table must show icc_exec vs icc_read/write path."""
+    daemon = EmergeDaemon(root=ROOT)
+    daemon._state_root = tmp_path
+    daemon._base_session_id = "test-intents-src"
+
+    # Create an exec-only tracked intent
+    daemon.call_tool("icc_exec", {
+        "code": "__result = [{'v': 1}]",
+        "intent_signature": "mock.read.layers",
+        "description": "Read layers",
+    })
+
+    section = daemon._build_intents_section("mock")
+    # exec-only intent rows should show `icc_exec` path, not `icc_read/write`
+    # Check only the table rows (after the header), not the header text itself
+    rows_section = section.split("|--------|")[1] if "|--------|" in section else section
+    assert "`icc_exec`" in rows_section
+    assert "`icc_read/write`" not in rows_section
+
+
+def test_pipeline_registry_stores_source(tmp_path: Path):
+    """pipelines-registry.json must store source='exec' for icc_exec entries."""
+    daemon = EmergeDaemon(root=ROOT)
+    daemon._state_root = tmp_path
+    daemon._base_session_id = "test-reg-src"
+
+    daemon.call_tool("icc_exec", {
+        "code": "result = 1",
+        "intent_signature": "mock.read.state",
+    })
+
+    reg = json.loads((tmp_path / "pipelines-registry.json").read_text())
+    entry = reg["pipelines"].get("mock.read.state", {})
+    assert entry.get("source") == "exec"
+
+
+def test_flywheel_bridge_fires_via_intent_signature_when_stable(tmp_path):
+    """Bridge must fire when intent_signature alone is stable — no base_pipeline_id required.
+    
+    This is the normal usage pattern: CC calls icc_exec with intent_signature only.
+    Once the intent reaches stable, subsequent icc_exec calls should auto-route to
+    the pipeline without CC having to explicitly pass base_pipeline_id.
+    """
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "bridge-via-intent-test"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+
+        pipelines = {
+            "pipelines": {
+                "mock.read.layers": {
+                    "status": "stable", "rollout_pct": 100,
+                    "success_rate": 1.0, "verify_rate": 1.0,
+                    "consecutive_failures": 0,
+                }
+            }
+        }
+        (state_dir / "pipelines-registry.json").write_text(json.dumps(pipelines))
+
+        # Call icc_exec with intent_signature only — no base_pipeline_id
+        out = daemon.call_tool("icc_exec", {
+            "code": "x = 1",
+            "intent_signature": "mock.read.layers",
+            # NOTE: no base_pipeline_id
+        })
+
+        assert out["isError"] is False
+        body = json.loads(out["content"][0]["text"])
+        assert body.get("bridge_promoted") is True, (
+            "bridge should fire via intent_signature when stable — "
+            "CC doesn't need to pass base_pipeline_id explicitly"
+        )
+        assert body.get("pipeline_id") == "mock.read.layers"
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+# ── Bug fixes: intent_signature format, WAL cross-session, wal newline ─────────
+
+def test_pre_tool_use_rejects_invalid_intent_signature_format():
+    """PreToolUse hook must block icc_exec with malformed intent_signature."""
+    import subprocess, json as _json, sys as _sys
+    hook = str(ROOT / "hooks" / "pre_tool_use.py")
+    payload = {
+        "tool_name": "mcp__plugin_emerge_emerge__icc_exec",
+        "tool_input": {
+            "code": "result = 1",
+            "intent_signature": "InvalidFormat No Dots",
+        },
+    }
+    result = subprocess.run(
+        [_sys.executable, hook],
+        input=_json.dumps(payload),
+        capture_output=True, text=True,
+    )
+    out = _json.loads(result.stdout)
+    assert out["decision"] == "block"
+    assert "lowercase" in out["reason"] or "dot-notation" in out["reason"]
+
+
+def test_pre_tool_use_rejects_two_part_intent_signature():
+    """intent_signature must have at least 3 dot-separated parts."""
+    import subprocess, json as _json, sys as _sys
+    hook = str(ROOT / "hooks" / "pre_tool_use.py")
+    payload = {
+        "tool_name": "mcp__plugin_emerge_emerge__icc_exec",
+        "tool_input": {
+            "code": "result = 1",
+            "intent_signature": "zwcad.read",  # only 2 parts — invalid
+        },
+    }
+    result = subprocess.run(
+        [_sys.executable, hook],
+        input=_json.dumps(payload),
+        capture_output=True, text=True,
+    )
+    out = _json.loads(result.stdout)
+    assert out["decision"] == "block"
+
+
+def test_pre_tool_use_accepts_valid_intent_signature():
+    """Valid intent_signature with 3 lowercase dot-parts must pass."""
+    import subprocess, json as _json, sys as _sys
+    hook = str(ROOT / "hooks" / "pre_tool_use.py")
+    payload = {
+        "tool_name": "mcp__plugin_emerge_emerge__icc_exec",
+        "tool_input": {
+            "code": "result = 1",
+            "intent_signature": "zwcad.read.state",
+        },
+    }
+    result = subprocess.run(
+        [_sys.executable, hook],
+        input=_json.dumps(payload),
+        capture_output=True, text=True,
+    )
+    out = _json.loads(result.stdout)
+    assert out.get("decision") != "block", f"Should not block valid signature: {out}"
+
+
+def test_wal_uses_unix_newlines(tmp_path: Path):
+    """WAL entries must use LF newlines regardless of OS (cross-platform portability)."""
+    from scripts.exec_session import ExecSession
+    session = ExecSession(state_root=tmp_path, session_id="wal-newline-test")
+    session.exec_code("x = 1", metadata={"intent_signature": "mock.read.state"})
+    wal = (tmp_path / "wal-newline-test" / "wal.jsonl").read_bytes()
+    assert b"\r\n" not in wal, "WAL must not contain Windows CRLF line endings"
+    assert b"\n" in wal, "WAL must use LF line endings"
+
+
+def test_crystallize_scans_all_session_dirs(tmp_path: Path):
+    """icc_crystallize must find WAL entries from previous daemon sessions."""
+    import os, time as _t
+    connector_root = tmp_path / "connectors"
+    connector_root.mkdir()
+    old_env = os.environ.get("EMERGE_CONNECTOR_ROOT")
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(connector_root)
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        daemon._state_root = tmp_path
+
+        # Simulate exec in a PREVIOUS session (different session_id)
+        old_session_id = "old-session-abc"
+        daemon._base_session_id = old_session_id
+        daemon.call_tool("icc_exec", {
+            "code": "__result = [{'v': 1}]",
+            "intent_signature": "myconn.read.data",
+            "description": "Read data",
+        })
+
+        # Now switch to a NEW session (simulating daemon restart)
+        daemon._base_session_id = "new-session-xyz"
+
+        # _crystallize should still find the WAL entry from the old session
+        result = daemon._crystallize(
+            intent_signature="myconn.read.data",
+            connector="myconn",
+            pipeline_name="data",
+            mode="read",
+        )
+        assert result.get("ok"), (
+            f"crystallize must find WAL from previous session: {result}"
+        )
+    finally:
+        if old_env is None:
+            os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+        else:
+            os.environ["EMERGE_CONNECTOR_ROOT"] = old_env
+
+
+def test_has_synthesizable_wal_entry_scans_all_sessions(tmp_path: Path):
+    """_has_synthesizable_wal_entry must find WAL entries from previous daemon sessions."""
+    daemon = EmergeDaemon(root=ROOT)
+    daemon._state_root = tmp_path
+
+    # Write a WAL entry in an OLD session dir (different from current base session)
+    old_session_id = "prev-session-001"
+    old_session_dir = tmp_path / old_session_id
+    old_session_dir.mkdir(parents=True)
+    import json as _json
+    wal_entry = {
+        "seq": 1,
+        "status": "success",
+        "no_replay": False,
+        "code": "__result = [{'x': 1}]",
+        "started_at_ms": 1000,
+        "finished_at_ms": 1001,
+        "metadata": {"intent_signature": "myconn.read.state"},
+    }
+    (old_session_dir / "wal.jsonl").write_text(
+        _json.dumps(wal_entry) + "\n", encoding="utf-8"
+    )
+
+    # Current session has NO WAL
+    daemon._base_session_id = "current-session-999"
+
+    found = daemon._has_synthesizable_wal_entry("myconn.read.state")
+    assert found, "_has_synthesizable_wal_entry must scan all session dirs, not just current"
+
+
+def test_connector_import_rejects_path_traversal(tmp_path: Path):
+    """cmd_connector_import must reject packages with path traversal entries."""
+    import zipfile, json as _json
+
+    pkg_path = tmp_path / "evil.zip"
+    manifest = {"name": "safe", "emerge_version": "0.0.0", "exported_at_ms": 0}
+    with zipfile.ZipFile(pkg_path, "w") as zf:
+        zf.writestr("manifest.json", _json.dumps(manifest))
+        zf.writestr("pipelines-registry.json", _json.dumps({"pipelines": {}}))
+        # Attempt path traversal: connectors/safe/../../evil.txt resolves outside connector dir
+        zf.writestr("connectors/safe/../../evil.txt", "pwned")
+
+    from scripts.repl_admin import cmd_connector_import
+    result = cmd_connector_import(
+        pkg=str(pkg_path),
+        connector_root=tmp_path / "connectors",
+        state_root=tmp_path,
+    )
+    assert result.get("ok") is False, f"Expected path traversal rejection, got: {result}"
+    assert "path traversal" in result.get("error", "").lower()
+    assert not (tmp_path / "evil.txt").exists()

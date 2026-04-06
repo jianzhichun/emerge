@@ -45,13 +45,29 @@ def main() -> None:
     message = payload.get("delta_message") or f"Tool used: {tool_name or 'unknown'}"
     level = _classify_level(tool_name)
     provisional = bool(payload.get("provisional", False))
-    verification_state = str(result.get("verification_state", "verified"))
+
+    # verification_state lives inside content[0]["text"] (serialized JSON), not in the
+    # outer MCP wrapper. Parse it out; fall back to "verified" if absent or unparseable.
+    verification_state = "verified"
+    try:
+        content = result.get("content", [])
+        if content and isinstance(content[0], dict):
+            inner = json.loads(content[0].get("text", "{}"))
+            if isinstance(inner, dict) and "verification_state" in inner:
+                verification_state = str(inner["verification_state"])
+    except Exception:
+        pass
+
     delta_id = tracker.add_delta(
         message=message,
         level=level,
         verification_state=verification_state,
         provisional=provisional,
     )
+
+    # Propagate degraded pipeline verification as an open risk
+    if verification_state == "degraded" and not payload.get("mismatch_reason"):
+        tracker.mark_degraded(f"pipeline verification failed: {tool_name}")
 
     if payload.get("mismatch_reason"):
         tracker.mark_degraded(str(payload["mismatch_reason"]))
@@ -70,14 +86,14 @@ def main() -> None:
     context_text = tracker.format_additional_context(budget_chars=budget_chars)
     save_tracker(state_path, tracker)
 
+    # Do NOT echo updatedMCPToolOutput — we have no modifications to make,
+    # and echoing the full result back wastes bandwidth on every tool call.
     output = {
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse",
             "additionalContext": context_text,
         }
     }
-    if isinstance(payload.get("tool_result"), dict):
-        output["hookSpecificOutput"]["updatedMCPToolOutput"] = payload["tool_result"]
     print(json.dumps(output))
 
 

@@ -174,16 +174,17 @@ class PipelineEngine:
     @staticmethod
     def _load_metadata(path: Path) -> dict[str, Any]:
         text = path.read_text(encoding="utf-8")
+        loaded = None
         try:
             import yaml  # type: ignore
-
             loaded = yaml.safe_load(text)
-            if not isinstance(loaded, dict):
-                raise ValueError("metadata must be an object")
-        except Exception:
+            # yaml.YAMLError and other yaml-specific errors propagate from here
+        except ImportError:
+            pass  # yaml not installed — fall through to JSON
+        if loaded is None:
             loaded = json.loads(text)
-            if not isinstance(loaded, dict):
-                raise ValueError("metadata must be a JSON object")
+        if not isinstance(loaded, dict):
+            raise ValueError(f"pipeline metadata must be a JSON/YAML object at {path}")
         PipelineEngine._validate_metadata(path, loaded)
         return loaded
 

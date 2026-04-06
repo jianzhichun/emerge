@@ -206,8 +206,8 @@ class ExecSession:
     def _append_wal(self, payload: dict[str, Any]) -> int:
         self._seq += 1
         row = {"seq": self._seq, **payload}
-        with self._wal_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(row, ensure_ascii=True) + os.linesep)
+        with self._wal_path.open("a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(row, ensure_ascii=True) + "\n")
             f.flush()
             os.fsync(f.fileno())
         return self._seq

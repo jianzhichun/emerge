@@ -257,7 +257,7 @@ def cmd_connector_export(
     filtered = {
         k: v
         for k, v in registry_data.get("pipelines", {}).items()
-        if k.startswith(prefix) or k == connector
+        if k.startswith(prefix)
     }
 
     out_path = Path(out)
@@ -329,13 +329,18 @@ def cmd_connector_import(
 
         arc_prefix = f"connectors/{connector}/"
         file_count = 0
+        connector_dest_resolved = connector_dest.resolve()
         for item in zf.infolist():
             if not item.filename.startswith(arc_prefix):
                 continue
             rel = item.filename[len(arc_prefix):]
             if not rel or rel.endswith("/"):
                 continue
-            dest = connector_dest / rel
+            dest = (connector_dest / rel).resolve()
+            try:
+                dest.relative_to(connector_dest_resolved)
+            except ValueError:
+                return {"ok": False, "error": f"invalid package: path traversal in entry {item.filename!r}"}
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(zf.read(item.filename))
             file_count += 1
@@ -845,7 +850,10 @@ def render_policy_status_pretty(data: dict) -> str:
     else:
         for item in pipelines:
             lines.append(f"- key: {item.get('key', '')}")
-            lines.append(f"  status: {item.get('status', '')}")
+            desc = item.get('description', '')
+            if desc:
+                lines.append(f"  description: {desc}")
+            lines.append(f"  status: {item.get('status', '')}  source: {item.get('source', 'exec')}")
             lines.append(f"  rollout_pct: {item.get('rollout_pct', 0)}")
             lines.append(f"  success_rate: {item.get('success_rate', 0)}")
             lines.append(f"  verify_rate: {item.get('verify_rate', 0)}")
@@ -1066,8 +1074,10 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self._err(404)
             return
         try:
-            fpath = _resolve_connector_root() / connector / "cockpit" / filename
-        except Exception:
+            connector_root = _resolve_connector_root()
+            fpath = connector_root / connector / "cockpit" / filename
+            fpath.resolve().relative_to(connector_root.resolve())
+        except (ValueError, Exception):
             self._err(404)
             return
         if not fpath.exists():

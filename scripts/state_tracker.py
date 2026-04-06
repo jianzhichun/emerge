@@ -64,7 +64,8 @@ class StateTracker:
         return delta_id
 
     def add_risk(self, risk: str) -> None:
-        self.state["open_risks"].append(risk)
+        if risk not in self.state["open_risks"]:
+            self.state["open_risks"].append(risk)
 
     def mark_degraded(self, reason: str) -> None:
         self.state["verification_state"] = "degraded"

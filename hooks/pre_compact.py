@@ -10,7 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.policy_config import default_hook_state_root  # noqa: E402
-from scripts.state_tracker import load_tracker  # noqa: E402
+from scripts.state_tracker import StateTracker, load_tracker, save_tracker  # noqa: E402
 
 _BUDGET_CHARS = 800
 
@@ -35,6 +35,13 @@ def main() -> None:
         + ("\n".join(f"- {r}" for r in token.get("open_risks", [])) or "- None.")
         + f"\n\nFLYWHEEL_TOKEN\n{token_json}"
     )
+
+    # Reset tracker so the next session starts fresh — goal preserved, but stale
+    # deltas and risks from the compacted window are cleared. They are now captured
+    # in the compact summary and must not be replayed as live context on next SessionStart.
+    fresh = StateTracker()
+    fresh.set_goal(tracker.state.get("goal", ""), source=tracker.state.get("goal_source", "unset"))
+    save_tracker(state_path, fresh)
 
     out = {
         "hookSpecificOutput": {

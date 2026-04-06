@@ -82,3 +82,25 @@ def test_format_recovery_token_hard_budget_cap():
     # Must still have schema and goal
     assert token["schema_version"] == "flywheel.v1"
     assert token["goal"] == "stress test"
+
+
+def test_add_risk_deduplicates_exact_duplicates():
+    """add_risk must not add the same risk string twice."""
+    from scripts.state_tracker import StateTracker
+    tracker = StateTracker()
+    tracker.add_risk("pipeline verification failed: zwcad.write.apply-change")
+    tracker.add_risk("pipeline verification failed: zwcad.write.apply-change")
+    tracker.add_risk("pipeline verification failed: zwcad.write.apply-change")
+    assert len(tracker.state["open_risks"]) == 1, (
+        "duplicate risk entries must be suppressed"
+    )
+
+
+def test_add_risk_keeps_distinct_risks():
+    """Different risk strings must all be preserved."""
+    from scripts.state_tracker import StateTracker
+    tracker = StateTracker()
+    tracker.add_risk("pipeline verification failed: icc_read")
+    tracker.add_risk("pipeline verification failed: icc_write")
+    tracker.add_risk("runner unreachable: mycader-1")
+    assert len(tracker.state["open_risks"]) == 3

@@ -77,3 +77,36 @@ def test_adapter_registry_fallback_to_generic(tmp_path):
     assert plugin is not None
     ctx = plugin.get_context({"app": "zwcad"})
     assert isinstance(ctx, dict)
+
+
+def test_adapter_registry_rejects_path_traversal_name(tmp_path):
+    """get_plugin must reject names with path traversal characters."""
+    from scripts.observer_plugin import AdapterRegistry, _GenericFallback
+    registry = AdapterRegistry(adapter_root=tmp_path)
+
+    # These names must all return the generic fallback, not attempt to load a file
+    for evil_name in ["../evil", "../../etc/passwd", "..", "foo/../bar", "/abs/path"]:
+        plugin = registry.get_plugin(evil_name)
+        assert isinstance(plugin, _GenericFallback), (
+            f"Expected GenericFallback for {evil_name!r}, got {type(plugin).__name__}"
+        )
+
+
+def test_adapter_registry_rejects_uppercase_name(tmp_path):
+    """Names with uppercase letters are rejected (OperatorMonitor may pass raw app names)."""
+    from scripts.observer_plugin import AdapterRegistry, _GenericFallback
+    registry = AdapterRegistry(adapter_root=tmp_path)
+
+    # "ZWCAD" from an event should not load arbitrary files
+    plugin = registry.get_plugin("ZWCAD")
+    assert isinstance(plugin, _GenericFallback)
+
+
+def test_adapter_registry_accepts_valid_names(tmp_path):
+    """Valid lowercase names still work normally (return fallback when no adapter file)."""
+    from scripts.observer_plugin import AdapterRegistry, _GenericFallback
+    registry = AdapterRegistry(adapter_root=tmp_path)
+
+    for good_name in ["zwcad", "hypermesh", "cloud-server", "my_app2"]:
+        plugin = registry.get_plugin(good_name)
+        assert plugin is not None, f"Expected a plugin for {good_name!r}"

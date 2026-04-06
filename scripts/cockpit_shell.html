@@ -58,6 +58,7 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .badge-stable { background: #1b2d1b; color: #3fb950; border: 1px solid #2a4a2a; }
 .badge-canary { background: #2d2208; color: #d29922; border: 1px solid #4a3a10; }
 .badge-explore { background: #1c2128; color: #8b949e; border: 1px solid #30363d; }
+.pipeline-desc { font-size: 10px; color: #6e7681; margin-top: 2px; font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pipeline-metrics { font-size: 10px; color: #8b949e; margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; }
 .pipeline-metrics .warn { color: #f85149; }
 .pipeline-metrics .good { color: #3fb950; }
@@ -103,6 +104,34 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .component-label { font-size: 10px; color: #484f58; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
 /* Status bar */
 .status-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 22px; background: #161b22; border-top: 1px solid #21262d; display: flex; align-items: center; padding: 0 12px; font-size: 10px; color: #8b949e; gap: 16px; z-index: 10; }
+/* Overview dashboard */
+.overview-grid { display: grid; grid-template-columns: 220px 1fr; gap: 14px; margin-bottom: 16px; align-items: start; }
+.overview-donut-wrap { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.donut-legend { width: 100%; display: flex; flex-direction: column; gap: 4px; }
+.donut-legend-row { display: flex; align-items: center; gap: 7px; font-size: 11px; cursor: pointer; }
+.donut-legend-row:hover { color: #e6edf3; }
+.donut-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.donut-legend-label { flex: 1; color: #8b949e; }
+.donut-legend-val { color: #e6edf3; font-weight: 600; }
+.overview-stats { display: flex; flex-direction: column; gap: 10px; }
+.stat-row { display: flex; gap: 10px; }
+.stat-card { flex: 1; background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 10px 12px; }
+.stat-card.critical { border-color: #4a1a1a; }
+.stat-card.canary  { border-color: #4a3a10; }
+.stat-card.stable  { border-color: #2a4a2a; }
+.stat-num  { font-size: 26px; font-weight: 700; line-height: 1; }
+.stat-num.critical { color: #f85149; }
+.stat-num.canary   { color: #d29922; }
+.stat-num.stable   { color: #3fb950; }
+.stat-num.neutral  { color: #8b949e; }
+.stat-label { font-size: 10px; color: #484f58; margin-top: 3px; text-transform: uppercase; letter-spacing: 0.8px; }
+.stat-sub   { font-size: 10px; color: #8b949e; margin-top: 5px; }
+.explore-summary { background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 10px 12px; }
+.explore-title { font-size: 11px; color: #8b949e; margin-bottom: 6px; }
+.explore-connectors { display: flex; flex-wrap: wrap; gap: 6px; }
+.explore-chip { background: #1c2128; border: 1px solid #30363d; border-radius: 12px; padding: 2px 9px; font-size: 10px; color: #8b949e; cursor: pointer; }
+.explore-chip:hover { border-color: #58a6ff; color: #58a6ff; }
+.explore-chip b { color: #e6edf3; }
 </style>
 </head>
 <body>
@@ -216,41 +245,199 @@ function renderThresholds() {
     `Session: ${(policyData.session_id || '').slice(0, 20)} · Goal: ${policyData.goal || 'unset'}`;
 }
 
-// ── Overview tab (all pipelines by status) ────────────────────────────────────
+// ── Overview tab (dashboard: donut chart + stat cards + pipeline cards) ────────
 function renderOverviewTab() {
   if (!policyData) return;
   const pipelines = policyData.pipelines || [];
   const threshold = policyData.thresholds ? (policyData.thresholds.rollback_consecutive_failures || 2) : 2;
   const groups = { critical: [], canary: [], stable: [], explore: [] };
   pipelines.forEach(p => {
-    if ((p.consecutive_failures || 0) >= threshold)
-      groups.critical.push(p);
+    if ((p.consecutive_failures || 0) >= threshold) groups.critical.push(p);
     else if (p.status === 'canary') groups.canary.push(p);
     else if (p.status === 'stable') groups.stable.push(p);
     else groups.explore.push(p);
   });
 
+  const total = pipelines.length;
   const queuedKeys = new Set(queue.map(q => q.data && q.data.key).filter(Boolean));
-  let html = '';
 
+  // ── Avg success rate across stable+canary ──
+  const tracked = [...groups.stable, ...groups.canary];
+  let avgRate = null;
+  if (tracked.length) {
+    const sum = tracked.reduce((s, p) => {
+      const r = p.success_rate != null ? p.success_rate : (p.total_runs > 0 ? (p.total_runs - (p.total_failures || 0)) / p.total_runs : null);
+      return r != null ? [s[0] + r, s[1] + 1] : s;
+    }, [0, 0]);
+    if (sum[1]) avgRate = (sum[0] / sum[1] * 100).toFixed(1);
+  }
+
+  // ── Explore: aggregate by connector ──
+  const connectorMap = {};
+  groups.explore.forEach(p => {
+    const parts = (p.key || '').split('.');
+    const conn = parts[0] || 'unknown';
+    connectorMap[conn] = (connectorMap[conn] || 0) + 1;
+  });
+
+  // ── Build HTML ──
+  const critColor = '#f85149', canaryColor = '#d29922', stableColor = '#3fb950', exploreColor = '#484f58';
+
+  // Stat cards
+  const statCritClass = groups.critical.length ? ' critical' : '';
+  const statCanaryClass = groups.canary.length ? ' canary' : '';
+  const statStableClass = groups.stable.length ? ' stable' : '';
+
+  let html = `<div class="overview-grid">
+    <div class="overview-donut-wrap">
+      <canvas id="overview-donut" width="160" height="160"></canvas>
+      <div class="donut-legend">
+        <div class="donut-legend-row" onclick="document.getElementById('ov-sec-critical').scrollIntoView({behavior:'smooth'})">
+          <span class="donut-dot" style="background:${critColor}"></span>
+          <span class="donut-legend-label">Critical</span>
+          <span class="donut-legend-val">${groups.critical.length}</span>
+        </div>
+        <div class="donut-legend-row" onclick="document.getElementById('ov-sec-canary').scrollIntoView({behavior:'smooth'})">
+          <span class="donut-dot" style="background:${canaryColor}"></span>
+          <span class="donut-legend-label">Canary</span>
+          <span class="donut-legend-val">${groups.canary.length}</span>
+        </div>
+        <div class="donut-legend-row" onclick="document.getElementById('ov-sec-stable').scrollIntoView({behavior:'smooth'})">
+          <span class="donut-dot" style="background:${stableColor}"></span>
+          <span class="donut-legend-label">Stable</span>
+          <span class="donut-legend-val">${groups.stable.length}</span>
+        </div>
+        <div class="donut-legend-row" onclick="document.getElementById('ov-sec-explore').scrollIntoView({behavior:'smooth'})">
+          <span class="donut-dot" style="background:${exploreColor}"></span>
+          <span class="donut-legend-label">Explore</span>
+          <span class="donut-legend-val">${groups.explore.length}</span>
+        </div>
+      </div>
+    </div>
+    <div class="overview-stats">
+      <div class="stat-row">
+        <div class="stat-card">
+          <div class="stat-num" style="color:#e6edf3">${total}</div>
+          <div class="stat-label">Total Pipelines</div>
+        </div>
+        <div class="stat-card${statCritClass}">
+          <div class="stat-num" style="color:${critColor}">${groups.critical.length}</div>
+          <div class="stat-label">Critical</div>
+          <div class="stat-sub">${groups.critical.length ? '⚠ needs attention' : 'all clear'}</div>
+        </div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-card${statCanaryClass}">
+          <div class="stat-num" style="color:${canaryColor}">${groups.canary.length}</div>
+          <div class="stat-label">Canary</div>
+          <div class="stat-sub">testing in flight</div>
+        </div>
+        <div class="stat-card${statStableClass}">
+          <div class="stat-num" style="color:${stableColor}">${groups.stable.length}</div>
+          <div class="stat-label">Stable</div>
+          <div class="stat-sub">${avgRate != null ? 'avg success ' + avgRate + '%' : 'no data yet'}</div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+
+  // ── Critical section (expanded) ──
+  html += `<div id="ov-sec-critical"></div>`;
   if (groups.critical.length) {
     html += `<div class="section-header critical">⚠ Critical (${groups.critical.length})</div>`;
     groups.critical.forEach(p => { html += renderPipelineCard(p, queuedKeys); });
   }
-  if (groups.stable.length) {
-    html += `<div class="section-header stable">✓ Stable (${groups.stable.length})</div>`;
-    groups.stable.forEach(p => { html += renderPipelineCard(p, queuedKeys); });
-  }
+
+  // ── Canary section (expanded) ──
+  html += `<div id="ov-sec-canary"></div>`;
   if (groups.canary.length) {
     html += `<div class="section-header canary">⟳ Canary (${groups.canary.length})</div>`;
     groups.canary.forEach(p => { html += renderPipelineCard(p, queuedKeys); });
   }
+
+  // ── Stable section (compact: key + metrics, no action buttons) ──
+  html += `<div id="ov-sec-stable"></div>`;
+  if (groups.stable.length) {
+    html += `<div class="section-header stable">✓ Stable (${groups.stable.length})</div>`;
+    groups.stable.forEach(p => {
+      const sr = p.success_rate != null ? (p.success_rate * 100).toFixed(0) + '%' : '—';
+      const runs = p.total_runs != null ? p.total_runs : '—';
+      html += `<div class="pipeline-card stable" style="padding:5px 12px">
+        <div class="pipeline-card-row">
+          <span class="pipeline-key" style="font-size:11px">${escHtml(p.key || '')}</span>
+          <span class="pipeline-metrics" style="margin:0">${escHtml(p.description || '')}</span>
+          <span style="font-size:10px;color:#3fb950;flex-shrink:0;margin-left:8px">${escHtml(sr)} · ${escHtml(String(runs))} runs</span>
+        </div>
+      </div>`;
+    });
+  }
+
+  // ── Explore section (aggregate chips only) ──
+  html += `<div id="ov-sec-explore"></div>`;
   if (groups.explore.length) {
     html += `<div class="section-header explore">◯ Explore (${groups.explore.length})</div>`;
-    groups.explore.forEach(p => { html += renderPipelineCard(p, queuedKeys); });
+    const connEntries = Object.entries(connectorMap).sort((a, b) => b[1] - a[1]);
+    html += `<div class="explore-summary">
+      <div class="explore-title">Explore pipelines by connector — click to navigate</div>
+      <div class="explore-connectors">`;
+    connEntries.forEach(([conn, cnt]) => {
+      html += `<span class="explore-chip" onclick="switchTab('${escHtml(conn).replace(/'/g,"\\'")}')"><b>${escHtml(cnt.toString())}</b> ${escHtml(conn)}</span>`;
+    });
+    html += `</div></div>`;
   }
-  if (!html) html = '<div style="color:#8b949e;padding:20px">No pipelines found.</div>';
+
+  if (!total) html = '<div style="color:#8b949e;padding:20px">No pipelines found.</div>';
   document.getElementById('main-panel').innerHTML = html;
+
+  // ── Draw donut chart on canvas ──
+  requestAnimationFrame(() => {
+    const canvas = document.getElementById('overview-donut');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const cx = 80, cy = 80, outerR = 72, innerR = 44;
+    const slices = [
+      { val: groups.critical.length, color: critColor },
+      { val: groups.canary.length,   color: canaryColor },
+      { val: groups.stable.length,   color: stableColor },
+      { val: groups.explore.length,  color: exploreColor },
+    ].filter(s => s.val > 0);
+
+    ctx.clearRect(0, 0, 160, 160);
+
+    if (!slices.length) {
+      // Empty state circle
+      ctx.beginPath();
+      ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
+      ctx.strokeStyle = '#21262d';
+      ctx.lineWidth = outerR - innerR;
+      ctx.stroke();
+    } else {
+      const total2 = slices.reduce((s, sl) => s + sl.val, 0);
+      let startAngle = -Math.PI / 2;
+      const gap = slices.length > 1 ? 0.03 : 0;
+      slices.forEach(sl => {
+        const sweep = (sl.val / total2) * Math.PI * 2 - gap;
+        ctx.beginPath();
+        ctx.moveTo(cx + innerR * Math.cos(startAngle + gap / 2), cy + innerR * Math.sin(startAngle + gap / 2));
+        ctx.arc(cx, cy, outerR, startAngle + gap / 2, startAngle + gap / 2 + sweep);
+        ctx.arc(cx, cy, innerR, startAngle + gap / 2 + sweep, startAngle + gap / 2, true);
+        ctx.closePath();
+        ctx.fillStyle = sl.color;
+        ctx.fill();
+        startAngle += sweep + gap;
+      });
+    }
+
+    // Center label
+    ctx.fillStyle = '#e6edf3';
+    ctx.font = 'bold 22px SF Mono, Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(total, cx, cy - 7);
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '10px SF Mono, Consolas, monospace';
+    ctx.fillText('pipelines', cx, cy + 11);
+  });
 }
 
 // ── Single connector tab ──────────────────────────────────────────────────────
@@ -360,13 +547,15 @@ function renderPipelineCard(p, queuedKeys) {
     .map(d => `<button class="act-btn ${d.cls}" onclick="onActionSelect('${d.action}','${safeKey}','${status}')">${d.label}</button>`)
     .join('');
   const cfClass = cf >= 2 ? 'warn' : '';
+  const desc = p.description ? `<div class="pipeline-desc">${escHtml(p.description)}</div>` : '';
   return `
 <div class="pipeline-card ${cf >= 2 ? 'critical' : status} ${isQueued ? 'queued' : ''}">
   <div class="pipeline-card-row">
     <div class="pipeline-key">${escHtml(key)}</div>
-    <span class="pipeline-badge badge-${status}">${status}${p.rollout_pct != null ? ' · ' + p.rollout_pct + '%' : ''}</span>
+    <span class="pipeline-badge badge-${status}">${status}${p.rollout_pct != null ? ' · ' + p.rollout_pct + '%' : ''}${p.synthesis_ready ? ' 💎' : ''}</span>
     <div class="pipeline-actions">${btns}</div>
   </div>
+  ${desc}
   <div class="pipeline-metrics">
     <span>success: <b class="${parseFloat(sr) >= 0.95 ? 'good' : 'warn'}">${sr}</b></span>
     <span>verify: <b class="${parseFloat(vr) >= 0.95 ? 'good' : 'warn'}">${vr}</b></span>
