@@ -17,11 +17,12 @@ Steps:
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" policy-status --pretty`
    Report to the user: URL, total pipeline count (explore/canary/stable), any pipelines with consecutive_failures.
 
-3. **Sense vertical assets and inject controls** (CC-driven, framework-agnostic):
+3. **Sense vertical assets and inject controls** (CC-driven, framework-agnostic) — **do this before step 4**:
    - Read each connector's assets under `~/.emerge/connectors/` (`NOTES.md`, `scenarios/*.yaml`, `pipelines/`, `cockpit/*.html`, etc.)
    - Based on your understanding of the vertical context, decide which assets are worth surfacing as Cockpit controls (e.g. scenario cards, quick actions)
-   - Inject generated HTML components via `POST http://localhost:<PORT>/api/inject-component`
-   - If no valuable vertical assets are found, do nothing — the framework does not scan or render scenarios on its own
+   - For each control, call `POST http://localhost:<PORT>/api/inject-component` with JSON body `{"connector": "<name>", "html": "<full HTML document or fragment>"}`. Repeat for multiple controls (each POST appends one entry).
+   - Injected fragments appear under the connector **Controls** tab as `injected-runtime-0.html`, `injected-runtime-1.html`, … (session-only; use `crystallize-component` to persist under `cockpit/*.html`). The UI refreshes assets on the same interval as policy (~5s), or the user can reload the page.
+   - If no valuable vertical assets are found, skip this step — the framework does not infer scenarios or auto-inject.
 
 4. **Enter the dispatch loop** (core):
 

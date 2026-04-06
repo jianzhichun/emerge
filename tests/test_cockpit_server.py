@@ -107,6 +107,39 @@ def test_serve_get_assets_returns_connectors(tmp_path, monkeypatch):
     assert "connectors" in data
 
 
+def test_serve_inject_component_merged_into_assets_and_servable(tmp_path, monkeypatch):
+    """POST /api/inject-component must surface in /api/assets and /api/components/... (regression)."""
+    import scripts.repl_admin as ra
+
+    ra._COCKPIT_INJECTED_HTML.clear()
+    connector_root = tmp_path / "connectors"
+    (connector_root / "acme").mkdir(parents=True)
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
+    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    from scripts.repl_admin import cmd_serve
+
+    url = cmd_serve(port=0, open_browser=False)["url"]
+    inj = json.dumps({"connector": "acme", "html": "<div id=\"inj\">ok</div>"}).encode()
+    req = urllib.request.Request(
+        f"{url}/api/inject-component",
+        data=inj,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req) as resp:
+        assert json.loads(resp.read())["ok"] is True
+
+    with urllib.request.urlopen(f"{url}/api/assets") as resp:
+        assets = json.loads(resp.read())
+    names = [c["filename"] for c in assets["connectors"]["acme"]["components"]]
+    assert "injected-runtime-0.html" in names
+
+    with urllib.request.urlopen(f"{url}/api/components/acme/injected-runtime-0.html") as resp:
+        body = resp.read()
+    assert b"inj" in body and b"ok" in body
+
+
 def test_serve_post_submit_writes_pending(tmp_path, monkeypatch):
     url = _start_test_server(tmp_path, monkeypatch)
     actions = [{"type": "pipeline-delete", "key": "x"}]

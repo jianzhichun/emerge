@@ -1015,12 +1015,32 @@ def render_runner_status_pretty(data: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+# Session-only HTML from POST /api/inject-component. Merged into /api/assets and
+# served at /api/components/<connector>/injected-runtime-<n>.html (disk wins if that path exists).
+_COCKPIT_INJECTED_HTML: dict[str, list[str]] = {}
+_COCKPIT_INJECT_LOCK = threading.Lock()
+
+
+def _injected_runtime_basename(i: int) -> str:
+    return f"injected-runtime-{i}.html"
+
+
+def _cockpit_append_injected_html(connector: str, html: str) -> None:
+    with _COCKPIT_INJECT_LOCK:
+        _COCKPIT_INJECTED_HTML.setdefault(connector, []).append(html)
+
+
+def _cockpit_list_injected_html(connector: str) -> list[str]:
+    with _COCKPIT_INJECT_LOCK:
+        return list(_COCKPIT_INJECTED_HTML.get(connector, []))
+
+
 def cmd_assets() -> dict:
     """Return per-connector assets: notes content and crystallized components.
 
-    Controls (scenario cards, etc.) are NOT scanned by the framework.
-    CC injects them at runtime via POST /api/inject-component after sensing
-    the vertical's assets. The framework is domain-agnostic.
+    On-disk ``cockpit/*.html`` are listed first. Session injections from
+    ``POST /api/inject-component`` are appended as synthetic
+    ``injected-runtime-<n>.html`` entries (see ``_serve_component``).
     """
     try:
         connector_root = _resolve_connector_root()
@@ -1048,6 +1068,13 @@ def cmd_assets() -> dict:
                     "filename": html_file.name,
                     "context": ctx_file.read_text(encoding="utf-8") if ctx_file.exists() else "",
                 })
+
+        injected = _cockpit_list_injected_html(name)
+        for i in range(len(injected)):
+            components.append({
+                "filename": _injected_runtime_basename(i),
+                "context": "Runtime-injected control (session-only; crystallize to persist on disk).",
+            })
 
         connectors[name] = {"notes": notes, "components": components}
 
@@ -1211,7 +1238,6 @@ class _ReuseAddrTCPServer(socketserver.ThreadingTCPServer):
 
 class _CockpitHandler(http.server.BaseHTTPRequestHandler):
     _shell_path: "Path" = Path(__file__).parent / "cockpit_shell.html"
-    _injected: dict = {}  # connector -> list[str html]
 
     def log_message(self, fmt: str, *args: object) -> None:  # suppress request logs
         pass
@@ -1283,10 +1309,10 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/goal/rollback":
             self._json(_cmd_goal_rollback(body))
         elif path == "/api/inject-component":
-            connector = str(body.get("connector", ""))
+            connector = str(body.get("connector", "")).strip()
             html = str(body.get("html", ""))
             if connector and html:
-                _CockpitHandler._injected.setdefault(connector, []).append(html)
+                _cockpit_append_injected_html(connector, html)
             self._json({"ok": True})
         else:
             self._err(404)
@@ -1324,10 +1350,19 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         except (ValueError, Exception):
             self._err(404)
             return
-        if not fpath.exists():
-            self._err(404)
-            return
-        body = fpath.read_bytes()
+        if fpath.exists():
+            body = fpath.read_bytes()
+        else:
+            m = re.fullmatch(r"injected-runtime-(\d+)\.html", filename)
+            if not m:
+                self._err(404)
+                return
+            idx = int(m.group(1))
+            injected = _cockpit_list_injected_html(connector)
+            if not (0 <= idx < len(injected)):
+                self._err(404)
+                return
+            body = injected[idx].encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))

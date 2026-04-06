@@ -488,7 +488,7 @@ async function init() {
   });
   _resetRefreshTimer();
   setInterval(async () => {
-    await refreshPolicy();
+    await Promise.all([refreshPolicy(), refreshAssets()]);
     _resetRefreshTimer();
   }, REFRESH_INTERVAL_S * 1000);
   setInterval(refreshStatus, 3000);
