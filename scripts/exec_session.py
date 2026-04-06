@@ -240,9 +240,10 @@ class ExecSession:
                 tmp.flush()
                 os.fsync(tmp.fileno())
             os.replace(tmp_path, self._checkpoint_path)
+            tmp_path = ""
             self._wal_seq_applied = wal_seq_applied
         finally:
-            if os.path.exists(tmp_path):
+            if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
     def _serialize_value(self, value: Any) -> Any | None:
@@ -283,8 +284,9 @@ class ExecSession:
                 tmp.flush()
                 os.fsync(tmp.fileno())
             os.replace(tmp_path, self._recovery_path)
+            tmp_path = ""
         finally:
-            if os.path.exists(tmp_path):
+            if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
     @staticmethod
