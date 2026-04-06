@@ -206,7 +206,7 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .act-btn.danger { border-color: #4a1a1a; color: #f85149; }
 .act-btn.danger:hover { background: #1a0d0d; }
 /* Notes */
-.notes-block { background: #0d1117; border: 1px solid #1b2d1b; border-radius: 4px; padding: 10px 14px; font-size: 12px; color: #c9d1d9; margin-bottom: 6px; max-height: 420px; overflow-y: auto; line-height: 1.6; }
+.notes-block { background: transparent; border: none; border-radius: 0; padding: 0; font-size: 12px; color: #c9d1d9; margin: 6px 0 0; max-height: none; overflow: visible; line-height: 1.6; }
 .notes-block h1,.notes-block h2,.notes-block h3 { color: #e6edf3; margin: 12px 0 4px; font-size: 13px; border-bottom: 1px solid #21262d; padding-bottom: 3px; }
 .notes-block h1 { font-size: 14px; }
 .notes-block h3 { font-size: 12px; border-bottom: none; color: #8b949e; }
@@ -769,8 +769,7 @@ function switchTab(tab) {
 
 function getAvailableConnectorPanels(connectorName) {
   const connector = assetsData && assetsData.connectors ? assetsData.connectors[connectorName] : null;
-  const panels = ['pipelines'];
-  if (connector && connector.notes) panels.push('notes');
+  const panels = ['pipelines', 'notes'];
   const hasControls = connector && ((connector.scenarios && connector.scenarios.length) || (connector.components && connector.components.length));
   if (hasControls) panels.push('controls');
   return panels;
