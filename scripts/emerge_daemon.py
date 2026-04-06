@@ -124,6 +124,13 @@ class EmergeDaemon:
         self._goal_control = GoalControlPlane(Path(default_hook_state_root()))
         self._goal_control.ensure_initialized()
         self._migrate_legacy_goal_once()
+        from scripts.span_tracker import SpanTracker
+        _hook_state_root = Path(default_hook_state_root())
+        self._span_tracker = SpanTracker(
+            state_root=self._state_root,
+            hook_state_root=_hook_state_root,
+        )
+        self._open_spans: dict[str, Any] = {}  # span_id → SpanRecord; in-process cache
 
     def _hook_state_path(self) -> Path:
         return Path(default_hook_state_root()) / "state.json"
@@ -433,6 +440,91 @@ class EmergeDaemon:
         except Exception:
             pass  # auto-crystallize is best-effort
 
+    def _generate_span_skeleton(
+        self,
+        *,
+        intent_signature: str,
+        span: dict,
+        connector_root: "Path | None" = None,
+    ) -> "Path | None":
+        """Generate a Python skeleton for a stable span.
+
+        Writes to connectors/<connector>/pipelines/<mode>/_pending/<name>.py.
+        Returns the path written, or None on failure.
+        Silently skips if skeleton already exists.
+        """
+        import textwrap
+        from scripts.pipeline_engine import _USER_CONNECTOR_ROOT
+        try:
+            parts = intent_signature.split(".", 2)
+            if len(parts) != 3:
+                return None
+            connector, mode, pipeline_name = parts
+            env_root_str = os.environ.get("EMERGE_CONNECTOR_ROOT", "").strip()
+            target_root = connector_root or (
+                Path(env_root_str).expanduser() if env_root_str else _USER_CONNECTOR_ROOT
+            )
+            pending_dir = target_root / connector / "pipelines" / mode / "_pending"
+            pending_dir.mkdir(parents=True, exist_ok=True)
+            skeleton_path = pending_dir / f"{pipeline_name}.py"
+            if skeleton_path.exists():
+                return skeleton_path  # already generated
+
+            actions = span.get("actions", [])
+            is_read = mode == "read"
+            call_lines = []
+            for a in actions:
+                tool = a.get("tool_name", "unknown_tool")
+                call_lines.append(
+                    f"    # seq={a.get('seq', '?')}: {tool} was called here\n"
+                    f"    raise NotImplementedError('implement: {tool} equivalent')"
+                )
+            if not call_lines:
+                call_lines = ["    raise NotImplementedError('implement pipeline body')"]
+            body = "\n".join(call_lines)
+
+            if is_read:
+                skeleton = textwrap.dedent(f"""\
+                    # auto-generated from span: {intent_signature}
+                    # Review and implement before calling icc_span_approve.
+
+                    def run_read(metadata, args):
+                    {body}
+                        return []  # return list of row dicts
+
+                    def verify_read(metadata, args, rows):
+                        return {{"ok": isinstance(rows, list)}}
+                """)
+            else:
+                skeleton = textwrap.dedent(f"""\
+                    # auto-generated from span: {intent_signature}
+                    # Review and implement before calling icc_span_approve.
+                    # verify_write is REQUIRED by PipelineEngine.
+
+                    def run_write(metadata, args):
+                    {body}
+                        return {{"ok": True}}
+
+                    def verify_write(metadata, args, action_result):
+                        raise NotImplementedError('implement verify_write')
+
+                    def rollback(metadata, args, action_result):
+                        pass  # optional
+                """)
+
+            fd, tmp = tempfile.mkstemp(prefix=".skeleton-", dir=str(pending_dir))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(skeleton)
+                os.replace(tmp, skeleton_path)
+            except Exception:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+                raise
+            return skeleton_path
+        except Exception:
+            return None
+
     @staticmethod
     def _tool_error(text: str) -> dict[str, Any]:
         return {"isError": True, "content": [{"type": "text", "text": text}]}
@@ -569,6 +661,130 @@ class EmergeDaemon:
             except Exception as exc:
                 return self._tool_error(f"icc_goal_rollback failed: {exc}")
             return self._tool_ok_json(result)
+        if name == "icc_span_open":
+            intent_signature = str(arguments.get("intent_signature", "")).strip()
+            if not intent_signature:
+                return self._tool_error("icc_span_open: 'intent_signature' is required")
+            # Bridge check: stable policy AND pipeline file exists
+            policy_status = self._span_tracker.get_policy_status(intent_signature)
+            if policy_status == "stable":
+                parts = intent_signature.split(".", 2)
+                if len(parts) == 3:
+                    connector, mode, pipeline_name = parts
+                    pipeline_args = {**arguments, "connector": connector, "pipeline": pipeline_name}
+                    try:
+                        _rr = self._get_runner_router()
+                        _client = _rr.find_client(arguments) if _rr else None
+                        if _client is not None:
+                            bridge_result = self._run_pipeline_remotely(mode, pipeline_args, _client)
+                            _exec_path = "remote"
+                        elif mode == "write":
+                            bridge_result = self.pipeline.run_write(pipeline_args)
+                            _exec_path = "local"
+                        else:
+                            bridge_result = self.pipeline.run_read(pipeline_args)
+                            _exec_path = "local"
+                        bridge_result["bridge_promoted"] = True
+                        try:
+                            self._record_pipeline_event(
+                                tool_name="icc_span_open",
+                                arguments=pipeline_args,
+                                result=bridge_result,
+                                is_error=False,
+                                execution_path=_exec_path,
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            self._sink.emit("span.bridge.promoted", {"intent_signature": intent_signature})
+                        except Exception:
+                            pass
+                        return self._tool_ok_json({
+                            "bridge": True,
+                            "bridge_type": "result",
+                            "intent_signature": intent_signature,
+                            "result": bridge_result,
+                        })
+                    except Exception:
+                        pass  # PipelineMissingError or any failure → fall through to explore
+            # No bridge: open a new span
+            try:
+                span = self._span_tracker.open_span(
+                    intent_signature=intent_signature,
+                    description=str(arguments.get("description", "")).strip(),
+                    args=arguments.get("args") or {},
+                    source=str(arguments.get("source", "manual")).strip(),
+                    skill_name=str(arguments.get("skill_name", "") or "").strip() or None,
+                )
+            except RuntimeError as exc:
+                return self._tool_error(str(exc))
+            self._open_spans[span.span_id] = span
+            return self._tool_ok_json({
+                "span_id": span.span_id,
+                "intent_signature": intent_signature,
+                "status": "opened",
+                "policy_status": policy_status,
+            })
+
+        if name == "icc_span_close":
+            outcome = str(arguments.get("outcome", "")).strip()
+            if outcome not in ("success", "failure", "aborted"):
+                return self._tool_error(
+                    f"icc_span_close: 'outcome' must be success/failure/aborted, got {outcome!r}"
+                )
+            span_id = str(arguments.get("span_id", "")).strip()
+            result_summary = arguments.get("result_summary") or {}
+            # Retrieve in-process span (may be absent after daemon restart)
+            from scripts.span_tracker import SpanRecord
+            span = self._open_spans.pop(span_id, None)
+            if span is None:
+                # Graceful fallback: reconstruct minimal span so WAL still gets a record
+                import uuid as _uuid
+                span = SpanRecord(
+                    span_id=span_id or str(_uuid.uuid4()),
+                    intent_signature=str(arguments.get("intent_signature", "")).strip(),
+                    description="",
+                    source="manual",
+                    opened_at_ms=0,
+                )
+            closed = self._span_tracker.close_span(span, outcome=outcome, result_summary=result_summary)
+            policy_status = self._span_tracker.get_policy_status(closed.intent_signature)
+            synthesis_ready = self._span_tracker.is_synthesis_ready(closed.intent_signature)
+            skeleton_path: str | None = None
+            # Auto-generate skeleton for stable spans (once only)
+            if synthesis_ready and not self._span_tracker.skeleton_already_generated(closed.intent_signature):
+                latest = self._span_tracker.latest_successful_span(closed.intent_signature)
+                if latest:
+                    generated = self._generate_span_skeleton(
+                        intent_signature=closed.intent_signature,
+                        span=latest,
+                    )
+                    if generated:
+                        skeleton_path = str(generated)
+                        self._span_tracker.mark_skeleton_generated(closed.intent_signature)
+                        try:
+                            self._sink.emit("span.skeleton_generated", {
+                                "intent_signature": closed.intent_signature,
+                                "path": skeleton_path,
+                            })
+                        except Exception:
+                            pass
+            response: dict[str, Any] = {
+                "span_id": closed.span_id,
+                "intent_signature": closed.intent_signature,
+                "outcome": outcome,
+                "policy_status": policy_status,
+                "synthesis_ready": synthesis_ready,
+                "is_read_only": closed.is_read_only,
+            }
+            if skeleton_path:
+                response["skeleton_path"] = skeleton_path
+                response["next_step"] = (
+                    f"Review and complete {skeleton_path}, "
+                    "then call icc_span_approve to activate the bridge."
+                )
+            return self._tool_ok_json(response)
+
         if name == "icc_exec":
             # flywheel bridge: if candidate is stable and pipeline is ready, redirect
             promoted = self._try_flywheel_bridge(arguments)
@@ -745,6 +961,51 @@ class EmergeDaemon:
                 "id": req_id,
                 "result": {
                     "tools": [
+                        {
+                            "name": "icc_span_open",
+                            "description": (
+                                "Open an intent span to track a multi-step MCP tool call sequence "
+                                "in the flywheel. Use before any sequence of Lark/context7/skill tool calls "
+                                "that represents a reusable intent. When the intent pipeline is stable, "
+                                "returns the pipeline result directly (bridge) with zero LLM overhead. "
+                                "Blocked if another span is already open."
+                            ),
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "intent_signature": {
+                                        "type": "string",
+                                        "description": "<connector>.(read|write).<name> — e.g. 'lark.read.get-doc'",
+                                    },
+                                    "description": {"type": "string"},
+                                    "args": {"type": "object", "description": "Input args for this span"},
+                                    "source": {"type": "string", "enum": ["skill", "manual"], "default": "manual"},
+                                    "skill_name": {"type": "string"},
+                                },
+                                "required": ["intent_signature"],
+                            },
+                        },
+                        {
+                            "name": "icc_span_close",
+                            "description": (
+                                "Close the current intent span and commit it to the flywheel WAL. "
+                                "When the intent reaches stable, auto-generates a Python skeleton "
+                                "in _pending/ for review. Call icc_span_approve after completing the skeleton."
+                            ),
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "span_id": {"type": "string", "description": "span_id from icc_span_open"},
+                                    "outcome": {"type": "string", "enum": ["success", "failure", "aborted"]},
+                                    "result_summary": {"type": "object"},
+                                    "intent_signature": {
+                                        "type": "string",
+                                        "description": "Required when span_id is unknown (daemon restart recovery)",
+                                    },
+                                },
+                                "required": ["outcome"],
+                            },
+                        },
                         {
                             "name": "icc_exec",
                             "description": "Execute Python in a persistent session with flywheel tracking. intent_signature is required (enforced). Read tasks set __result=[{...}]; write tasks set __action={'ok':True,...}; side effects use no_replay=True.",

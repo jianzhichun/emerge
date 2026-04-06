@@ -2265,3 +2265,116 @@ def test_auto_crystallize_does_not_overwrite_existing(tmp_path, monkeypatch):
     daemon = EmergeDaemon()
     _drive_exec_to_synthesis_ready(daemon, "mock.read.auto-crystallize-test")
     assert existing.read_text() == "# human-authored\n", "must not overwrite existing pipeline"
+
+
+# ── icc_span_open ─────────────────────────────────────────────────────────────
+
+def _make_span_daemon(tmp_path, monkeypatch):
+    from scripts.emerge_daemon import EmergeDaemon
+    state = tmp_path / "state"
+    hook_state = tmp_path / "hook-state"
+    hook_state.mkdir(parents=True)
+    (hook_state / "state.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(state))
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(hook_state))
+    return EmergeDaemon(), hook_state
+
+
+def test_span_open_returns_span_id(tmp_path, monkeypatch):
+    import json
+    daemon, _ = _make_span_daemon(tmp_path, monkeypatch)
+    result = daemon.call_tool("icc_span_open", {"intent_signature": "lark.read.get-doc"})
+    assert result.get("isError") is not True
+    body = json.loads(result["content"][0]["text"])
+    assert "span_id" in body
+    assert body["policy_status"] == "explore"
+    assert body.get("bridge") is not True
+
+
+def test_span_open_writes_active_span_to_hook_state(tmp_path, monkeypatch):
+    import json
+    daemon, hook_state = _make_span_daemon(tmp_path, monkeypatch)
+    daemon.call_tool("icc_span_open", {"intent_signature": "lark.read.get-doc"})
+    state = json.loads((hook_state / "state.json").read_text())
+    assert "active_span_id" in state
+    assert state["active_span_intent"] == "lark.read.get-doc"
+
+
+def test_span_open_errors_when_span_already_active(tmp_path, monkeypatch):
+    daemon, _ = _make_span_daemon(tmp_path, monkeypatch)
+    daemon.call_tool("icc_span_open", {"intent_signature": "lark.read.get-doc"})
+    result = daemon.call_tool("icc_span_open", {"intent_signature": "lark.read.other"})
+    assert result.get("isError") is True
+
+
+def test_span_open_errors_on_missing_intent(tmp_path, monkeypatch):
+    daemon, _ = _make_span_daemon(tmp_path, monkeypatch)
+    result = daemon.call_tool("icc_span_open", {})
+    assert result.get("isError") is True
+
+
+# ── icc_span_close ────────────────────────────────────────────────────────────
+
+def test_span_close_writes_to_wal(tmp_path, monkeypatch):
+    import json
+    daemon, hook_state = _make_span_daemon(tmp_path, monkeypatch)
+    r = daemon.call_tool("icc_span_open", {"intent_signature": "lark.read.get-doc"})
+    span_id = json.loads(r["content"][0]["text"])["span_id"]
+    result = daemon.call_tool("icc_span_close", {"span_id": span_id, "outcome": "success"})
+    assert result.get("isError") is not True
+    wal = tmp_path / "state" / "span-wal" / "spans.jsonl"
+    assert wal.exists()
+    record = json.loads(wal.read_text().strip())
+    assert record["outcome"] == "success"
+    assert record["intent_signature"] == "lark.read.get-doc"
+
+
+def test_span_close_returns_policy_status(tmp_path, monkeypatch):
+    import json
+    daemon, _ = _make_span_daemon(tmp_path, monkeypatch)
+    r = daemon.call_tool("icc_span_open", {"intent_signature": "lark.read.get-doc"})
+    sid = json.loads(r["content"][0]["text"])["span_id"]
+    body = json.loads(daemon.call_tool("icc_span_close", {"span_id": sid, "outcome": "success"})["content"][0]["text"])
+    assert "policy_status" in body
+    assert body["policy_status"] == "explore"
+
+
+def test_span_close_errors_on_bad_outcome(tmp_path, monkeypatch):
+    daemon, _ = _make_span_daemon(tmp_path, monkeypatch)
+    result = daemon.call_tool("icc_span_close", {"outcome": "done"})
+    assert result.get("isError") is True
+
+
+def test_span_close_generates_skeleton_at_stable(tmp_path, monkeypatch):
+    import json
+    daemon, hook_state = _make_span_daemon(tmp_path, monkeypatch)
+    connector_root = tmp_path / "connectors"
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
+    # Drive to stable using monkeypatched thresholds
+    import scripts.span_tracker as st
+    monkeypatch.setattr(st, "PROMOTE_MIN_ATTEMPTS", 2)
+    monkeypatch.setattr(st, "PROMOTE_MIN_SUCCESS_RATE", 0.5)
+    monkeypatch.setattr(st, "PROMOTE_MAX_HUMAN_FIX_RATE", 1.0)
+    monkeypatch.setattr(st, "STABLE_MIN_ATTEMPTS", 4)
+    monkeypatch.setattr(st, "STABLE_MIN_SUCCESS_RATE", 0.5)
+    # Re-create tracker with patched constants
+    from scripts.span_tracker import SpanTracker
+    daemon._span_tracker = SpanTracker(
+        state_root=tmp_path / "state",
+        hook_state_root=hook_state,
+    )
+    for _ in range(5):
+        r = daemon.call_tool("icc_span_open", {"intent_signature": "lark.write.create-doc"})
+        body = json.loads(r["content"][0]["text"])
+        if body.get("bridge"):
+            break
+        sid = body["span_id"]
+        buf = hook_state / "active-span-actions.jsonl"
+        buf.write_text(
+            json.dumps({"tool_name": "mcp__lark_doc__create", "args_hash": "x",
+                        "has_side_effects": True, "ts_ms": 1}) + "\n"
+        )
+        daemon.call_tool("icc_span_close", {"span_id": sid, "outcome": "success"})
+    pending = connector_root / "lark" / "pipelines" / "write" / "_pending" / "create-doc.py"
+    assert pending.exists(), "skeleton must be generated at stable"
+    assert "def run_write" in pending.read_text()

@@ -101,7 +101,7 @@ class SpanTracker:
     def __init__(self, state_root: Path, hook_state_root: Path) -> None:
         self._state_root = state_root
         self._hook_state_root = hook_state_root
-        (state_root / "span-wal").mkdir(parents=True, exist_ok=True)
+        # span-wal dir is created lazily on first write to avoid polluting state root
 
     # ── paths ──────────────────────────────────────────────────────────────
 
@@ -205,6 +205,7 @@ class SpanTracker:
         span.is_read_only = all(not a.has_side_effects for a in actions)
 
         # Persist to WAL
+        self._wal_path().parent.mkdir(parents=True, exist_ok=True)
         with self._wal_path().open("a", encoding="utf-8") as f:
             f.write(json.dumps(span.to_dict(), ensure_ascii=False) + "\n")
 
