@@ -957,9 +957,9 @@ class EmergeDaemon:
         session_dir = self._state_root / self._base_session_id
         session_dir.mkdir(parents=True, exist_ok=True)
 
-        connector = str(arguments.get("connector", "mock"))
+        connector = str(arguments.get("connector", ""))
         mode = "read" if tool_name == "icc_read" else "write"
-        pipeline = str(arguments.get("pipeline", "layers" if mode == "read" else "add-wall"))
+        pipeline = str(arguments.get("pipeline", ""))
         pipeline_id = str(result.get("pipeline_id", f"{connector}.{mode}.{pipeline}"))
         intent_signature = str(result.get("intent_signature", ""))
         target_profile = str(arguments.get("target_profile", "default"))
