@@ -435,7 +435,7 @@ def test_runner_bootstrap_reuses_existing_healthy_runner(tmp_path: Path, monkeyp
 
     def fake_run_checked(command: list[str], *, timeout_s: int = 90) -> str:
         if command and command[0] == "ssh" and "cat .claude-plugin/plugin.json" in command[-1]:
-            return json.dumps({"name": "emerge", "version": "0.2.0"})
+            return json.dumps({"name": "emerge", "version": repl_admin._local_plugin_version()})
         return ""
 
     monkeypatch.setattr(repl_admin, "_run_checked", fake_run_checked)
