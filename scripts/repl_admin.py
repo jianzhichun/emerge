@@ -1012,6 +1012,80 @@ def cmd_submit_actions(actions: list) -> dict:
     return {"ok": True, "action_count": len(actions), "pending_path": str(pending_path)}
 
 
+def _cmd_save_settings(patch: dict) -> dict:
+    """Merge *patch* into ~/.emerge/settings.json and reset the settings cache.
+
+    Only the ``policy`` sub-object is accepted from the cockpit to limit blast
+    radius.  Values are validated by ``_validate_settings`` before writing.
+    """
+    from scripts.policy_config import (
+        default_settings_path,
+        load_settings,
+        _deep_merge,
+        _validate_settings,
+        _reset_settings_cache,
+        _POLICY_INT_KEYS,
+        _POLICY_FLOAT_KEYS,
+    )
+    import copy, tempfile as _tmp, os as _os
+
+    policy_patch = patch.get("policy")
+    if not isinstance(policy_patch, dict):
+        return {"ok": False, "error": "request body must have a 'policy' object"}
+
+    # Coerce values to correct types
+    coerced: dict = {}
+    for k, v in policy_patch.items():
+        if k in _POLICY_INT_KEYS:
+            try:
+                coerced[k] = int(v)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": f"policy.{k} must be an integer"}
+        elif k in _POLICY_FLOAT_KEYS:
+            try:
+                coerced[k] = float(v)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": f"policy.{k} must be a number"}
+        else:
+            return {"ok": False, "error": f"Unknown policy key: {k!r}"}
+
+    path = default_settings_path()
+    existing: dict = {}
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(existing, dict):
+                existing = {}
+        except Exception:
+            existing = {}
+
+    merged = _deep_merge(existing, {"policy": coerced})
+    try:
+        _validate_settings(merged)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = _tmp.mkstemp(prefix="settings-", suffix=".json", dir=str(path.parent))
+    try:
+        with _os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(merged, f, indent=2, ensure_ascii=False)
+            f.flush()
+            _os.fsync(f.fileno())
+        _os.replace(tmp, path)
+        tmp = ""
+    finally:
+        if tmp:
+            try:
+                _os.unlink(tmp)
+            except OSError:
+                pass
+
+    _reset_settings_cache()
+    updated = load_settings()
+    return {"ok": True, "policy": updated.get("policy", {})}
+
+
 class _ReuseAddrTCPServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
 
@@ -1059,6 +1133,10 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 pass
             self._json({"ok": True, "pending": pending, "cc_listening": cc_listening})
+        elif path == "/api/settings":
+            from scripts.policy_config import load_settings, default_settings_path
+            s = load_settings()
+            self._json({"ok": True, "settings": s, "path": str(default_settings_path())})
         elif path.startswith("/api/components/"):
             self._serve_component(path)
         else:
@@ -1070,6 +1148,8 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         body: dict = json.loads(self.rfile.read(length)) if length else {}
         if path == "/api/submit":
             self._json(cmd_submit_actions(body.get("actions", [])))
+        elif path == "/api/settings":
+            self._json(_cmd_save_settings(body))
         elif path == "/api/inject-component":
             connector = str(body.get("connector", ""))
             html = str(body.get("html", ""))
