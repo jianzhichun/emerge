@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -225,7 +226,7 @@ def _resolve_connector_root() -> Path:
     from scripts.pipeline_engine import _USER_CONNECTOR_ROOT
     env_root = os.environ.get("EMERGE_CONNECTOR_ROOT", "").strip()
     if env_root:
-        return Path(env_root).expanduser()
+        return Path(env_root).expanduser().resolve()
     return _USER_CONNECTOR_ROOT
 
 
@@ -877,6 +878,109 @@ def render_runner_status_pretty(data: dict) -> str:
                 for key in sorted(health.keys()):
                     lines.append(f"  {key}: {health[key]}")
     return "\n".join(lines) + "\n"
+
+
+def _extract_scenario_args(scenario_data: dict) -> list:
+    """Return required arg names by scanning {{ token }} in scenario YAML."""
+    text = json.dumps(scenario_data)
+    tokens = set(re.findall(r"\{\{\s*([\w]+)\s*(?:\|[^}]*)?\}\}", text))
+    derived: set = set()
+    for step in scenario_data.get("steps", []):
+        if step.get("type") == "derive":
+            derived.update(step.get("compute", {}).keys())
+    # Remove derived keys, skip_if_arg values, and boolean/null literals
+    skip_args: set = set()
+    for step in scenario_data.get("steps", []):
+        for k in ("skip_if_arg", "skip_if_arg_missing"):
+            if step.get(k):
+                skip_args.add(step[k])
+    return sorted(tokens - derived - skip_args - {"true", "false", "null"})
+
+
+def cmd_assets() -> dict:
+    """Return per-connector assets: notes content, scenario metadata, crystallized components."""
+    try:
+        connector_root = _resolve_connector_root()
+    except Exception:
+        return {"connectors": {}}
+
+    connectors: dict = {}
+    if not connector_root.exists():
+        return {"connectors": connectors}
+
+    for connector_dir in sorted(connector_root.iterdir()):
+        if not connector_dir.is_dir() or connector_dir.is_symlink():
+            continue
+        name = connector_dir.name
+
+        notes_path = connector_dir / "NOTES.md"
+        notes = notes_path.read_text(encoding="utf-8") if notes_path.exists() else None
+
+        scenarios: list = []
+        scenarios_dir = connector_dir / "scenarios"
+        if scenarios_dir.exists():
+            for f in sorted(scenarios_dir.iterdir()):
+                if f.suffix not in (".yaml", ".yml"):
+                    continue
+                try:
+                    import yaml as _yaml
+                    data = _yaml.safe_load(f.read_text(encoding="utf-8"))
+                except ImportError:
+                    import sys
+                    print("[cmd_assets] pyyaml not installed; scenario files skipped", file=sys.stderr)
+                    break  # no point iterating further scenario files
+                except Exception:
+                    data = None
+                if not isinstance(data, dict):
+                    continue
+                scenarios.append({
+                    "name": data.get("name", f.stem),
+                    "description": (data.get("description") or "").strip(),
+                    "filename": f.name,
+                    "step_count": len(data.get("steps", [])),
+                    "has_rollback": bool(data.get("rollback")),
+                    "required_args": _extract_scenario_args(data),
+                })
+
+        components: list = []
+        cockpit_dir = connector_dir / "cockpit"
+        if cockpit_dir.exists():
+            for html_file in sorted(cockpit_dir.glob("*.html")):
+                ctx_file = cockpit_dir / f"{html_file.stem}.context.md"
+                components.append({
+                    "filename": html_file.name,
+                    "context": ctx_file.read_text(encoding="utf-8") if ctx_file.exists() else "",
+                })
+
+        connectors[name] = {"notes": notes, "scenarios": scenarios, "components": components}
+
+    return {"connectors": connectors}
+
+
+def cmd_submit_actions(actions: list) -> dict:
+    """Atomically write pending-actions.json to trigger PendingActionMonitor."""
+    repl_root = os.environ.get("EMERGE_REPL_ROOT", "").strip()
+    if repl_root:
+        state_root = Path(repl_root).expanduser().resolve()
+    else:
+        state_root = _resolve_state_root()
+    state_root.mkdir(parents=True, exist_ok=True)
+    pending_path = state_root / "pending-actions.json"
+    tmp_p = state_root / "pending-actions.json.tmp"
+    payload = {
+        "submitted_at": int(time.time() * 1000),
+        "actions": actions,
+    }
+    tmp_p.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    try:
+        tmp_p.rename(pending_path)
+    except Exception:
+        try:
+            tmp_p.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return {"ok": True, "action_count": len(actions), "pending_path": str(pending_path)}
 
 
 def main() -> None:
