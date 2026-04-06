@@ -64,3 +64,5 @@ docs/paper/neurips2024.zip
 *.key
 secrets.json
 .mcp.json
+
+.superpowers/
