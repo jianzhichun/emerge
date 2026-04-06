@@ -1012,6 +1012,21 @@ def cmd_submit_actions(actions: list) -> dict:
     return {"ok": True, "action_count": len(actions), "pending_path": str(pending_path)}
 
 
+def _cmd_set_goal(body: dict) -> dict:
+    """Write the goal to the hook-state tracker so CC sees it in every prompt."""
+    from scripts.state_tracker import load_tracker, save_tracker
+    goal = str(body.get("goal", "")).strip()
+    if len(goal) > 120:
+        return {"ok": False, "error": "goal must be ≤ 120 characters"}
+    state_path = Path(
+        os.environ.get("CLAUDE_PLUGIN_DATA", str(default_hook_state_root()))
+    ) / "state.json"
+    tracker = load_tracker(state_path)
+    tracker.set_goal(goal, source="cockpit")
+    save_tracker(state_path, tracker)
+    return {"ok": True, "goal": goal, "goal_source": "cockpit"}
+
+
 def _cmd_save_settings(patch: dict) -> dict:
     """Merge *patch* into ~/.emerge/settings.json and reset the settings cache.
 
@@ -1137,6 +1152,8 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             from scripts.policy_config import load_settings, default_settings_path
             s = load_settings()
             self._json({"ok": True, "settings": s, "path": str(default_settings_path())})
+        elif path == "/api/goal":
+            self._json({"ok": True, **_load_hook_state_summary()})
         elif path.startswith("/api/components/"):
             self._serve_component(path)
         else:
@@ -1150,6 +1167,8 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self._json(cmd_submit_actions(body.get("actions", [])))
         elif path == "/api/settings":
             self._json(_cmd_save_settings(body))
+        elif path == "/api/goal":
+            self._json(_cmd_set_goal(body))
         elif path == "/api/inject-component":
             connector = str(body.get("connector", ""))
             html = str(body.get("html", ""))

@@ -6,9 +6,16 @@
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', monospace; font-size: 13px; }
-.header { background: #161b22; border-bottom: 1px solid #30363d; padding: 10px 16px; display: flex; align-items: center; gap: 12px; }
-.header h1 { font-size: 14px; color: #e6edf3; }
-.session-info { font-size: 11px; color: #8b949e; margin-left: auto; }
+.header { background: #161b22; border-bottom: 1px solid #30363d; padding: 8px 16px; display: flex; align-items: center; gap: 12px; }
+.header h1 { font-size: 14px; color: #e6edf3; flex-shrink: 0; }
+.session-info { font-size: 11px; color: #8b949e; margin-left: auto; flex-shrink: 0; }
+.goal-wrap { flex: 1; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.goal-label { font-size: 10px; color: #484f58; flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.8px; }
+.goal-input { flex: 1; background: transparent; border: none; border-bottom: 1px solid #30363d; color: #e6edf3; font-size: 12px; padding: 2px 4px; font-family: inherit; min-width: 0; outline: none; }
+.goal-input:focus { border-bottom-color: #58a6ff; }
+.goal-input::placeholder { color: #484f58; }
+.goal-save-btn { background: none; border: none; color: #484f58; font-size: 11px; cursor: pointer; padding: 0 4px; flex-shrink: 0; }
+.goal-save-btn:hover { color: #3fb950; }
 .thresholds-bar { background: #0d1117; border-bottom: 1px solid #21262d; padding: 5px 16px; display: flex; gap: 16px; flex-wrap: wrap; font-size: 11px; color: #8b949e; align-items: center; }
 .thresholds-bar span b { color: #79c0ff; }
 .thresh-edit-btn { background: #161b22; border: 1px solid #388bfd; border-radius: 4px; color: #388bfd; font-size: 10px; padding: 2px 9px; cursor: pointer; flex-shrink: 0; font-family: inherit; }
@@ -214,6 +221,13 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 
 <div class="header">
   <h1>🌀 Emerge Cockpit</h1>
+  <div class="goal-wrap">
+    <span class="goal-label">Goal</span>
+    <input class="goal-input" id="goal-input" placeholder="What is CC working on? (visible to CC in every prompt)" maxlength="120"
+      onkeydown="if(event.key==='Enter'){saveGoal();event.preventDefault()}"
+      oninput="document.getElementById('goal-save-btn').style.color='#58a6ff'">
+    <button class="goal-save-btn" id="goal-save-btn" onclick="saveGoal()" title="Save goal (Enter)">✓</button>
+  </div>
   <span class="session-info" id="session-info">loading...</span>
 </div>
 
@@ -368,7 +382,7 @@ const REFRESH_INTERVAL_S = 5;
 let _refreshCountdown = REFRESH_INTERVAL_S;
 
 async function init() {
-  await Promise.all([refreshPolicy(), refreshAssets(), refreshStatus()]);
+  await Promise.all([refreshPolicy(), refreshAssets(), refreshStatus(), refreshGoal()]);
   renderTabs();
   renderCurrentTab();
   _resetRefreshTimer();
@@ -426,6 +440,35 @@ async function refreshStatus() {
   updateCcIndicator();
   const btn = document.getElementById('submit-btn');
   if (btn) btn.disabled = queue.length === 0 || !ccListening;
+}
+
+async function refreshGoal() {
+  try {
+    const r = await fetch('/api/goal');
+    const d = await r.json();
+    const inp = document.getElementById('goal-input');
+    if (inp && d.goal) inp.value = d.goal;
+  } catch(e) {}
+}
+
+async function saveGoal() {
+  const inp = document.getElementById('goal-input');
+  const btn = document.getElementById('goal-save-btn');
+  const goal = (inp ? inp.value : '').trim();
+  try {
+    const r = await fetch('/api/goal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ goal }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      if (btn) { btn.style.color = '#3fb950'; setTimeout(() => { btn.style.color = '#484f58'; }, 1200); }
+      document.getElementById('status-msg').textContent = goal ? `Goal saved` : 'Goal cleared';
+    }
+  } catch(e) {
+    document.getElementById('status-msg').textContent = 'Failed to save goal: ' + e.message;
+  }
 }
 
 function updateCcIndicator() {
@@ -518,7 +561,7 @@ function renderThresholds() {
       `stable_attempts≥<b>${t.stable_min_attempts}</b>`,
     ].map(s => `<span>${s}</span>`).join('');
   document.getElementById('session-info').textContent =
-    `Session: ${(policyData.session_id || '').slice(0, 20)} · Goal: ${policyData.goal || 'unset'}`;
+    `Session: ${(policyData.session_id || '').slice(0, 20)}`;
 }
 
 // ── Settings modal ────────────────────────────────────────────────────────────
