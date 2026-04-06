@@ -391,22 +391,13 @@ async function refreshStatus() {
   try {
     const r = await fetch('/api/status');
     const d = await r.json();
-    const was = ccListening;
     ccListening = !!d.cc_listening;
-    if (was !== ccListening) {
-      updateCcIndicator();
-      // Re-evaluate submit button state when CC status changes
-      const btn = document.getElementById('submit-btn');
-      if (btn) btn.disabled = queue.length === 0 || !ccListening;
-    }
   } catch(e) {
-    if (ccListening) {
-      ccListening = false;
-      updateCcIndicator();
-      const btn = document.getElementById('submit-btn');
-      if (btn) btn.disabled = true;
-    }
+    ccListening = false;
   }
+  updateCcIndicator();
+  const btn = document.getElementById('submit-btn');
+  if (btn) btn.disabled = queue.length === 0 || !ccListening;
 }
 
 function updateCcIndicator() {
