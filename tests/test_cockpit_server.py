@@ -93,7 +93,11 @@ import threading
 
 def _start_test_server(tmp_path, monkeypatch):
     """Start cockpit server and return base URL."""
+    # Set BOTH EMERGE_REPL_ROOT and EMERGE_STATE_ROOT so _cockpit_pid_path()
+    # (which uses _resolve_state_root → EMERGE_STATE_ROOT) also points to tmp_path,
+    # preventing cmd_serve from reusing a real running cockpit server.
     monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
     (tmp_path / "connectors").mkdir(exist_ok=True)
     from scripts.repl_admin import cmd_serve
@@ -169,6 +173,7 @@ def test_cockpit_full_flow(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
     monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
 
     from scripts.repl_admin import cmd_serve
     r = cmd_serve(port=0, open_browser=False)

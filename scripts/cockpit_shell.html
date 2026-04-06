@@ -105,7 +105,7 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 /* Status bar */
 .status-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 22px; background: #161b22; border-top: 1px solid #21262d; display: flex; align-items: center; padding: 0 12px; font-size: 10px; color: #8b949e; gap: 16px; z-index: 10; }
 /* Overview dashboard */
-.overview-grid { display: grid; grid-template-columns: 220px 1fr; gap: 14px; margin-bottom: 16px; align-items: start; }
+.overview-grid { display: grid; grid-template-columns: 230px 1fr; gap: 12px; margin-bottom: 14px; align-items: start; }
 .overview-donut-wrap { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .donut-legend { width: 100%; display: flex; flex-direction: column; gap: 4px; }
 .donut-legend-row { display: flex; align-items: center; gap: 7px; font-size: 11px; cursor: pointer; }
@@ -113,12 +113,12 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .donut-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 .donut-legend-label { flex: 1; color: #8b949e; }
 .donut-legend-val { color: #e6edf3; font-weight: 600; }
-.overview-stats { display: flex; flex-direction: column; gap: 10px; }
-.stat-row { display: flex; gap: 10px; }
-.stat-card { flex: 1; background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 10px 12px; }
+.overview-stats { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 8px; }
+.stat-card { background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 9px 10px; min-height: 78px; display: flex; flex-direction: column; justify-content: center; }
 .stat-card.critical { border-color: #4a1a1a; }
 .stat-card.canary  { border-color: #4a3a10; }
 .stat-card.stable  { border-color: #2a4a2a; }
+.stat-card.span-2 { grid-column: span 2; }
 .stat-num  { font-size: 26px; font-weight: 700; line-height: 1; }
 .stat-num.critical { color: #f85149; }
 .stat-num.canary   { color: #d29922; }
@@ -126,6 +126,22 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .stat-num.neutral  { color: #8b949e; }
 .stat-label { font-size: 10px; color: #484f58; margin-top: 3px; text-transform: uppercase; letter-spacing: 0.8px; }
 .stat-sub   { font-size: 10px; color: #8b949e; margin-top: 5px; }
+.stat-dist { margin-top: 8px; height: 8px; border-radius: 99px; overflow: hidden; display: flex; background: #0d1117; border: 1px solid #21262d; }
+.stat-dist > span { height: 100%; display: inline-block; min-width: 2px; }
+.stat-dist .critical { background: #f85149; }
+.stat-dist .canary { background: #d29922; }
+.stat-dist .stable { background: #3fb950; }
+.stat-dist .explore { background: #484f58; }
+.conn-load { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+.conn-load-row { display: flex; align-items: center; gap: 6px; font-size: 10px; }
+.conn-load-name { width: 72px; color: #8b949e; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.conn-load-bar-wrap { flex: 1; height: 7px; border-radius: 99px; overflow: hidden; background: #0d1117; border: 1px solid #21262d; }
+.conn-load-bar { height: 100%; background: #1f6feb; }
+.conn-load-val { width: 22px; text-align: right; color: #e6edf3; font-size: 10px; }
+@media (max-width: 1450px) {
+  .overview-stats { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
+  .stat-card.span-2 { grid-column: span 2; }
+}
 .explore-summary { background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 10px 12px; }
 .explore-title { font-size: 11px; color: #8b949e; margin-bottom: 6px; }
 .explore-connectors { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -329,6 +345,14 @@ function renderOverviewTab() {
     }, [0, 0]);
     if (sum[1]) avgRate = (sum[0] / sum[1] * 100).toFixed(1);
   }
+  let avgVerify = null;
+  if (tracked.length) {
+    const v = tracked.reduce((s, p) => {
+      const r = p.verify_rate != null ? p.verify_rate : null;
+      return r != null ? [s[0] + r, s[1] + 1] : s;
+    }, [0, 0]);
+    if (v[1]) avgVerify = (v[0] / v[1] * 100).toFixed(1);
+  }
 
   // ── Explore: aggregate by connector ──
   const connectorMap = {};
@@ -337,6 +361,16 @@ function renderOverviewTab() {
     const conn = parts[0] || 'unknown';
     connectorMap[conn] = (connectorMap[conn] || 0) + 1;
   });
+  const loadMap = {};
+  pipelines.forEach(p => {
+    const conn = parseKey(p.key || '').connector || 'unknown';
+    loadMap[conn] = (loadMap[conn] || 0) + 1;
+  });
+  const topLoad = Object.entries(loadMap).sort((a, b) => b[1] - a[1]).slice(0, 4);
+  const maxLoad = topLoad.length ? topLoad[0][1] : 1;
+  const totalRollbacks = pipelines.reduce((s, p) => s + (p.rollback_executed_count || 0), 0);
+  const totalFailures = pipelines.reduce((s, p) => s + (p.consecutive_failures || 0), 0);
+  const queueCount = queue.length;
 
   // ── Build HTML ──
   const critColor = '#f85149', canaryColor = '#d29922', stableColor = '#3fb950', exploreColor = '#484f58';
@@ -373,27 +407,65 @@ function renderOverviewTab() {
       </div>
     </div>
     <div class="overview-stats">
-      <div class="stat-row">
-        <div class="stat-card">
-          <div class="stat-num" style="color:#e6edf3">${total}</div>
-          <div class="stat-label">Total Pipelines</div>
-        </div>
-        <div class="stat-card${statCritClass}">
-          <div class="stat-num" style="color:${critColor}">${groups.critical.length}</div>
-          <div class="stat-label">Critical</div>
-          <div class="stat-sub">${groups.critical.length ? '⚠ needs attention' : 'all clear'}</div>
+      <div class="stat-card">
+        <div class="stat-num" style="color:#e6edf3">${total}</div>
+        <div class="stat-label">Total Pipelines</div>
+        <div class="stat-sub">${Object.keys(loadMap).length} connectors</div>
+      </div>
+      <div class="stat-card${statCritClass}">
+        <div class="stat-num critical">${groups.critical.length}</div>
+        <div class="stat-label">Critical</div>
+        <div class="stat-sub">${groups.critical.length ? 'needs attention' : 'all clear'}</div>
+      </div>
+      <div class="stat-card${statCanaryClass}">
+        <div class="stat-num canary">${groups.canary.length}</div>
+        <div class="stat-label">Canary</div>
+        <div class="stat-sub">testing in flight</div>
+      </div>
+      <div class="stat-card${statStableClass}">
+        <div class="stat-num stable">${groups.stable.length}</div>
+        <div class="stat-label">Stable</div>
+        <div class="stat-sub">${avgRate != null ? 'avg success ' + avgRate + '%' : 'no data yet'}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num neutral">${avgRate != null ? avgRate + '%' : '—'}</div>
+        <div class="stat-label">Avg Success</div>
+        <div class="stat-sub">stable + canary</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num neutral">${avgVerify != null ? avgVerify + '%' : '—'}</div>
+        <div class="stat-label">Avg Verify</div>
+        <div class="stat-sub">stable + canary</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num ${totalRollbacks > 0 ? 'critical' : 'neutral'}">${totalRollbacks}</div>
+        <div class="stat-label">Rollbacks</div>
+        <div class="stat-sub">${totalFailures} total active failures</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num ${queueCount > 0 ? 'canary' : 'neutral'}">${queueCount}</div>
+        <div class="stat-label">Queued Actions</div>
+        <div class="stat-sub">${queueCount ? 'pending submit' : 'queue empty'}</div>
+      </div>
+      <div class="stat-card span-2">
+        <div class="stat-label">Status Distribution</div>
+        <div class="stat-sub">critical / canary / stable / explore</div>
+        <div class="stat-dist">
+          <span class="critical" style="width:${total ? (groups.critical.length / total * 100) : 0}%"></span>
+          <span class="canary" style="width:${total ? (groups.canary.length / total * 100) : 0}%"></span>
+          <span class="stable" style="width:${total ? (groups.stable.length / total * 100) : 0}%"></span>
+          <span class="explore" style="width:${total ? (groups.explore.length / total * 100) : 0}%"></span>
         </div>
       </div>
-      <div class="stat-row">
-        <div class="stat-card${statCanaryClass}">
-          <div class="stat-num" style="color:${canaryColor}">${groups.canary.length}</div>
-          <div class="stat-label">Canary</div>
-          <div class="stat-sub">testing in flight</div>
-        </div>
-        <div class="stat-card${statStableClass}">
-          <div class="stat-num" style="color:${stableColor}">${groups.stable.length}</div>
-          <div class="stat-label">Stable</div>
-          <div class="stat-sub">${avgRate != null ? 'avg success ' + avgRate + '%' : 'no data yet'}</div>
+      <div class="stat-card span-2">
+        <div class="stat-label">Top Connector Load</div>
+        <div class="conn-load">
+          ${topLoad.length ? topLoad.map(([name, count]) => `
+            <div class="conn-load-row">
+              <span class="conn-load-name">${escHtml(name)}</span>
+              <span class="conn-load-bar-wrap"><span class="conn-load-bar" style="width:${Math.max(6, (count / maxLoad) * 100)}%"></span></span>
+              <span class="conn-load-val">${count}</span>
+            </div>`).join('') : '<div class="stat-sub">no connector data</div>'}
         </div>
       </div>
     </div>

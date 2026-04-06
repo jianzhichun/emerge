@@ -111,7 +111,7 @@ def test_repl_admin_policy_status_reports_pipeline_registry(tmp_path: Path):
                     "mode": "inline_code",
                     "code": "v = 1",
                     "target_profile": "mycader-1.zwcad",
-                    "intent_signature": "zwcad.add_wall",
+                    "intent_signature": "zwcad.write.add-wall",
                     "script_ref": "connectors/cade/actions/zwcad_add_wall.py",
                     "verify_passed": True,
                 },
@@ -122,7 +122,7 @@ def test_repl_admin_policy_status_reports_pipeline_registry(tmp_path: Path):
         assert policy["pipeline_count"] >= 1
         assert policy["thresholds"]["promote_min_attempts"] == 20
         keys = [item["key"] for item in policy["pipelines"]]
-        assert "zwcad.add_wall" in keys
+        assert "zwcad.write.add-wall" in keys
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
@@ -144,7 +144,7 @@ def test_repl_admin_policy_status_pretty_output(tmp_path: Path):
                     "mode": "inline_code",
                     "code": "v = 1",
                     "target_profile": "mycader-1.zwcad",
-                    "intent_signature": "zwcad.add_wall",
+                    "intent_signature": "zwcad.write.add-wall",
                     "script_ref": "connectors/cade/actions/zwcad_add_wall.py",
                     "verify_passed": True,
                 },
@@ -154,7 +154,7 @@ def test_repl_admin_policy_status_pretty_output(tmp_path: Path):
         assert "Session:" in pretty
         assert "Thresholds:" in pretty
         assert "Pipelines:" in pretty
-        assert "zwcad.add_wall" in pretty
+        assert "zwcad.write.add-wall" in pretty
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)

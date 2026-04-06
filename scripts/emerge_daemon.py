@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Any
+
+# Canonical pipeline key format: <connector>.<mode>.<name[.subname...]>
+# connector/mode/name segments: lowercase, starts with letter, alphanumerics + _ -
+_PIPELINE_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]*\.(read|write)\.[a-z][a-z0-9_./-]*$")
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -788,9 +793,9 @@ class EmergeDaemon:
         registry_path = self._state_root / "pipelines-registry.json"
         registry = self._load_json_object(registry_path, root_key="pipelines")
         for key in registry["pipelines"]:
-            parts = key.split(".", 1)
-            if len(parts) == 2:
-                connector_names.add(parts[0])
+            # Require well-formed <connector>.<mode>.<name> — single-segment or 2-part keys are orphans
+            if _PIPELINE_KEY_RE.match(key):
+                connector_names.add(key.split(".", 1)[0])
         already_noted = {r["uri"] for r in static}
         for cname in sorted(connector_names):
             uri = f"connector://{cname}/intents"
@@ -1214,6 +1219,13 @@ class EmergeDaemon:
         candidate_key: str,
         entry: dict[str, Any],
     ) -> None:
+        if not _PIPELINE_KEY_RE.match(candidate_key):
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "Refusing to register malformed pipeline key %r — must match <connector>.(read|write).<name>",
+                candidate_key,
+            )
+            return
         registry_path = self._state_root / "pipelines-registry.json"
         registry = self._load_json_object(registry_path, root_key="pipelines")
         pipeline = registry["pipelines"].get(
@@ -1524,8 +1536,20 @@ class EmergeDaemon:
 
     @staticmethod
     def _resolve_exec_candidate_key(*, arguments: dict[str, Any], target_profile: str) -> str:
-        """Key is intent_signature — runner and script are execution metadata, not identity."""
-        return str(arguments.get("intent_signature", "")).strip()
+        """Key is intent_signature — runner and script are execution metadata, not identity.
+
+        Returns the key if it matches the canonical format, otherwise returns an empty string
+        so that _update_pipeline_registry rejects it at write time.
+        """
+        key = str(arguments.get("intent_signature", "")).strip()
+        if key and not _PIPELINE_KEY_RE.match(key):
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "icc_exec: intent_signature %r does not match <connector>.(read|write).<name> — "
+                "execution will proceed but telemetry will NOT be registered",
+                key,
+            )
+        return key
 
     @staticmethod
     def _resolve_pipeline_candidate_key(*, arguments: dict[str, Any], pipeline_id: str) -> str:

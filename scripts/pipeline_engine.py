@@ -40,8 +40,12 @@ class PipelineEngine:
             self._connector_roots = [_USER_CONNECTOR_ROOT, self.root / "connectors"]
 
     def run_read(self, args: dict[str, Any]) -> dict[str, Any]:
-        connector = args.get("connector", "mock")
-        pipeline = args.get("pipeline", "layers")
+        connector = args.get("connector", "").strip()
+        pipeline = args.get("pipeline", "").strip()
+        if not connector or not pipeline:
+            raise ValueError(
+                f"run_read: 'connector' and 'pipeline' are required (got connector={connector!r}, pipeline={pipeline!r})"
+            )
         metadata, module = self._load_pipeline(connector, "read", pipeline)
         rows = module.run_read(metadata=metadata, args=args)
         verify_result = {"ok": True}
@@ -60,8 +64,12 @@ class PipelineEngine:
         }
 
     def run_write(self, args: dict[str, Any]) -> dict[str, Any]:
-        connector = args.get("connector", "mock")
-        pipeline = args.get("pipeline", "add-wall")
+        connector = args.get("connector", "").strip()
+        pipeline = args.get("pipeline", "").strip()
+        if not connector or not pipeline:
+            raise ValueError(
+                f"run_write: 'connector' and 'pipeline' are required (got connector={connector!r}, pipeline={pipeline!r})"
+            )
         metadata, module = self._load_pipeline(connector, "write", pipeline)
         action_result = module.run_write(metadata=metadata, args=args)
         verify_fn = getattr(module, "verify_write", None)
