@@ -1,6 +1,6 @@
 ---
 name: writing-vertical-adapter
-description: Use when writing or crystallizing a vertical ObserverPlugin adapter for a specific application (ZWCAD, Excel, browser, etc.), or when icc_crystallize mode=adapter is needed, or when asked how to add a new vertical to the Operator Intelligence Loop.
+description: Use when writing or crystallizing a vertical ObserverPlugin adapter for a specific application (ZWCAD, Excel, browser, etc.), or when asked how to add a new vertical to the Operator Intelligence Loop.
 ---
 
 # Writing a Vertical Adapter
