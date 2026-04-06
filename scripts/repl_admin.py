@@ -1092,16 +1092,61 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 
+def _cockpit_pid_path() -> "Path":
+    return _resolve_state_root() / "cockpit.pid"
+
+
 def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
-    """Start the cockpit HTTP server in a background daemon thread. Returns port and URL."""
+    """Start the cockpit HTTP server. Idempotent — returns existing instance if already running."""
+    pid_path = _cockpit_pid_path()
+
+    # Reuse existing instance if alive
+    if pid_path.exists():
+        try:
+            info = json.loads(pid_path.read_text(encoding="utf-8"))
+            existing_pid = int(info["pid"])
+            existing_port = int(info["port"])
+            os.kill(existing_pid, 0)  # raises OSError if process is gone
+            url = f"http://localhost:{existing_port}"
+            if open_browser:
+                webbrowser.open(url)
+            return {"ok": True, "port": existing_port, "url": url, "reused": True}
+        except (OSError, KeyError, ValueError, json.JSONDecodeError):
+            pid_path.unlink(missing_ok=True)
+
     server = _ReuseAddrTCPServer(("127.0.0.1", port), _CockpitHandler)
     actual_port = server.server_address[1]
     url = f"http://localhost:{actual_port}"
+
+    # Write pid file so CC (and serve-stop) can manage lifecycle
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(
+        json.dumps({"pid": os.getpid(), "port": actual_port}), encoding="utf-8"
+    )
+
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
     if open_browser:
         webbrowser.open(url)
-    return {"ok": True, "port": actual_port, "url": url}
+    return {"ok": True, "port": actual_port, "url": url, "reused": False}
+
+
+def cmd_serve_stop() -> dict:
+    """Stop the running cockpit server by killing the pid in cockpit.pid."""
+    import signal as _signal
+    pid_path = _cockpit_pid_path()
+    if not pid_path.exists():
+        return {"ok": False, "reason": "no cockpit.pid found — server may not be running"}
+    try:
+        info = json.loads(pid_path.read_text(encoding="utf-8"))
+        pid = int(info["pid"])
+        port = int(info["port"])
+        os.kill(pid, _signal.SIGTERM)
+        pid_path.unlink(missing_ok=True)
+        return {"ok": True, "stopped_pid": pid, "port": port}
+    except (OSError, KeyError, ValueError, json.JSONDecodeError) as e:
+        pid_path.unlink(missing_ok=True)
+        return {"ok": False, "reason": str(e)}
 
 
 def main() -> None:
@@ -1123,6 +1168,7 @@ def main() -> None:
             "connector-export",
             "connector-import",
             "serve",
+            "serve-stop",
         ],
     )
     parser.add_argument("--pretty", action="store_true", help="Render human-readable output")
@@ -1223,14 +1269,20 @@ def main() -> None:
         port = getattr(args, "port", 0) or 0
         open_b = getattr(args, "open", False)
         result = cmd_serve(port=port, open_browser=open_b)
-        print(f"Cockpit running at {result['url']}")
-        print("Press Ctrl-C to stop.")
-        import time as _time
-        try:
-            while True:
-                _time.sleep(1)
-        except KeyboardInterrupt:
-            pass
+        status = "reused existing" if result.get("reused") else "started"
+        print(f"Cockpit running at {result['url']} ({status})")
+        if not result.get("reused"):
+            print("Press Ctrl-C to stop.")
+            import time as _time
+            try:
+                while True:
+                    _time.sleep(1)
+            except KeyboardInterrupt:
+                cmd_serve_stop()
+        sys.exit(0)
+    elif args.command == "serve-stop":
+        out = cmd_serve_stop()
+        print(json.dumps(out))
         sys.exit(0)
     else:
         out = cmd_clear()
