@@ -1,0 +1,8 @@
+intent_signature: mock.read.data
+rollback_or_stop_policy: stop
+read_steps:
+  - run_read
+verify_steps:
+  - verify_read
+synthesized: true
+synthesized_at: 1775472236
