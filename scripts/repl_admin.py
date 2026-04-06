@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import http.server
 import json
 import os
 import re
 import shlex
 import shutil
+import socketserver
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import urllib.parse
+import webbrowser
 import zipfile
 from pathlib import Path
 
@@ -983,6 +988,119 @@ def cmd_submit_actions(actions: list) -> dict:
     return {"ok": True, "action_count": len(actions), "pending_path": str(pending_path)}
 
 
+class _CockpitHandler(http.server.BaseHTTPRequestHandler):
+    _shell_path: "Path" = Path(__file__).parent / "cockpit_shell.html"
+    _injected: dict = {}  # connector -> list[str html]
+
+    def log_message(self, fmt: str, *args: object) -> None:  # suppress request logs
+        pass
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def do_GET(self) -> None:
+        path = urllib.parse.urlparse(self.path).path
+        if path in ("/", "/index.html"):
+            self._serve_shell()
+        elif path == "/api/policy":
+            self._json(cmd_policy_status())
+        elif path == "/api/assets":
+            self._json(cmd_assets())
+        elif path == "/api/status":
+            pending = _resolve_state_root() / "pending-actions.json"
+            self._json({"ok": True, "pending": pending.exists()})
+        elif path.startswith("/api/components/"):
+            self._serve_component(path)
+        else:
+            self._err(404)
+
+    def do_POST(self) -> None:
+        path = urllib.parse.urlparse(self.path).path
+        length = int(self.headers.get("Content-Length", 0))
+        body: dict = json.loads(self.rfile.read(length)) if length else {}
+        if path == "/api/submit":
+            self._json(cmd_submit_actions(body.get("actions", [])))
+        elif path == "/api/inject-component":
+            connector = str(body.get("connector", ""))
+            html = str(body.get("html", ""))
+            if connector and html:
+                _CockpitHandler._injected.setdefault(connector, []).append(html)
+            self._json({"ok": True})
+        else:
+            self._err(404)
+
+    def _serve_shell(self) -> None:
+        if not self._shell_path.exists():
+            # Fallback until cockpit_shell.html is created
+            body = b"<html><body><h1>Emerge Cockpit</h1><p>cockpit_shell.html not found</p></body></html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        body = self._shell_path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_component(self, path: str) -> None:
+        parts = path.strip("/").split("/")  # ["api", "components", "connector", "filename"]
+        if len(parts) != 4 or ".." in parts[2] or ".." in parts[3]:
+            self._err(404)
+            return
+        connector, filename = parts[2], parts[3]
+        if not filename.endswith(".html"):
+            self._err(404)
+            return
+        try:
+            fpath = _resolve_connector_root() / connector / "cockpit" / filename
+        except Exception:
+            self._err(404)
+            return
+        if not fpath.exists():
+            self._err(404)
+            return
+        body = fpath.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json(self, data: dict, status: int = 200) -> None:
+        body = json.dumps(data, ensure_ascii=False).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _err(self, code: int) -> None:
+        self.send_response(code)
+        self.end_headers()
+
+
+def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
+    """Start the cockpit HTTP server in a background daemon thread. Returns port and URL."""
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", port), _CockpitHandler)
+    server.allow_reuse_address = True
+    actual_port = server.server_address[1]
+    url = f"http://localhost:{actual_port}"
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    if open_browser:
+        webbrowser.open(url)
+    return {"ok": True, "port": actual_port, "url": url}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Local REPL state admin utility")
     parser.add_argument(
@@ -1001,6 +1119,7 @@ def main() -> None:
             "pipeline-set",
             "connector-export",
             "connector-import",
+            "serve",
         ],
     )
     parser.add_argument("--pretty", action="store_true", help="Render human-readable output")
@@ -1031,6 +1150,7 @@ def main() -> None:
     parser.add_argument("--out", default="", help="Output zip path for connector-export")
     parser.add_argument("--pkg", default="", help="Package zip path for connector-import")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing connector/registry on import")
+    parser.add_argument("--open", action="store_true", help="Open browser after starting cockpit server")
     args = parser.parse_args()
 
     if args.command == "status":
@@ -1095,6 +1215,19 @@ def main() -> None:
             pkg=str(args.pkg),
             overwrite=bool(args.overwrite),
         )
+    elif args.command == "serve":
+        port = int(args.runner_port) if getattr(args, "runner_port", None) else 0
+        open_b = getattr(args, "open", False)
+        result = cmd_serve(port=port, open_browser=open_b)
+        print(f"Cockpit running at {result['url']}")
+        print("Press Ctrl-C to stop.")
+        import time as _time
+        try:
+            while True:
+                _time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        sys.exit(0)
     else:
         out = cmd_clear()
 

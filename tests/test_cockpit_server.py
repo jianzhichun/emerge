@@ -85,3 +85,71 @@ def test_cmd_submit_actions_atomic_write(tmp_path: Path, monkeypatch):
     # tmp file should not exist after rename
     assert not (tmp_path / "pending-actions.json.tmp").exists()
     assert (tmp_path / "pending-actions.json").exists()
+
+
+import urllib.request
+import threading
+
+
+def _start_test_server(tmp_path, monkeypatch):
+    """Start cockpit server and return base URL."""
+    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
+    (tmp_path / "connectors").mkdir(exist_ok=True)
+    from scripts.repl_admin import cmd_serve
+    result = cmd_serve(port=0, open_browser=False)
+    assert result["ok"]
+    return result["url"]
+
+
+def test_serve_get_policy_returns_json(tmp_path, monkeypatch):
+    url = _start_test_server(tmp_path, monkeypatch)
+    with urllib.request.urlopen(f"{url}/api/policy") as resp:
+        data = json.loads(resp.read())
+    assert "pipelines" in data
+    assert "thresholds" in data
+
+
+def test_serve_get_assets_returns_connectors(tmp_path, monkeypatch):
+    url = _start_test_server(tmp_path, monkeypatch)
+    with urllib.request.urlopen(f"{url}/api/assets") as resp:
+        data = json.loads(resp.read())
+    assert "connectors" in data
+
+
+def test_serve_post_submit_writes_pending(tmp_path, monkeypatch):
+    url = _start_test_server(tmp_path, monkeypatch)
+    actions = [{"type": "pipeline-delete", "key": "pipeline::x"}]
+    body = json.dumps({"actions": actions}).encode()
+    req = urllib.request.Request(
+        f"{url}/api/submit", data=body,
+        headers={"Content-Type": "application/json"}, method="POST"
+    )
+    with urllib.request.urlopen(req) as resp:
+        data = json.loads(resp.read())
+    assert data["ok"] is True
+    assert (tmp_path / "pending-actions.json").exists()
+
+
+def test_serve_get_status_returns_ok(tmp_path, monkeypatch):
+    url = _start_test_server(tmp_path, monkeypatch)
+    with urllib.request.urlopen(f"{url}/api/status") as resp:
+        data = json.loads(resp.read())
+    assert data["ok"] is True
+
+
+def test_serve_get_root_returns_html(tmp_path, monkeypatch):
+    url = _start_test_server(tmp_path, monkeypatch)
+    with urllib.request.urlopen(f"{url}/") as resp:
+        body = resp.read().decode()
+    assert "cockpit" in body.lower() or "<!DOCTYPE" in body or "<html" in body
+
+
+def test_serve_component_path_traversal_rejected(tmp_path, monkeypatch):
+    import urllib.error
+    url = _start_test_server(tmp_path, monkeypatch)
+    try:
+        urllib.request.urlopen(f"{url}/api/components/../../../etc/passwd")
+        assert False, "Should have raised"
+    except urllib.error.HTTPError as e:
+        assert e.code == 404
