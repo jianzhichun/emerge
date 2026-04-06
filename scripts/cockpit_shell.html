@@ -441,17 +441,24 @@ function renderOverviewTab() {
     });
   }
 
-  // ── Explore section (aggregate chips only) ──
+  // ── Explore section (aggregate chips — only known connector tabs are clickable) ──
   html += `<div id="ov-sec-explore"></div>`;
   if (groups.explore.length) {
     html += `<div class="section-header explore">◯ Explore (${groups.explore.length})</div>`;
+    const knownConnectors = new Set(Object.keys((assetsData && assetsData.connectors) || {}));
     const connEntries = Object.entries(connectorMap).sort((a, b) => b[1] - a[1]);
+    // Split: known connectors get clickable chips; unknown prefixes aggregate into "other"
+    const knownChips = connEntries.filter(([c]) => knownConnectors.has(c));
+    const otherCount = connEntries.filter(([c]) => !knownConnectors.has(c)).reduce((s, [, n]) => s + n, 0);
     html += `<div class="explore-summary">
       <div class="explore-title">Explore pipelines by connector — click to navigate</div>
       <div class="explore-connectors">`;
-    connEntries.forEach(([conn, cnt]) => {
+    knownChips.forEach(([conn, cnt]) => {
       html += `<span class="explore-chip" onclick="switchTab('${escHtml(conn).replace(/'/g,"\\'")}')"><b>${escHtml(cnt.toString())}</b> ${escHtml(conn)}</span>`;
     });
+    if (otherCount > 0) {
+      html += `<span class="explore-chip" style="opacity:0.45;cursor:default" title="Pipelines whose key prefix is not a registered connector"><b>${otherCount}</b> other</span>`;
+    }
     html += `</div></div>`;
   }
 
