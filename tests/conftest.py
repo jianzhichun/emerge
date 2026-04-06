@@ -38,3 +38,15 @@ def isolate_runner_config(tmp_path):
         os.environ.pop("EMERGE_RUNNER_CONFIG_PATH", None)
     else:
         os.environ["EMERGE_RUNNER_CONFIG_PATH"] = old
+
+
+@pytest.fixture
+def isolate_hook_state(tmp_path, monkeypatch):
+    """Give each test its own hook state dir (CLAUDE_PLUGIN_DATA).
+    Also creates state.json so hooks don't crash on missing file.
+    """
+    hook_state = tmp_path / "hook-state"
+    hook_state.mkdir()
+    (hook_state / "state.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(hook_state))
+    return hook_state
