@@ -7,10 +7,10 @@ Open the Emerge cockpit dashboard for the active session.
 Always invoke the admin CLI via the **Emerge plugin root** (not the user's open project). Claude Code expands `${CLAUDE_PLUGIN_ROOT}` to that path when this command runs.
 
 Steps:
-1. Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" serve --open --port 0`.
-   - This starts the HTTP server on a free port and opens the browser automatically.
-   - Print the dashboard URL when it is displayed.
-2. While the server starts, also print the policy text summary for quick reference:
+1. Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" serve --open --port 0` **in the background** (`run_in_background: true`).
+   - The server blocks until killed; run it in background so CC stays responsive to MCP notifications.
+   - Wait ~1 second, then read the output to extract the URL (`Cockpit running at http://localhost:PORT`).
+2. Also print the policy text summary for quick reference:
    Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" policy-status --pretty`.
 3. Tell the user:
    - The dashboard URL (printed by the serve command)
