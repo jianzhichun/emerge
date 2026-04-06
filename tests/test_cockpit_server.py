@@ -18,6 +18,12 @@ def test_cmd_assets_returns_connectors_with_notes_and_scenarios(tmp_path: Path, 
     scenario_yaml = """
 name: health-check
 description: Basic liveness check
+execution:
+  tool: icc_write
+  pipeline: apply-test
+  auto:
+    mode: auto
+    crystallize_when_synthesis_ready: true
 steps:
   - name: ping
     type: http_get
@@ -39,6 +45,8 @@ steps:
     assert len(c["scenarios"]) == 1
     assert c["scenarios"][0]["name"] == "health-check"
     assert c["scenarios"][0]["step_count"] == 1
+    assert c["scenarios"][0]["execution"]["tool"] == "icc_write"
+    assert c["scenarios"][0]["execution"]["pipeline"] == "apply-test"
     assert len(c["components"]) == 1
     assert c["components"][0]["filename"] == "mycomp.html"
     assert c["components"][0]["context"] == "context info"
@@ -200,7 +208,7 @@ def test_cockpit_full_flow(tmp_path, monkeypatch):
     (connector_root / "myconn" / "scenarios").mkdir(parents=True)
     (connector_root / "myconn" / "NOTES.md").write_text("# Notes\nsome info", encoding="utf-8")
     (connector_root / "myconn" / "scenarios" / "test.yaml").write_text(
-        "name: test\ndescription: a test\nsteps:\n  - name: s1\n    type: http_get\n    base_url: '{{ env_url }}'\n    path: /health\n",
+        "name: test\ndescription: a test\nexecution:\n  tool: icc_write\n  pipeline: apply-test\n  auto:\n    mode: assist\n    crystallize_when_synthesis_ready: true\nsteps:\n  - name: s1\n    type: http_get\n    base_url: '{{ env_url }}'\n    path: /health\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
@@ -221,7 +229,23 @@ def test_cockpit_full_flow(tmp_path, monkeypatch):
     # Submit actions
     actions = [
         {"type": "notes-comment", "connector": "myconn", "comment": "test comment"},
-        {"type": "scenario-run", "connector": "myconn", "scenario": "test", "args": {"env_url": "http://localhost"}},
+        {
+            "type": "tool-call",
+            "connector": "myconn",
+            "scenario": "test",
+            "intent_signature": "myconn.write.apply-test",
+            "call": {
+                "tool": "icc_write",
+                "arguments": {
+                    "connector": "myconn",
+                    "pipeline": "apply-test",
+                    "scenario": "test",
+                    "env_url": "http://localhost",
+                },
+            },
+            "auto": {"mode": "assist", "crystallize_when_synthesis_ready": True},
+            "flywheel": {"status": "explore", "synthesis_ready": False},
+        },
     ]
     body = json.dumps({"actions": actions}).encode()
     req = urllib.request.Request(
@@ -236,4 +260,4 @@ def test_cockpit_full_flow(tmp_path, monkeypatch):
     pending = json.loads((tmp_path / "pending-actions.json").read_text())
     assert len(pending["actions"]) == 2
     assert pending["actions"][0]["type"] == "notes-comment"
-    assert pending["actions"][1]["type"] == "scenario-run"
+    assert pending["actions"][1]["type"] == "tool-call"

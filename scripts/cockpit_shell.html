@@ -82,49 +82,50 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 /* Connector panel tabs (inside connector tab) */
 .connector-panel-tabs {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 0 10px;
-  padding: 8px 0 9px;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid #30363d;
+  background: #161b22;
+  overflow-x: auto;
+  margin: -12px -16px 10px;
+  padding: 0 6px;
   position: sticky;
-  top: -12px;
-  background: #0d1117;
+  top: 0;
   z-index: 2;
 }
+.connector-panel-tabs::-webkit-scrollbar { height: 3px; }
+.connector-panel-tabs::-webkit-scrollbar-thumb { background: #30363d; }
 .connector-panel-tab {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border: 1px solid #30363d;
-  border-radius: 999px;
-  background: #161b22;
+  gap: 5px;
+  padding: 8px 16px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
   color: #8b949e;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
   font-family: inherit;
 }
-.connector-panel-tab:hover { border-color: #58a6ff; color: #58a6ff; }
+.connector-panel-tab:hover { color: #e6edf3; }
 .connector-panel-tab.active {
-  border-color: #1f6feb;
-  background: #0d1f33;
+  border-bottom-color: #58a6ff;
   color: #e6edf3;
 }
 .connector-panel-tab-count {
-  min-width: 16px;
-  padding: 0 6px;
-  border-radius: 10px;
-  border: 1px solid #30363d;
-  background: #0d1117;
+  min-width: 14px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #21262d;
   color: #8b949e;
   font-size: 10px;
-  line-height: 1.4;
+  line-height: 1.3;
   text-align: center;
 }
 .connector-panel-tab.active .connector-panel-tab-count {
-  border-color: #1f6feb;
   color: #79c0ff;
+  background: #1c2a3a;
 }
 /* Overview section headers */
 .section-header { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin: 14px 0 6px; }
@@ -174,19 +175,20 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .notes-block em { color: #d2a8ff; font-style: italic; }
 .notes-block a { color: #58a6ff; text-decoration: none; }
 .notes-block a:hover { text-decoration: underline; }
-.notes-actions { display: flex; gap: 6px; margin-bottom: 4px; }
 .btn-sm { padding: 3px 10px; font-size: 11px; background: #1c2128; border: 1px solid #30363d; border-radius: 3px; color: #8b949e; cursor: pointer; }
 .btn-sm:hover { border-color: #58a6ff; color: #58a6ff; }
-/* Inline comment form */
-.comment-form { display: none; margin-top: 6px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; padding: 8px; }
-.comment-form textarea { width: 100%; background: #0d1117; border: 1px solid #30363d; color: #ccc; border-radius: 3px; padding: 6px 8px; font-size: 11px; font-family: inherit; resize: vertical; min-height: 60px; }
-.comment-form textarea:focus { outline: none; border-color: #58a6ff; }
-.comment-form-actions { display: flex; gap: 6px; margin-top: 6px; justify-content: flex-end; }
+.notes-comment-input-area { padding: 8px 0 2px; display: flex; flex-direction: column; gap: 5px; }
+.notes-comment-input-area .prompt-add-btn { align-self: flex-end; }
 /* Scenario cards */
 .scenario-card { background: #0d1117; border: 1px solid #1a2a3a; border-radius: 4px; padding: 7px 10px; margin-bottom: 5px; }
 .scenario-card-row { display: flex; align-items: flex-start; gap: 8px; }
 .scenario-info { flex: 1; }
 .scenario-name { font-size: 12px; color: #e6edf3; font-weight: 600; }
+.scenario-name-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.scenario-flywheel-badge { padding: 1px 7px; border-radius: 10px; font-size: 10px; border: 1px solid #30363d; }
+.scenario-flywheel-badge.explore { background: #1c2128; color: #8b949e; border-color: #30363d; }
+.scenario-flywheel-badge.canary  { background: #2d2208; color: #d29922; border-color: #4a3a10; }
+.scenario-flywheel-badge.stable  { background: #1b2d1b; color: #3fb950; border-color: #2a4a2a; }
 .scenario-desc { font-size: 10px; color: #8b949e; margin-top: 2px; }
 .scenario-meta { font-size: 10px; color: #484f58; margin-top: 2px; }
 .add-btn { padding: 3px 10px; background: #1a2a3a; border: 1px solid #58a6ff; border-radius: 3px; color: #58a6ff; font-size: 11px; cursor: pointer; flex-shrink: 0; }
@@ -633,14 +635,12 @@ function refreshPolicyDisplay() {
   if (panel !== 'pipelines') return;
 
   const pipDiv = document.getElementById('conn-pipelines');
-  const pipLabel = document.getElementById('conn-pipelines-label');
   if (!pipDiv) {
     // First load or pipelines panel not yet rendered — do full render
     renderConnectorTab(currentTab);
     return;
   }
   const queuedKeys = new Set(queue.map(q => q.data && q.data.key).filter(Boolean));
-  if (pipLabel) pipLabel.textContent = connPipelines.length;
   let html = '';
   if (connPipelines.length) {
     connPipelines.forEach(p => { html += renderPipelineCard(p, queuedKeys, { hideConnector: true }); });
@@ -1136,40 +1136,49 @@ function renderConnectorTab(name) {
       pipHtml = `<div style="color:#484f58;font-size:11px;padding:6px 0">No pipelines for this connector.</div>`;
     }
     html += `<div role="tabpanel" id="conn-panel-pipelines" aria-labelledby="conn-tab-pipelines">
-    <div class="sec-label">Pipelines <span id="conn-pipelines-label" class="sec-count">${connPipelines.length}</span></div>
     <div id="conn-pipelines">${pipHtml}</div>
     </div>`;
   } else if (panel === 'notes' && hasNotes) {
+    const notesInputId = `notes-comment-input-${encodeURIComponent(name)}`;
     html += `<div role="tabpanel" id="conn-panel-notes" aria-labelledby="conn-tab-notes">
-    <div class="sec-label">Notes</div>
     <div class="notes-block">${renderMarkdown(c.notes)}</div>
-    <div class="notes-actions">
-      <button class="btn-sm" onclick="queueNotesComment('${safeN}')">+ Add comment</button>
-    </div>
-    <div class="comment-form" id="comment-form-${escHtml(name)}">
-      <textarea placeholder="Add edit instruction for NOTES.md (e.g. 'fix the COM init order note')..."></textarea>
-      <div class="comment-form-actions">
-        <button class="btn-sm" onclick="cancelNotesComment('${safeN}')">Cancel</button>
-        <button class="btn-sm" style="border-color:#58a6ff;color:#58a6ff" onclick="submitNotesComment('${safeN}')">Submit to CC</button>
-      </div>
+    <div class="notes-comment-input-area">
+      <textarea class="prompt-textarea" id="${notesInputId}" placeholder="Edit instruction for NOTES.md…&#10;e.g. fix the COM init order note" rows="3" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){submitNotesComment('${safeN}');event.preventDefault()}"></textarea>
+      <button class="prompt-add-btn" onclick="submitNotesComment('${safeN}')">＋ Add to Queue</button>
     </div>
     </div>`;
   } else if (panel === 'controls' && hasControls) {
     html += `<div role="tabpanel" id="conn-panel-controls" aria-labelledby="conn-tab-controls">
-    <div class="sec-label">Controls</div>`;
+    `;
 
     if (c.scenarios && c.scenarios.length) {
       c.scenarios.forEach((s, idx) => {
+        if (s.error) {
+          html += `<div class="scenario-card" style="border-color:#4a1a1a">
+            <div class="scenario-name">✗ ${escHtml(s.name || 'invalid scenario')}</div>
+            <div class="scenario-desc" style="color:#f85149">${escHtml(s.error)}</div>
+            <div class="scenario-meta">${escHtml(s.filename || '')}</div>
+          </div>`;
+          return;
+        }
+        const exec = s.execution || {};
+        const flywheel = exec.flywheel || {};
+        const fwStatus = (flywheel.status || 'explore');
+        const autoMode = (exec.auto && exec.auto.mode) ? exec.auto.mode : 'assist';
         const formId = `scenario-form-${escHtml(name)}-${idx}`;
         const argsJson = escHtml(JSON.stringify(s.required_args || []));
+        const execJson = escHtml(JSON.stringify(exec));
         html += `<div class="scenario-card">
           <div class="scenario-card-row">
             <div class="scenario-info">
-              <div class="scenario-name">${escHtml(s.name)}</div>
+              <div class="scenario-name-row">
+                <div class="scenario-name">${escHtml(s.name)}</div>
+                <span class="scenario-flywheel-badge ${escHtml(fwStatus)}">${escHtml(fwStatus)}</span>
+              </div>
               <div class="scenario-desc">${escHtml((s.description || '').slice(0, 120))}</div>
-              <div class="scenario-meta">${s.step_count} steps${s.has_rollback ? ' · has rollback' : ''}${s.required_args && s.required_args.length ? ' · args: ' + escHtml(s.required_args.join(', ')) : ''}</div>
+              <div class="scenario-meta">${s.step_count} steps${s.has_rollback ? ' · has rollback' : ''}${s.required_args && s.required_args.length ? ' · args: ' + escHtml(s.required_args.join(', ')) : ''} · ${escHtml(exec.tool || '?')} → ${escHtml(exec.pipeline || '?')} · auto:${escHtml(autoMode)}</div>
             </div>
-            <button class="add-btn" onclick="toggleScenarioForm('${formId}','${safeN}','${escHtml(s.name).replace(/'/g,"\\'")}',${argsJson})">▶ Run</button>
+            <button class="add-btn" onclick="toggleScenarioForm('${formId}','${safeN}','${escHtml(s.name).replace(/'/g,"\\'")}',${argsJson},${execJson})">▶ Run</button>
           </div>
           <div class="scenario-args-form" id="${formId}"></div>
         </div>`;
@@ -1283,24 +1292,12 @@ function onActionSelect(action, key, currentStatus) {
 }
 
 // ── Notes comment ─────────────────────────────────────────────────────────────
-function queueNotesComment(connector) {
-  const form = document.getElementById('comment-form-' + connector);
-  if (!form) return;
-  form.style.display = 'block';
-  const ta = form.querySelector('textarea');
-  ta.value = '';
-  ta.focus();
-}
-function cancelNotesComment(connector) {
-  const form = document.getElementById('comment-form-' + connector);
-  if (form) form.style.display = 'none';
-}
 function submitNotesComment(connector) {
-  const form = document.getElementById('comment-form-' + connector);
-  if (!form) return;
-  const comment = form.querySelector('textarea').value.trim();
+  const input = document.getElementById('notes-comment-input-' + encodeURIComponent(connector));
+  if (!input) return;
+  const comment = input.value.trim();
   if (!comment) return;
-  form.style.display = 'none';
+  input.value = '';
   enqueue({
     id: ++queueIdSeq,
     type: 'notes-comment',
@@ -1309,10 +1306,11 @@ function submitNotesComment(connector) {
     command: `notes-comment ${connector}`,
     data: { type: 'notes-comment', connector, comment },
   });
+  input.focus();
 }
 
 // ── Scenario arg form ─────────────────────────────────────────────────────────
-function toggleScenarioForm(formId, connector, scenarioName, requiredArgs) {
+function toggleScenarioForm(formId, connector, scenarioName, requiredArgs, execution) {
   const form = document.getElementById(formId);
   if (!form) return;
   if (form.style.display === 'block') {
@@ -1321,16 +1319,38 @@ function toggleScenarioForm(formId, connector, scenarioName, requiredArgs) {
   }
   const safeConnector = connector.replace(/'/g, "\\'");
   const safeScenario = scenarioName.replace(/'/g, "\\'");
+  const exec = execution || {};
+  const tool = exec.tool || 'icc_write';
+  const pipeline = exec.pipeline || '';
+  const mode = exec.mode || (tool === 'icc_read' ? 'read' : 'write');
+  const intentSignature = exec.intent_signature || `${connector}.${mode}.${pipeline}`;
+  const auto = (exec.auto && typeof exec.auto === 'object') ? exec.auto : {};
+  const autoMode = auto.mode || 'assist';
+  const crystallizeOnReady = !!auto.crystallize_when_synthesis_ready;
+  const flywheel = (exec.flywheel && typeof exec.flywheel === 'object') ? exec.flywheel : {};
+  const synthesisReady = !!flywheel.synthesis_ready;
+  const safeTool = String(tool).replace(/'/g, "\\'");
+  const safePipeline = String(pipeline).replace(/'/g, "\\'");
+  const safeIntent = String(intentSignature).replace(/'/g, "\\'");
+  const safeAutoMode = String(autoMode).replace(/'/g, "\\'");
 
   if (!requiredArgs || !requiredArgs.length) {
     // No args — enqueue immediately
+    const callArgs = { connector, pipeline, scenario: scenarioName };
     enqueue({
       id: ++queueIdSeq,
-      type: 'scenario-run',
+      type: 'tool-call',
       label: `Run: ${scenarioName}`,
       subLabel: connector,
-      command: `icc_exec intent=write.${connector}.apply-test scenario=${scenarioName}`,
-      data: { type: 'scenario-run', connector, scenario: scenarioName, args: {} },
+      command: `${tool} connector=${connector} pipeline=${pipeline} scenario=${scenarioName}`,
+      data: {
+        type: 'tool-call',
+        intent_signature: intentSignature,
+        call: { tool, arguments: callArgs },
+        meta: { scope: `${connector}/${scenarioName}`, connector, scenario: scenarioName, source: 'cockpit.controls' },
+        auto: { mode: autoMode, crystallize_when_synthesis_ready: crystallizeOnReady },
+        flywheel: { status: flywheel.status || 'explore', synthesis_ready: synthesisReady },
+      },
     });
     return;
   }
@@ -1345,16 +1365,17 @@ function toggleScenarioForm(formId, connector, scenarioName, requiredArgs) {
   }).join('');
 
   form.innerHTML = `${fieldsHtml}
+    <div class="scenario-meta" style="margin:4px 0 8px">Exec: ${escHtml(tool)} → ${escHtml(pipeline)} · intent: ${escHtml(intentSignature)} · auto:${escHtml(autoMode)}</div>
     <div class="scenario-form-actions">
       <button class="btn-sm" onclick="document.getElementById('${formId}').style.display='none'">Cancel</button>
-      <button class="btn-sm" style="border-color:#58a6ff;color:#58a6ff" onclick="submitScenarioForm('${formId}','${safeConnector}','${safeScenario}')">▶ Add to Queue</button>
+      <button class="btn-sm" style="border-color:#58a6ff;color:#58a6ff" onclick="submitScenarioForm('${formId}','${safeConnector}','${safeScenario}','${safeTool}','${safePipeline}','${safeIntent}','${safeAutoMode}',${crystallizeOnReady},${synthesisReady})">▶ Add to Queue</button>
     </div>`;
   form.style.display = 'block';
   const first = form.querySelector('input:not([disabled])');
   if (first) first.focus();
 }
 
-function submitScenarioForm(formId, connector, scenarioName) {
+function submitScenarioForm(formId, connector, scenarioName, tool, pipeline, intentSignature, autoMode, crystallizeWhenReady, synthesisReady) {
   const form = document.getElementById(formId);
   if (!form) return;
   const args = {};
@@ -1366,13 +1387,21 @@ function submitScenarioForm(formId, connector, scenarioName) {
     }
   });
   form.style.display = 'none';
+  const callArgs = { ...args, connector, pipeline, scenario: scenarioName };
   enqueue({
     id: ++queueIdSeq,
-    type: 'scenario-run',
+    type: 'tool-call',
     label: `Run: ${scenarioName}`,
     subLabel: connector,
-    command: `icc_exec intent=write.${connector}.apply-test scenario=${scenarioName}`,
-    data: { type: 'scenario-run', connector, scenario: scenarioName, args },
+    command: `${tool} connector=${connector} pipeline=${pipeline} scenario=${scenarioName}`,
+    data: {
+      type: 'tool-call',
+      intent_signature: intentSignature,
+      call: { tool, arguments: callArgs },
+      meta: { scope: `${connector}/${scenarioName}`, connector, scenario: scenarioName, source: 'cockpit.controls' },
+      auto: { mode: autoMode, crystallize_when_synthesis_ready: !!crystallizeWhenReady },
+      flywheel: { synthesis_ready: !!synthesisReady },
+    },
   });
 }
 

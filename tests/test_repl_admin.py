@@ -834,3 +834,37 @@ def test_enrich_actions_handles_missing_notes_file(tmp_path):
     a = result[0]
     assert a["current_notes"] == ""
     assert "instruction" in a
+
+
+def test_enrich_actions_adds_deterministic_instruction_for_tool_call():
+    actions = [
+        {
+            "type": "tool-call",
+            "connector": "zwcad",
+            "scenario": "health-check",
+            "intent_signature": "zwcad.write.apply-test",
+            "call": {
+                "tool": "icc_write",
+                "arguments": {
+                    "connector": "zwcad",
+                    "pipeline": "apply-test",
+                    "scenario": "health-check",
+                },
+            },
+            "auto": {"mode": "auto", "crystallize_when_synthesis_ready": True},
+            "flywheel": {"status": "canary", "synthesis_ready": True},
+        }
+    ]
+    result = repl_admin._enrich_actions(actions)
+    assert len(result) == 1
+    assert "instruction" in result[0]
+    assert "Deterministic tool call" in result[0]["instruction"]
+    assert "icc_write" in result[0]["instruction"]
+
+
+def test_enrich_actions_marks_invalid_tool_call_payload():
+    actions = [{"type": "tool-call", "scenario": "x", "call": {"tool": "icc_exec", "arguments": {}}}]
+    result = repl_admin._enrich_actions(actions)
+    assert len(result) == 1
+    assert "instruction" in result[0]
+    assert "Invalid cockpit tool-call payload" in result[0]["instruction"]

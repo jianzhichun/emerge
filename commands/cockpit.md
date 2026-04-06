@@ -35,7 +35,8 @@ Steps:
       - `pipeline-delete` → `repl_admin.py pipeline-delete --pipeline-key <key>`
       - `notes-comment` → 在 `~/.emerge/connectors/<connector>/NOTES.md` 末尾追加 `\n\n<!-- <ISO timestamp> -->\n<comment>`
       - `notes-edit` → 整体覆写 `~/.emerge/connectors/<connector>/NOTES.md`
-      - `scenario-run` → `icc_exec` with `intent_signature=write.<connector>.apply-test`，在 args 中加入 `scenario=<name>` 及其他参数
+     - `tool-call` → **deterministic call only**：按 action 中的 `call.tool` + `call.arguments` 直接执行（`icc_read`/`icc_write`），禁止改写为自由推理代码
+       - 若 `auto.mode=auto` 且 `flywheel.synthesis_ready=true`，执行后追加一条 crystallize 建议（不阻塞当前结果返回）
       - `crystallize-component` → 写入 `~/.emerge/connectors/<connector>/cockpit/<filename>.html` 和 `<filename>.context.md`
 
    c. 执行完毕后，在终端简要汇报结果，然后回到步骤 a 继续等待下一次提交。

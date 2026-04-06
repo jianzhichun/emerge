@@ -1964,8 +1964,14 @@ def _format_pending_actions_message(actions: list) -> str:
             lines.append(f"{i}. 更新 {a.get('connector')} NOTES.md（全文替换）")
         elif t == "notes-comment":
             lines.append(f"{i}. 追加 comment 到 {a.get('connector')} NOTES.md: {str(a.get('comment', ''))[:80]}")
-        elif t == "scenario-run":
-            lines.append(f"{i}. 运行 scenario {a.get('scenario')} (connector: {a.get('connector')}) args={a.get('args', {})}")
+        elif t == "tool-call":
+            call = a.get("call", {}) if isinstance(a.get("call"), dict) else {}
+            tool = call.get("tool", "?")
+            call_args = call.get("arguments", {})
+            meta = a.get("meta", {}) if isinstance(a.get("meta"), dict) else {}
+            scope = str(meta.get("scope", "")).strip()
+            scope_suffix = f" scope={scope}" if scope else ""
+            lines.append(f"{i}. 执行 tool-call {tool} args={call_args}{scope_suffix}")
         elif t == "crystallize-component":
             lines.append(f"{i}. 固化组件 {a.get('filename')} → {a.get('connector')}/cockpit/")
         else:

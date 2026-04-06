@@ -1032,13 +1032,102 @@ def _extract_scenario_args(scenario_data: dict) -> list:
     return sorted(tokens - derived - skip_args - {"true", "false", "null"})
 
 
+def _safe_float(v, default=0.0) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _load_pipeline_registry_index(state_root: Path) -> dict:
+    registry_path = state_root / "pipelines-registry.json"
+    if not registry_path.exists():
+        return {}
+    try:
+        data = json.loads(registry_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    raw = data.get("pipelines", {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def _parse_scenario_execution(
+    *,
+    connector: str,
+    scenario_file: str,
+    scenario_data: dict,
+    registry_index: dict,
+) -> dict:
+    """Parse strict execution config for cockpit scenarios (initial-version protocol).
+
+    Required YAML shape:
+      execution:
+        tool: icc_read | icc_write
+        pipeline: <pipeline name>
+        intent_signature: <optional, defaults to connector.mode.pipeline>
+        auto:
+          mode: manual | assist | auto
+          crystallize_when_synthesis_ready: <bool, default true>
+    """
+    execution = scenario_data.get("execution")
+    if not isinstance(execution, dict):
+        raise ValueError(f"{scenario_file}: missing required 'execution' mapping")
+
+    tool = str(execution.get("tool", "")).strip()
+    if tool not in {"icc_read", "icc_write"}:
+        raise ValueError(f"{scenario_file}: execution.tool must be icc_read or icc_write")
+    mode = "read" if tool == "icc_read" else "write"
+
+    pipeline = str(execution.get("pipeline", "")).strip()
+    if not pipeline:
+        raise ValueError(f"{scenario_file}: execution.pipeline is required")
+
+    intent_signature = str(execution.get("intent_signature", "")).strip() or f"{connector}.{mode}.{pipeline}"
+
+    auto = execution.get("auto") or {}
+    if not isinstance(auto, dict):
+        raise ValueError(f"{scenario_file}: execution.auto must be a mapping")
+    auto_mode = str(auto.get("mode", "assist")).strip().lower() or "assist"
+    if auto_mode not in {"manual", "assist", "auto"}:
+        raise ValueError(f"{scenario_file}: execution.auto.mode must be manual|assist|auto")
+    auto_crystallize = bool(auto.get("crystallize_when_synthesis_ready", True))
+
+    entry = registry_index.get(intent_signature, {}) if isinstance(registry_index, dict) else {}
+    if not isinstance(entry, dict):
+        entry = {}
+
+    flywheel = {
+        "status": str(entry.get("status", "explore")),
+        "synthesis_ready": bool(entry.get("synthesis_ready", False)),
+        "rollout_pct": int(entry.get("rollout_pct", 0) or 0),
+        "success_rate": round(_safe_float(entry.get("success_rate", 0.0)), 4),
+        "verify_rate": round(_safe_float(entry.get("verify_rate", 0.0)), 4),
+        "human_fix_rate": round(_safe_float(entry.get("human_fix_rate", 0.0)), 4),
+        "bridge_ready": str(entry.get("status", "explore")) == "stable",
+    }
+
+    return {
+        "tool": tool,
+        "mode": mode,
+        "pipeline": pipeline,
+        "intent_signature": intent_signature,
+        "auto": {
+            "mode": auto_mode,
+            "crystallize_when_synthesis_ready": auto_crystallize,
+        },
+        "flywheel": flywheel,
+    }
+
+
 def cmd_assets() -> dict:
     """Return per-connector assets: notes content, scenario metadata, crystallized components."""
     try:
         connector_root = _resolve_connector_root()
+        state_root = _resolve_state_root()
     except Exception:
         return {"connectors": {}}
 
+    registry_index = _load_pipeline_registry_index(state_root)
     connectors: dict = {}
     if not connector_root.exists():
         return {"connectors": connectors}
@@ -1068,6 +1157,23 @@ def cmd_assets() -> dict:
                     data = None
                 if not isinstance(data, dict):
                     continue
+                try:
+                    execution = _parse_scenario_execution(
+                        connector=name,
+                        scenario_file=f.name,
+                        scenario_data=data,
+                        registry_index=registry_index,
+                    )
+                except ValueError as exc:
+                    scenarios.append(
+                        {
+                            "name": data.get("name", f.stem),
+                            "description": (data.get("description") or "").strip(),
+                            "filename": f.name,
+                            "error": str(exc),
+                        }
+                    )
+                    continue
                 scenarios.append({
                     "name": data.get("name", f.stem),
                     "description": (data.get("description") or "").strip(),
@@ -1075,6 +1181,7 @@ def cmd_assets() -> dict:
                     "step_count": len(data.get("steps", [])),
                     "has_rollback": bool(data.get("rollback")),
                     "required_args": _extract_scenario_args(data),
+                    "execution": execution,
                 })
 
         components: list = []
@@ -1451,6 +1558,9 @@ def _enrich_actions(actions: list) -> list:
 
     For ``global-prompt`` actions: inject an instruction telling CC to execute
     the ``prompt`` field as a direct user request.
+
+    For ``tool-call`` actions: inject deterministic execution guidance so
+    framework-level tool invocations remain explicit and auditable.
     """
     connector_root = _resolve_connector_root()
     enriched = []
@@ -1480,6 +1590,33 @@ def _enrich_actions(actions: list) -> list:
                     "Rewrite the file at `notes_path` with your judgment — do NOT blindly append. "
                     "Preserve existing useful content. Keep the file concise and accurate."
                 )
+        elif a.get("type") == "tool-call":
+            call = a.get("call")
+            if not isinstance(call, dict):
+                a["instruction"] = (
+                    "Invalid cockpit tool-call action: missing `call` object. "
+                    "Do not improvise; ask user to re-submit."
+                )
+            else:
+                tool_name = str(call.get("tool", "")).strip()
+                arguments = call.get("arguments", {})
+                if tool_name not in {"icc_read", "icc_write"} or not isinstance(arguments, dict):
+                    a["instruction"] = (
+                        "Invalid cockpit tool-call payload. "
+                        "Expected call.tool in {icc_read, icc_write} and call.arguments object."
+                    )
+                else:
+                    auto = a.get("auto") if isinstance(a.get("auto"), dict) else {}
+                    auto_mode = str(auto.get("mode", "assist"))
+                    a["instruction"] = (
+                        "Deterministic tool call (no free-form reasoning): "
+                        f"call `{tool_name}` exactly once with `call.arguments`; "
+                        "return the tool output to the user. "
+                        f"intent_signature={a.get('intent_signature', '')}. "
+                        f"automation_mode={auto_mode}. "
+                        "Only if automation_mode=auto AND flywheel.synthesis_ready=true, "
+                        "queue a follow-up crystallization suggestion."
+                    )
         enriched.append(a)
     return enriched
 
