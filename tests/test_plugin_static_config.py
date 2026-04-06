@@ -51,11 +51,14 @@ def test_hooks_json_commands_use_claude_plugin_root():
     data = json.loads(hooks_path.read_text(encoding="utf-8"))
     for event, matchers in data["hooks"].items():
         for entry in matchers:
-            cmd = entry["command"]
-            assert "${CLAUDE_PLUGIN_ROOT}" in cmd, (
-                f"Hook {event!r} command {cmd!r} must use ${{CLAUDE_PLUGIN_ROOT}} "
-                "to work when CC is run from outside the plugin directory"
-            )
+            for hook in entry.get("hooks", []):
+                cmd = hook.get("command", "")
+                if not cmd:
+                    continue
+                assert "${CLAUDE_PLUGIN_ROOT}" in cmd, (
+                    f"Hook {event!r} command {cmd!r} must use ${{CLAUDE_PLUGIN_ROOT}} "
+                    "to work when CC is run from outside the plugin directory"
+                )
 
 
 def test_policy_command_uses_plugin_root_for_repl_admin():
