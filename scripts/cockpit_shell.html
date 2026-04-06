@@ -17,7 +17,54 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .goal-save-btn { background: none; border: none; color: #484f58; font-size: 11px; cursor: pointer; padding: 0 4px; flex-shrink: 0; }
 .goal-save-btn:hover { color: #3fb950; }
 .goal-meta { font-size: 10px; color: #8b949e; margin-left: 6px; white-space: nowrap; }
-.goal-history-select { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 4px; font-size: 11px; padding: 2px 4px; max-width: 220px; }
+.goal-history-dropdown { position: relative; min-width: 220px; max-width: 320px; }
+.goal-history-trigger {
+  width: 100%;
+  background: #0d1117;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 3px 8px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.goal-history-trigger:hover { border-color: #58a6ff; }
+.goal-history-trigger:focus { outline: none; border-color: #58a6ff; }
+.goal-history-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(1, 4, 9, 0.7);
+  z-index: 20;
+}
+.goal-history-menu.open { display: block; }
+.goal-history-item {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid #21262d;
+  background: transparent;
+  color: #c9d1d9;
+  font-size: 11px;
+  font-family: inherit;
+  text-align: left;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.goal-history-item:last-child { border-bottom: none; }
+.goal-history-item:hover { background: #161b22; }
+.goal-history-item.active { background: #0d1f33; color: #e6edf3; }
 .goal-rollback-btn { background: none; border: 1px solid #30363d; color: #8b949e; border-radius: 4px; font-size: 11px; cursor: pointer; padding: 2px 6px; }
 .goal-rollback-btn:hover { color: #f0f6fc; border-color: #8b949e; }
 .thresholds-bar { background: #0d1117; border-bottom: 1px solid #21262d; padding: 5px 16px; display: flex; gap: 16px; flex-wrap: wrap; font-size: 11px; color: #8b949e; align-items: center; }
@@ -50,7 +97,7 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .tab.active { color: #e6edf3; border-bottom-color: #58a6ff; }
 .tab .warn { color: #f85149; margin-left: 4px; }
 .layout { display: flex; height: calc(100vh - 130px); }
-.main-panel { flex: 1; overflow-y: auto; padding: 12px 16px 28px; }
+.main-panel { flex: 1; overflow-y: auto; padding: 0 16px 28px; }
 .queue-panel { width: 300px; border-left: 1px solid #21262d; display: flex; flex-direction: column; }
 .queue-header { padding: 10px 14px; font-size: 11px; color: #58a6ff; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #21262d; flex-shrink: 0; }
 .queue-items { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 4px; }
@@ -85,7 +132,7 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
   border-bottom: 1px solid #30363d;
   background: #161b22;
   overflow-x: auto;
-  margin: -12px -16px 10px;
+  margin: 0 -16px 0;
   padding: 0 6px;
   position: sticky;
   top: 0;
@@ -212,7 +259,7 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 #refresh-timer .bar-fill { height: 100%; background: #388bfd; border-radius: 2px; transition: width 1s linear; }
 #refresh-timer .tick { font-size: 9px; min-width: 16px; text-align: right; }
 /* Overview dashboard */
-.overview-grid { display: grid; grid-template-columns: 230px 1fr; gap: 12px; margin-bottom: 14px; align-items: start; }
+.overview-grid { display: grid; grid-template-columns: 230px 1fr; gap: 12px; margin: 12px 0 14px; align-items: start; }
 .overview-donut-wrap { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .donut-legend { width: 100%; display: flex; flex-direction: column; gap: 4px; }
 .donut-legend-row { display: flex; align-items: center; gap: 7px; font-size: 11px; cursor: pointer; }
@@ -281,7 +328,10 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
       oninput="document.getElementById('goal-save-btn').style.color='#58a6ff'">
     <button class="goal-save-btn" id="goal-save-btn" onclick="saveGoal()" title="Save goal (Enter)">✓</button>
     <span class="goal-meta" id="goal-meta">v0 · unset</span>
-    <select class="goal-history-select" id="goal-history-select" title="Recent goal events"></select>
+    <div class="goal-history-dropdown" id="goal-history-dropdown">
+      <button class="goal-history-trigger" id="goal-history-trigger" type="button" onclick="toggleGoalHistoryMenu()" title="Recent goal events">(loading goal history...)</button>
+      <div class="goal-history-menu" id="goal-history-menu"></div>
+    </div>
     <button class="goal-rollback-btn" onclick="rollbackGoalToSelected()" title="Rollback to selected event">Rollback</button>
   </div>
   <span class="session-info" id="session-info">loading...</span>
@@ -435,6 +485,7 @@ let queueIdSeq = 0;
 let ccListening = false;  // whether wait-for-submit is active in CC
 let ccListeningSignalKnown = true; // false when connected to legacy /api/status
 let goalHistory = [];
+let selectedGoalEventId = '';
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
 const REFRESH_INTERVAL_S = 5;
@@ -446,6 +497,12 @@ async function init() {
   renderTabs();
   renderCurrentTab();
   syncUrlWithViewState();
+  document.addEventListener('click', (event) => {
+    const dd = document.getElementById('goal-history-dropdown');
+    const menu = document.getElementById('goal-history-menu');
+    if (!dd || !menu) return;
+    if (!dd.contains(event.target)) menu.classList.remove('open');
+  });
   window.addEventListener('popstate', () => {
     applyViewStateFromUrl();
     renderTabs();
@@ -535,17 +592,53 @@ async function refreshGoalHistory() {
     const r = await fetch('/api/goal-history?limit=30');
     const d = await r.json();
     goalHistory = (d && d.events) ? d.events : [];
-    const sel = document.getElementById('goal-history-select');
-    if (!sel) return;
-    const options = goalHistory.slice().reverse().map(ev => {
-      const id = escHtml(ev.event_id || '');
-      const type = escHtml(ev.event_type || '');
-      const text = escHtml((ev.text || '').slice(0, 40));
-      const reason = escHtml((ev.decision && ev.decision.reason) ? ev.decision.reason : '');
-      return `<option value="${id}">${type} · ${text}${reason ? ' · ' + reason : ''}</option>`;
-    });
-    sel.innerHTML = options.length ? options.join('') : '<option value="">(no goal events)</option>';
+    renderGoalHistoryDropdown();
   } catch(e) {}
+}
+
+function goalHistoryLabel(ev) {
+  const type = ev.event_type || '';
+  const text = (ev.text || '').slice(0, 40);
+  const reason = (ev.decision && ev.decision.reason) ? ev.decision.reason : '';
+  return `${type} · ${text}${reason ? ' · ' + reason : ''}`;
+}
+
+function renderGoalHistoryDropdown() {
+  const trigger = document.getElementById('goal-history-trigger');
+  const menu = document.getElementById('goal-history-menu');
+  if (!trigger || !menu) return;
+
+  const events = goalHistory.slice().reverse();
+  if (!events.length) {
+    selectedGoalEventId = '';
+    trigger.textContent = '(no goal events)';
+    menu.innerHTML = '<div style="padding:8px;color:#8b949e;font-size:11px">(no goal events)</div>';
+    return;
+  }
+
+  if (!selectedGoalEventId || !events.some(ev => ev.event_id === selectedGoalEventId)) {
+    selectedGoalEventId = events[0].event_id || '';
+  }
+  const selected = events.find(ev => ev.event_id === selectedGoalEventId) || events[0];
+  trigger.textContent = goalHistoryLabel(selected);
+  menu.innerHTML = events.map(ev => {
+    const id = escHtml(ev.event_id || '');
+    const active = ev.event_id === selectedGoalEventId ? ' active' : '';
+    return `<button type="button" class="goal-history-item${active}" onclick="selectGoalHistoryEvent('${id}')">${escHtml(goalHistoryLabel(ev))}</button>`;
+  }).join('');
+}
+
+function toggleGoalHistoryMenu() {
+  const menu = document.getElementById('goal-history-menu');
+  if (!menu) return;
+  menu.classList.toggle('open');
+}
+
+function selectGoalHistoryEvent(eventId) {
+  selectedGoalEventId = eventId;
+  renderGoalHistoryDropdown();
+  const menu = document.getElementById('goal-history-menu');
+  if (menu) menu.classList.remove('open');
 }
 
 async function saveGoal() {
@@ -571,8 +664,7 @@ async function saveGoal() {
 }
 
 async function rollbackGoalToSelected() {
-  const sel = document.getElementById('goal-history-select');
-  const eventId = sel ? sel.value : '';
+  const eventId = selectedGoalEventId;
   if (!eventId) {
     document.getElementById('status-msg').textContent = 'Select a goal event first';
     return;
@@ -1102,12 +1194,11 @@ function renderConnectorTab(name) {
   const connPipelines = allPipelines.filter(p => (p.key || '').startsWith(name + '.'));
   const queuedKeys = new Set(queue.map(q => q.data && q.data.key).filter(Boolean));
   const safeN = name.replace(/'/g, "\\'");
-  const hasNotes = !!c.notes;
   const hasControls = (c.scenarios && c.scenarios.length) || (c.components && c.components.length);
   const panel = getActiveConnectorPanel(name);
   const panelDefs = [
     { id: 'pipelines', label: 'Pipelines', count: connPipelines.length, visible: true },
-    { id: 'notes', label: 'Notes', count: hasNotes ? 1 : 0, visible: hasNotes },
+    { id: 'notes', label: 'Notes', count: c.notes ? 1 : 0, visible: true },
     { id: 'controls', label: 'Controls', count: hasControls ? ((c.scenarios || []).length + (c.components || []).length) : 0, visible: hasControls },
   ].filter(p => p.visible);
 
@@ -1138,14 +1229,17 @@ function renderConnectorTab(name) {
     html += `<div role="tabpanel" id="conn-panel-pipelines" aria-labelledby="conn-tab-pipelines">
     <div id="conn-pipelines">${pipHtml}</div>
     </div>`;
-  } else if (panel === 'notes' && hasNotes) {
+  } else if (panel === 'notes') {
     const notesInputId = `notes-comment-input-${encodeURIComponent(name)}`;
+    const notesHtml = c.notes
+      ? renderMarkdown(c.notes)
+      : `<p style="color:#8b949e">No NOTES.md yet for this connector. Add an instruction above to create or draft it.</p>`;
     html += `<div role="tabpanel" id="conn-panel-notes" aria-labelledby="conn-tab-notes">
-    <div class="notes-block">${renderMarkdown(c.notes)}</div>
     <div class="notes-comment-input-area">
       <textarea class="prompt-textarea" id="${notesInputId}" placeholder="Edit instruction for NOTES.md…&#10;e.g. fix the COM init order note" rows="3" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){submitNotesComment('${safeN}');event.preventDefault()}"></textarea>
       <button class="prompt-add-btn" onclick="submitNotesComment('${safeN}')">＋ Add to Queue</button>
     </div>
+    <div class="notes-block">${notesHtml}</div>
     </div>`;
   } else if (panel === 'controls' && hasControls) {
     html += `<div role="tabpanel" id="conn-panel-controls" aria-labelledby="conn-tab-controls">
