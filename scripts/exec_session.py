@@ -32,6 +32,10 @@ class ExecSession:
         # ThreadingHTTPServer dispatches requests on separate threads; without
         # this lock two concurrent execs would race on _globals and _seq.
         self._exec_lock = threading.Lock()
+        # When a timed-out thread is still running we mark the session poisoned.
+        # Subsequent execs fail fast until the thread finishes, preventing
+        # concurrent mutation of _globals by two threads.
+        self._poisoned_thread: threading.Thread | None = None
         self._ensure_paths()
         self._restore_from_disk()
 
@@ -64,6 +68,24 @@ class ExecSession:
         _exec_timeout = int(os.environ.get("EMERGE_EXEC_TIMEOUT_S", "120"))
 
         with self._exec_lock:
+            # If a previous timed-out thread is still running, refuse to exec —
+            # it would race on _globals and corrupt session state.
+            if self._poisoned_thread is not None:
+                if self._poisoned_thread.is_alive():
+                    return {
+                        "ok": False,
+                        "is_error": True,
+                        "error": (
+                            "ExecSession is poisoned: a previous timed-out execution is still "
+                            "running in the background. Start a fresh session to continue."
+                        ),
+                        "text": "",
+                        "stdout": "",
+                        "stderr": "",
+                    }
+                # Previous thread finished — clear the poison
+                self._poisoned_thread = None
+
             stdout_buf = io.StringIO()
             stderr_buf = io.StringIO()
             is_error = False
@@ -86,18 +108,16 @@ class ExecSession:
             _t.start()
             _t.join(timeout=_exec_timeout)
             if _t.is_alive():
-                # Thread is still running — mark as error; we cannot kill it but
-                # the daemon flag ensures it won't block process exit.
+                # Thread still running — poison the session to prevent concurrent _globals mutation
+                self._poisoned_thread = _t
                 is_error = True
                 error_message = (
-                    f"ExecTimeout: code execution exceeded {_exec_timeout}s limit\n"
-                    f"Thread is still running in background (daemon=True)."
+                    f"ExecTimeout: code execution exceeded {_exec_timeout}s limit. "
+                    f"Session is now poisoned — start a fresh session to continue. "
+                    f"(Thread running daemon=True, will not block process exit.)"
                 )
             elif _exc_holder:
                 is_error = True
-                error_message = traceback.format_exception_only(
-                    type(_exc_holder[0]), _exc_holder[0]
-                ).__class__.__name__
                 error_message = "".join(
                     traceback.format_exception(type(_exc_holder[0]), _exc_holder[0], _exc_holder[0].__traceback__)
                 )

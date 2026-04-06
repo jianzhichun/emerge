@@ -174,7 +174,21 @@ def _load_registry(state_root: Path) -> tuple[Path, dict]:
 
 
 def _save_registry(registry_path: Path, data: dict) -> None:
-    registry_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    """Atomic write: temp file + os.replace to prevent half-written state on crash."""
+    import tempfile as _tempfile
+    fd, tmp = _tempfile.mkstemp(prefix=".registry-", dir=str(registry_path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, registry_path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def cmd_pipeline_delete(*, key: str) -> dict:

@@ -861,7 +861,8 @@ class EmergeDaemon:
             parts = rest.split("/", 1)
             if len(parts) == 2:
                 connector, resource = parts
-                if ".." in connector or connector.startswith("/"):
+                # Validate connector name: lowercase alphanumeric + _ - only, no path chars
+                if not re.match(r"^[a-z0-9][a-z0-9_-]*$", connector):
                     raise KeyError(f"Resource not found: {uri}")
                 if resource == "notes":
                     notes_text = ""
