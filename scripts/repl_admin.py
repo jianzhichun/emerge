@@ -51,6 +51,23 @@ def _resolve_state_root() -> Path:
     return Path(os.environ.get("EMERGE_STATE_ROOT", str(default_exec_root()))).expanduser().resolve()
 
 
+def _resolve_repl_root() -> Path:
+    """Return the state root used by cockpit submit/listening handshake files.
+
+    Priority keeps compatibility with older setups:
+    1) EMERGE_REPL_ROOT (cockpit-specific)
+    2) EMERGE_STATE_ROOT (legacy single-root setups)
+    3) default_exec_root() (~/.emerge/repl)
+    """
+    repl_root = os.environ.get("EMERGE_REPL_ROOT", "").strip()
+    if repl_root:
+        return Path(repl_root).expanduser().resolve()
+    state_root = os.environ.get("EMERGE_STATE_ROOT", "").strip()
+    if state_root:
+        return Path(state_root).expanduser().resolve()
+    return default_exec_root().expanduser().resolve()
+
+
 def _resolve_session_id() -> str:
     return derive_session_id(os.environ.get("EMERGE_SESSION_ID"), ROOT)
 
@@ -988,11 +1005,7 @@ def cmd_assets() -> dict:
 
 def cmd_submit_actions(actions: list) -> dict:
     """Atomically write pending-actions.json to trigger PendingActionMonitor."""
-    repl_root = os.environ.get("EMERGE_REPL_ROOT", "").strip()
-    if repl_root:
-        state_root = Path(repl_root).expanduser().resolve()
-    else:
-        state_root = _resolve_state_root()
+    state_root = _resolve_repl_root()
     state_root.mkdir(parents=True, exist_ok=True)
     pending_path = state_root / "pending-actions.json"
     tmp_p = state_root / "pending-actions.json.tmp"
@@ -1135,7 +1148,7 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/assets":
             self._json(cmd_assets())
         elif path == "/api/status":
-            state_root = _resolve_state_root()
+            state_root = _resolve_repl_root()
             pending = (state_root / "pending-actions.json").exists()
             cc_listening = False
             try:
@@ -1236,7 +1249,7 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
 
 
 def _cockpit_pid_path() -> "Path":
-    return _resolve_state_root() / "cockpit.pid"
+    return _resolve_repl_root() / "cockpit.pid"
 
 
 def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
@@ -1334,7 +1347,7 @@ def _enrich_actions(actions: list) -> list:
 
 
 def _cc_listening_path() -> "Path":
-    return _resolve_state_root() / "cc-listening.json"
+    return _resolve_repl_root() / "cc-listening.json"
 
 
 def _write_cc_listening(deadline: float) -> None:
@@ -1346,6 +1359,7 @@ def _write_cc_listening(deadline: float) -> None:
         "last_ping_ms": int(time.time() * 1000),
     }, ensure_ascii=True)
     p = _cc_listening_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = _tmp.mkstemp(prefix="cc-listening-", suffix=".json", dir=str(p.parent))
     try:
         with _os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -1385,7 +1399,9 @@ def cmd_wait_for_submit(timeout_seconds: int = 600) -> dict:
     the cockpit UI can show a live "CC ready" indicator and disable the submit
     button when CC is not listening.
     """
-    pending_path = _resolve_state_root() / "pending-actions.json"
+    state_root = _resolve_repl_root()
+    state_root.mkdir(parents=True, exist_ok=True)
+    pending_path = state_root / "pending-actions.json"
     deadline = time.time() + timeout_seconds
     _write_cc_listening(deadline)
     _last_ping = time.time()

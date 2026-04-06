@@ -376,6 +376,7 @@ let queue = [];
 let currentTab = 'overview';
 let queueIdSeq = 0;
 let ccListening = false;  // whether wait-for-submit is active in CC
+let ccListeningSignalKnown = true; // false when connected to legacy /api/status
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
 const REFRESH_INTERVAL_S = 5;
@@ -433,13 +434,21 @@ async function refreshStatus() {
   try {
     const r = await fetch('/api/status');
     const d = await r.json();
-    ccListening = !!d.cc_listening;
+    if (Object.prototype.hasOwnProperty.call(d, 'cc_listening')) {
+      ccListening = !!d.cc_listening;
+      ccListeningSignalKnown = true;
+    } else {
+      // Legacy server: status endpoint has no cc_listening. Keep submit usable.
+      ccListening = true;
+      ccListeningSignalKnown = false;
+    }
   } catch(e) {
     ccListening = false;
+    ccListeningSignalKnown = true;
   }
   updateCcIndicator();
   const btn = document.getElementById('submit-btn');
-  if (btn) btn.disabled = queue.length === 0 || !ccListening;
+  if (btn) btn.disabled = queue.length === 0 || (ccListeningSignalKnown && !ccListening);
 }
 
 async function refreshGoal() {
@@ -474,6 +483,11 @@ async function saveGoal() {
 function updateCcIndicator() {
   const el = document.getElementById('cc-indicator');
   if (!el) return;
+  if (!ccListeningSignalKnown) {
+    el.textContent = '◐ CC status unavailable (legacy server) — submit remains enabled';
+    el.style.color = '#d29922';
+    return;
+  }
   if (ccListening) {
     el.textContent = '● CC listening';
     el.style.color = '#3fb950';
@@ -1192,8 +1206,9 @@ function renderQueue() {
   const count = queue.length;
   document.getElementById('queue-count').textContent = count;
   const btn = document.getElementById('submit-btn');
-  btn.disabled = count === 0 || !ccListening;
-  btn.title = !ccListening ? 'CC is not listening — run /cockpit first' : '';
+  const blockedByCcOffline = ccListeningSignalKnown && !ccListening;
+  btn.disabled = count === 0 || blockedByCcOffline;
+  btn.title = blockedByCcOffline ? 'CC is not listening — run /cockpit first' : '';
   btn.textContent = `✓ Submit to CC (${count})`;
 
   const container = document.getElementById('queue-items');

@@ -140,6 +140,38 @@ def test_serve_get_status_returns_ok(tmp_path, monkeypatch):
     with urllib.request.urlopen(f"{url}/api/status") as resp:
         data = json.loads(resp.read())
     assert data["ok"] is True
+    assert "cc_listening" in data
+    assert isinstance(data["cc_listening"], bool)
+
+
+def test_serve_status_and_submit_prefer_repl_root(tmp_path, monkeypatch):
+    """Cockpit handshake files should consistently use EMERGE_REPL_ROOT."""
+    repl_root = tmp_path / "repl-root"
+    state_root = tmp_path / "state-root"
+    monkeypatch.setenv("EMERGE_REPL_ROOT", str(repl_root))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(state_root))
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
+    (tmp_path / "connectors").mkdir(exist_ok=True)
+
+    from scripts.repl_admin import cmd_serve
+    base = cmd_serve(port=0, open_browser=False)["url"]
+
+    actions = [{"type": "pipeline-delete", "key": "x"}]
+    body = json.dumps({"actions": actions}).encode()
+    req = urllib.request.Request(
+        f"{base}/api/submit", data=body,
+        headers={"Content-Type": "application/json"}, method="POST"
+    )
+    with urllib.request.urlopen(req) as resp:
+        submit = json.loads(resp.read())
+    assert submit["ok"] is True
+    assert (repl_root / "pending-actions.json").exists()
+    assert not (state_root / "pending-actions.json").exists()
+
+    with urllib.request.urlopen(f"{base}/api/status") as resp:
+        status = json.loads(resp.read())
+    assert status["ok"] is True
+    assert status["pending"] is True
 
 
 def test_serve_get_root_returns_html(tmp_path, monkeypatch):
