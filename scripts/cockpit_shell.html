@@ -132,6 +132,19 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .explore-chip { background: #1c2128; border: 1px solid #30363d; border-radius: 12px; padding: 2px 9px; font-size: 10px; color: #8b949e; cursor: pointer; }
 .explore-chip:hover { border-color: #58a6ff; color: #58a6ff; }
 .explore-chip b { color: #e6edf3; }
+/* Pipeline key breakdown badges */
+.key-parts { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; overflow: hidden; }
+.key-connector { padding: 1px 7px; border-radius: 3px; font-size: 10px; font-weight: 700; flex-shrink: 0; letter-spacing: 0.3px; }
+.key-mode { padding: 1px 5px; border-radius: 3px; font-size: 10px; flex-shrink: 0; }
+.key-mode.read  { background: #0d1f2d; color: #58a6ff; border: 1px solid #1a3a5a; }
+.key-mode.write { background: #1f1200; color: #d29922; border: 1px solid #4a3a10; }
+.key-name { font-size: 12px; color: #e6edf3; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Connector group sub-header inside overview sections */
+.conn-group { margin-top: 10px; }
+.conn-group:first-child { margin-top: 0; }
+.conn-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; padding: 2px 0; }
+.conn-group-name { font-size: 10px; font-weight: 700; letter-spacing: 0.5px; padding: 1px 7px; border-radius: 3px; }
+.conn-group-count { font-size: 10px; color: #484f58; }
 </style>
 </head>
 <body>
@@ -163,6 +176,51 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 </div>
 
 <script>
+// ── Pipeline key helpers ──────────────────────────────────────────────────────
+function parseKey(key) {
+  // key format: <connector>.<mode>.<name>  (mode = read | write)
+  const parts = (key || '').split('.');
+  return {
+    connector: parts[0] || '',
+    mode: parts[1] || '',
+    name: parts.slice(2).join('.') || parts[0] || key,
+  };
+}
+
+// Derive a stable hue (0–360) from a connector name for consistent coloring
+function connectorHue(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xffff;
+  // Avoid red/orange range (0–40, 340–360) reserved for critical/canary status
+  const hue = 60 + (h % 240);  // 60–300: green→blue→purple range
+  return hue;
+}
+
+function connectorStyle(name) {
+  const hue = connectorHue(name);
+  return `background:hsl(${hue},30%,12%);color:hsl(${hue},70%,65%);border:1px solid hsl(${hue},30%,22%)`;
+}
+
+function renderKeyParts(key, hideConnector) {
+  const { connector, mode, name } = parseKey(key);
+  const connBadge = hideConnector || !connector ? '' :
+    `<span class="key-connector" style="${connectorStyle(connector)}">${escHtml(connector)}</span>`;
+  const modeBadge = mode ?
+    `<span class="key-mode ${escHtml(mode)}">${escHtml(mode)}</span>` : '';
+  return `<div class="key-parts">${connBadge}${modeBadge}<span class="key-name">${escHtml(name)}</span></div>`;
+}
+
+// Group a list of pipelines by connector, preserving insertion order of connectors
+function groupByConnector(pipelines) {
+  const map = new Map();
+  pipelines.forEach(p => {
+    const conn = parseKey(p.key || '').connector || 'unknown';
+    if (!map.has(conn)) map.set(conn, []);
+    map.get(conn).push(p);
+  });
+  return map;
+}
+
 // ── State ────────────────────────────────────────────────────────────────────
 let policyData = null;
 let assetsData = null;
@@ -341,34 +399,45 @@ function renderOverviewTab() {
     </div>
   </div>`;
 
-  // ── Critical section (expanded) ──
+  // ── Critical section (expanded, grouped by connector) ──
   html += `<div id="ov-sec-critical"></div>`;
   if (groups.critical.length) {
     html += `<div class="section-header critical">⚠ Critical (${groups.critical.length})</div>`;
-    groups.critical.forEach(p => { html += renderPipelineCard(p, queuedKeys); });
+    html += renderPipelineGroup(groups.critical, queuedKeys);
   }
 
-  // ── Canary section (expanded) ──
+  // ── Canary section (expanded, grouped by connector) ──
   html += `<div id="ov-sec-canary"></div>`;
   if (groups.canary.length) {
     html += `<div class="section-header canary">⟳ Canary (${groups.canary.length})</div>`;
-    groups.canary.forEach(p => { html += renderPipelineCard(p, queuedKeys); });
+    html += renderPipelineGroup(groups.canary, queuedKeys);
   }
 
-  // ── Stable section (compact: key + metrics, no action buttons) ──
+  // ── Stable section (compact rows grouped by connector) ──
   html += `<div id="ov-sec-stable"></div>`;
   if (groups.stable.length) {
     html += `<div class="section-header stable">✓ Stable (${groups.stable.length})</div>`;
-    groups.stable.forEach(p => {
-      const sr = p.success_rate != null ? (p.success_rate * 100).toFixed(0) + '%' : '—';
-      const runs = p.total_runs != null ? p.total_runs : '—';
-      html += `<div class="pipeline-card stable" style="padding:5px 12px">
-        <div class="pipeline-card-row">
-          <span class="pipeline-key" style="font-size:11px">${escHtml(p.key || '')}</span>
-          <span class="pipeline-metrics" style="margin:0">${escHtml(p.description || '')}</span>
-          <span style="font-size:10px;color:#3fb950;flex-shrink:0;margin-left:8px">${escHtml(sr)} · ${escHtml(String(runs))} runs</span>
-        </div>
-      </div>`;
+    const byConn = groupByConnector(groups.stable);
+    byConn.forEach((ps, connector) => {
+      html += `<div class="conn-group">
+        <div class="conn-group-header">
+          <span class="conn-group-name" style="${connectorStyle(connector)}">${escHtml(connector)}</span>
+          <span class="conn-group-count">${ps.length} pipeline${ps.length > 1 ? 's' : ''}</span>
+        </div>`;
+      ps.forEach(p => {
+        const sr = p.success_rate != null ? (p.success_rate * 100).toFixed(0) + '%' : '—';
+        const runs = p.total_runs != null ? p.total_runs : '—';
+        const { mode, name } = parseKey(p.key || '');
+        const modeBadge = mode ? `<span class="key-mode ${escHtml(mode)}" style="margin-right:4px">${escHtml(mode)}</span>` : '';
+        html += `<div class="pipeline-card stable" style="padding:5px 12px">
+          <div class="pipeline-card-row">
+            <div class="key-parts">${modeBadge}<span class="key-name">${escHtml(name)}</span></div>
+            <span style="font-size:10px;color:#484f58;flex:1;padding:0 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(p.description || '')}</span>
+            <span style="font-size:10px;color:#3fb950;flex-shrink:0">${escHtml(sr)} · ${escHtml(String(runs))} runs</span>
+          </div>
+        </div>`;
+      });
+      html += `</div>`;
     });
   }
 
@@ -477,7 +546,7 @@ function renderConnectorTab(name) {
   // ── PIPELINES ──
   html += `<div class="sec-label">Pipelines <span class="sec-count">${connPipelines.length}</span></div>`;
   if (connPipelines.length) {
-    connPipelines.forEach(p => { html += renderPipelineCard(p, queuedKeys); });
+    connPipelines.forEach(p => { html += renderPipelineCard(p, queuedKeys, { hideConnector: true }); });
   } else {
     html += `<div style="color:#484f58;font-size:11px;padding:6px 0">No pipelines for this connector.</div>`;
   }
@@ -519,7 +588,8 @@ function renderConnectorTab(name) {
 }
 
 // ── Pipeline card ─────────────────────────────────────────────────────────────
-function renderPipelineCard(p, queuedKeys) {
+function renderPipelineCard(p, queuedKeys, opts) {
+  // opts: { hideConnector: bool }
   const key = p.key || '';
   const status = p.status || 'explore';
   const isQueued = queuedKeys.has(key);
@@ -548,10 +618,11 @@ function renderPipelineCard(p, queuedKeys) {
     .join('');
   const cfClass = cf >= 2 ? 'warn' : '';
   const desc = p.description ? `<div class="pipeline-desc">${escHtml(p.description)}</div>` : '';
+  const hideConn = opts && opts.hideConnector;
   return `
 <div class="pipeline-card ${cf >= 2 ? 'critical' : status} ${isQueued ? 'queued' : ''}">
   <div class="pipeline-card-row">
-    <div class="pipeline-key">${escHtml(key)}</div>
+    ${renderKeyParts(key, hideConn)}
     <span class="pipeline-badge badge-${status}">${status}${p.rollout_pct != null ? ' · ' + p.rollout_pct + '%' : ''}${p.synthesis_ready ? ' 💎' : ''}</span>
     <div class="pipeline-actions">${btns}</div>
   </div>
@@ -563,6 +634,24 @@ function renderPipelineCard(p, queuedKeys) {
     ${p.rollback_executed_count ? `<span>rollbacks: <b class="warn">${p.rollback_executed_count}</b></span>` : ''}
   </div>
 </div>`;
+}
+
+// Render a section of pipeline cards grouped by connector
+function renderPipelineGroup(pipelines, queuedKeys, opts) {
+  const byConnector = groupByConnector(pipelines);
+  let html = '';
+  byConnector.forEach((ps, connector) => {
+    const hue = connectorHue(connector);
+    const style = connectorStyle(connector);
+    html += `<div class="conn-group">
+      <div class="conn-group-header">
+        <span class="conn-group-name" style="${style}">${escHtml(connector)}</span>
+        <span class="conn-group-count">${ps.length} pipeline${ps.length > 1 ? 's' : ''}</span>
+      </div>`;
+    ps.forEach(p => { html += renderPipelineCard(p, queuedKeys, { hideConnector: true, ...(opts || {}) }); });
+    html += `</div>`;
+  });
+  return html;
 }
 
 function onActionSelect(action, key, currentStatus) {
