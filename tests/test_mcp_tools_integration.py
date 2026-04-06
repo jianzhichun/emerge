@@ -2378,3 +2378,76 @@ def test_span_close_generates_skeleton_at_stable(tmp_path, monkeypatch):
     pending = connector_root / "lark" / "pipelines" / "write" / "_pending" / "create-doc.py"
     assert pending.exists(), "skeleton must be generated at stable"
     assert "def run_write" in pending.read_text()
+
+
+# ── icc_span_approve ──────────────────────────────────────────────────────────
+
+def test_span_approve_moves_pending_and_generates_yaml(tmp_path, monkeypatch):
+    import json
+    daemon, hook_state = _make_span_daemon(tmp_path, monkeypatch)
+    connector_root = tmp_path / "connectors"
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
+    # Pre-create skeleton in _pending/
+    pending_dir = connector_root / "lark" / "pipelines" / "write" / "_pending"
+    pending_dir.mkdir(parents=True)
+    skeleton = pending_dir / "create-doc.py"
+    skeleton.write_text(
+        "def run_write(metadata, args):\n    return {'ok': True}\n"
+        "def verify_write(metadata, args, action_result):\n    return {'ok': True}\n",
+        encoding="utf-8",
+    )
+    # Drive to stable so approve is allowed
+    import scripts.span_tracker as st
+    monkeypatch.setattr(st, "PROMOTE_MIN_ATTEMPTS", 2)
+    monkeypatch.setattr(st, "PROMOTE_MIN_SUCCESS_RATE", 0.5)
+    monkeypatch.setattr(st, "PROMOTE_MAX_HUMAN_FIX_RATE", 1.0)
+    monkeypatch.setattr(st, "STABLE_MIN_ATTEMPTS", 4)
+    monkeypatch.setattr(st, "STABLE_MIN_SUCCESS_RATE", 0.5)
+    from scripts.span_tracker import SpanTracker
+    daemon._span_tracker = SpanTracker(state_root=tmp_path / "state", hook_state_root=hook_state)
+    for _ in range(5):
+        s = daemon._span_tracker.open_span("lark.write.create-doc")
+        daemon._open_spans[s.span_id] = s
+        daemon._span_tracker.close_span(s, outcome="success")
+
+    result = daemon.call_tool("icc_span_approve", {"intent_signature": "lark.write.create-doc"})
+    assert result.get("isError") is not True
+    body = json.loads(result["content"][0]["text"])
+    assert body.get("approved") is True
+    # .py moved to real dir
+    real_py = connector_root / "lark" / "pipelines" / "write" / "create-doc.py"
+    assert real_py.exists()
+    assert not skeleton.exists()  # removed from _pending
+    # .yaml generated alongside
+    real_yaml = connector_root / "lark" / "pipelines" / "write" / "create-doc.yaml"
+    assert real_yaml.exists()
+    import yaml
+    meta = yaml.safe_load(real_yaml.read_text())
+    assert meta["intent_signature"] == "lark.write.create-doc"
+
+
+def test_span_approve_errors_when_not_stable(tmp_path, monkeypatch):
+    daemon, _ = _make_span_daemon(tmp_path, monkeypatch)
+    result = daemon.call_tool("icc_span_approve", {"intent_signature": "lark.write.never-run"})
+    assert result.get("isError") is True
+
+
+def test_span_approve_errors_when_pending_missing(tmp_path, monkeypatch):
+    import scripts.span_tracker as st
+    monkeypatch.setattr(st, "PROMOTE_MIN_ATTEMPTS", 1)
+    monkeypatch.setattr(st, "PROMOTE_MIN_SUCCESS_RATE", 0.0)
+    monkeypatch.setattr(st, "PROMOTE_MAX_HUMAN_FIX_RATE", 1.0)
+    monkeypatch.setattr(st, "STABLE_MIN_ATTEMPTS", 2)
+    monkeypatch.setattr(st, "STABLE_MIN_SUCCESS_RATE", 0.0)
+    daemon, hook_state = _make_span_daemon(tmp_path, monkeypatch)
+    from scripts.span_tracker import SpanTracker
+    daemon._span_tracker = SpanTracker(state_root=tmp_path / "state", hook_state_root=hook_state)
+    for _ in range(3):
+        s = daemon._span_tracker.open_span("lark.write.create-doc")
+        daemon._open_spans[s.span_id] = s
+        daemon._span_tracker.close_span(s, outcome="success")
+    # No _pending file exists
+    result = daemon.call_tool("icc_span_approve", {"intent_signature": "lark.write.create-doc"})
+    assert result.get("isError") is True
+    import json
+    assert "_pending" in json.loads(result["content"][0]["text"]).get("message", "")

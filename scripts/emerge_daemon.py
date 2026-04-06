@@ -785,6 +785,89 @@ class EmergeDaemon:
                 )
             return self._tool_ok_json(response)
 
+        if name == "icc_span_approve":
+            intent_signature = str(arguments.get("intent_signature", "")).strip()
+            if not intent_signature:
+                return self._tool_error("icc_span_approve: 'intent_signature' is required")
+            policy_status = self._span_tracker.get_policy_status(intent_signature)
+            if policy_status != "stable":
+                return self._tool_error(
+                    f"icc_span_approve: intent '{intent_signature}' is not stable "
+                    f"(status={policy_status}). Only stable spans can be approved."
+                )
+            parts = intent_signature.split(".", 2)
+            if len(parts) != 3:
+                return self._tool_error(
+                    f"icc_span_approve: cannot parse connector/mode/name from '{intent_signature}'"
+                )
+            connector, mode, pipeline_name = parts
+            from scripts.pipeline_engine import _USER_CONNECTOR_ROOT
+            env_root_str = os.environ.get("EMERGE_CONNECTOR_ROOT", "").strip()
+            target_root = Path(env_root_str).expanduser() if env_root_str else _USER_CONNECTOR_ROOT
+            pending_py = target_root / connector / "pipelines" / mode / "_pending" / f"{pipeline_name}.py"
+            if not pending_py.exists():
+                _msg = (
+                    f"icc_span_approve: skeleton not found at {pending_py}. "
+                    "Run icc_span_close to generate the skeleton first, then implement it before "
+                    "approving. Check _pending/ directory."
+                )
+                return {"isError": True, "content": [{"type": "text", "text": json.dumps({"message": _msg})}]}
+            # Move .py to real pipeline directory
+            real_dir = target_root / connector / "pipelines" / mode
+            real_dir.mkdir(parents=True, exist_ok=True)
+            real_py = real_dir / f"{pipeline_name}.py"
+            real_yaml = real_dir / f"{pipeline_name}.yaml"
+            # Atomic move: write to temp in target dir, then replace
+            fd, tmp_py = tempfile.mkstemp(prefix=".approve-", dir=str(real_dir))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(pending_py.read_text(encoding="utf-8"))
+                os.replace(tmp_py, real_py)
+            except Exception as exc:
+                if os.path.exists(tmp_py):
+                    os.unlink(tmp_py)
+                return self._tool_error(f"icc_span_approve: failed to move skeleton: {exc}")
+            pending_py.unlink(missing_ok=True)
+            # Generate minimal YAML metadata
+            mode_step_key = "read_steps" if mode == "read" else "write_steps"
+            mode_step_val = "run_read" if mode == "read" else "run_write"
+            verify_step_val = "verify_read" if mode == "read" else "verify_write"
+            yaml_data: dict[str, Any] = {
+                "intent_signature": intent_signature,
+                "rollback_or_stop_policy": "stop",
+                mode_step_key: [mode_step_val],
+                "verify_steps": [verify_step_val],
+                "span_approved": True,
+            }
+            try:
+                yaml_src = _IndentedSafeDumper.dump_yaml(yaml_data)
+                fd2, tmp_yaml = tempfile.mkstemp(prefix=".approve-yaml-", dir=str(real_dir))
+                try:
+                    with os.fdopen(fd2, "w", encoding="utf-8") as f:
+                        f.write(yaml_src)
+                    os.replace(tmp_yaml, real_yaml)
+                except Exception:
+                    if os.path.exists(tmp_yaml):
+                        os.unlink(tmp_yaml)
+                    raise
+            except Exception as exc:
+                return self._tool_error(f"icc_span_approve: failed to generate YAML: {exc}")
+            try:
+                self._sink.emit("span.approved", {"intent_signature": intent_signature})
+            except Exception:
+                pass
+            return self._tool_ok_json({
+                "approved": True,
+                "intent_signature": intent_signature,
+                "pipeline_path": str(real_py),
+                "yaml_path": str(real_yaml),
+                "bridge_active": True,
+                "message": (
+                    f"Pipeline activated at {real_py}. "
+                    "Future icc_span_open calls will bridge directly to this pipeline."
+                ),
+            })
+
         if name == "icc_exec":
             # flywheel bridge: if candidate is stable and pipeline is ready, redirect
             promoted = self._try_flywheel_bridge(arguments)
@@ -1004,6 +1087,25 @@ class EmergeDaemon:
                                     },
                                 },
                                 "required": ["outcome"],
+                            },
+                        },
+                        {
+                            "name": "icc_span_approve",
+                            "description": (
+                                "Approve a completed pipeline skeleton and activate the span bridge. "
+                                "Moves _pending/<name>.py to the real pipeline directory and generates "
+                                "the required .yaml metadata. Only works when the intent is stable. "
+                                "After approval, icc_span_open will bridge directly to this pipeline."
+                            ),
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "intent_signature": {
+                                        "type": "string",
+                                        "description": "Stable span intent to approve",
+                                    },
+                                },
+                                "required": ["intent_signature"],
                             },
                         },
                         {
