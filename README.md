@@ -1,6 +1,6 @@
 # Emerge
 
-![Version](https://img.shields.io/badge/version-v0.2.2-blue)
+![Version](https://img.shields.io/badge/version-v0.2.3-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
 ![Tests](https://img.shields.io/badge/tests-192%20passing-brightgreen?logo=pytest)
@@ -230,7 +230,7 @@ flowchart LR
 | Ops / bootstrap | `scripts/repl_admin.py` |
 | Test connector (mock) | `tests/connectors/mock/pipelines/` |
 | Slash commands | `commands/` (`init`, `policy`, `runner-status`) |
-| Skills | `skills/` (`initializing-vertical-flywheel`, `remote-runner-dev`, `writing-vertical-adapter`, `operator-monitor-debug`) |
+| Skills | `skills/` (`initializing-vertical-flywheel`, `remote-runner-dev`, `writing-vertical-adapter`, `operator-monitor-debug`, `policy-optimization`) |
 | Reference (submodule) | `references/claude-code` |
 
 ## Requirements
