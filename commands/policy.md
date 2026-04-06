@@ -1,3 +1,5 @@
+> **Note:** `/cockpit` is the successor to `/policy`. Use `/cockpit` for the interactive dashboard. `/policy` still works for quick text-only status checks.
+
 ---
 description: Show Emerge flywheel policy status dashboard
 ---
