@@ -78,3 +78,23 @@ def test_daemon_emits_pipeline_read_metric(tmp_path):
         os.environ.pop("EMERGE_SETTINGS_PATH", None)
         from scripts.policy_config import _reset_settings_cache
         _reset_settings_cache()
+
+
+def test_emit_appends_events_in_order(tmp_path):
+    from scripts.metrics import LocalJSONLSink
+    path = tmp_path / "metrics.jsonl"
+    sink = LocalJSONLSink(path=path)
+    sink.emit("event_a", {"k": "v1"})
+    sink.emit("event_b", {"k": "v2"})
+    lines = path.read_text().strip().splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[0])["event_type"] == "event_a"
+    assert json.loads(lines[1])["event_type"] == "event_b"
+
+
+def test_emit_creates_parent_dirs(tmp_path):
+    from scripts.metrics import LocalJSONLSink
+    path = tmp_path / "nested" / "dir" / "metrics.jsonl"
+    sink = LocalJSONLSink(path=path)
+    sink.emit("x", {})
+    assert path.exists()
