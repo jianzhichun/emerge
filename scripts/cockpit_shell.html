@@ -203,6 +203,7 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 
 <div class="status-bar">
   <span id="status-msg">就绪</span>
+  <span id="cc-indicator" style="font-size:11px;margin-left:12px">○ CC 离线</span>
   <span id="last-refresh"></span>
 </div>
 
@@ -258,13 +259,15 @@ let assetsData = null;
 let queue = [];
 let currentTab = 'overview';
 let queueIdSeq = 0;
+let ccListening = false;  // whether wait-for-submit is active in CC
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
 async function init() {
-  await Promise.all([refreshPolicy(), refreshAssets()]);
+  await Promise.all([refreshPolicy(), refreshAssets(), refreshStatus()]);
   renderTabs();
   renderCurrentTab();
   setInterval(refreshPolicy, 5000);
+  setInterval(refreshStatus, 3000);
 }
 
 async function refreshPolicy() {
@@ -287,6 +290,40 @@ async function refreshAssets() {
     renderTabs();
     renderCurrentTab();
   } catch(e) {}
+}
+
+async function refreshStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    const was = ccListening;
+    ccListening = !!d.cc_listening;
+    if (was !== ccListening) {
+      updateCcIndicator();
+      // Re-evaluate submit button state when CC status changes
+      const btn = document.getElementById('submit-btn');
+      if (btn) btn.disabled = queue.length === 0 || !ccListening;
+    }
+  } catch(e) {
+    if (ccListening) {
+      ccListening = false;
+      updateCcIndicator();
+      const btn = document.getElementById('submit-btn');
+      if (btn) btn.disabled = true;
+    }
+  }
+}
+
+function updateCcIndicator() {
+  const el = document.getElementById('cc-indicator');
+  if (!el) return;
+  if (ccListening) {
+    el.textContent = '● CC 就绪';
+    el.style.color = '#3fb950';
+  } else {
+    el.textContent = '○ CC 离线 — 在 CC 输入 /cockpit 以开始监听';
+    el.style.color = '#f85149';
+  }
 }
 
 // Refresh only policy-driven content without disturbing static sections (notes, controls).
@@ -926,7 +963,8 @@ function renderQueue() {
   const count = queue.length;
   document.getElementById('queue-count').textContent = count;
   const btn = document.getElementById('submit-btn');
-  btn.disabled = count === 0;
+  btn.disabled = count === 0 || !ccListening;
+  btn.title = !ccListening ? 'CC 未在监听，请先运行 /cockpit' : '';
   btn.textContent = `✓ 提交给 CC 执行 (${count})`;
 
   const container = document.getElementById('queue-items');

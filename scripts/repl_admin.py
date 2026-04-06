@@ -1046,8 +1046,19 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/assets":
             self._json(cmd_assets())
         elif path == "/api/status":
-            pending = _resolve_state_root() / "pending-actions.json"
-            self._json({"ok": True, "pending": pending.exists()})
+            state_root = _resolve_state_root()
+            pending = (state_root / "pending-actions.json").exists()
+            cc_listening = False
+            try:
+                lp = _cc_listening_path()
+                if lp.exists():
+                    d = json.loads(lp.read_text(encoding="utf-8"))
+                    # Stale if last_ping more than 6 s ago or deadline passed
+                    age = time.time() - d.get("last_ping_ms", 0) / 1000
+                    cc_listening = age < 6 and time.time() < d.get("deadline", 0)
+            except Exception:
+                pass
+            self._json({"ok": True, "pending": pending, "cc_listening": cc_listening})
         elif path.startswith("/api/components/"):
             self._serve_component(path)
         else:
@@ -1214,6 +1225,42 @@ def _enrich_actions(actions: list) -> list:
     return enriched
 
 
+def _cc_listening_path() -> "Path":
+    return _resolve_state_root() / "cc-listening.json"
+
+
+def _write_cc_listening(deadline: float) -> None:
+    """Write/refresh the CC-listening heartbeat file (atomic)."""
+    import os as _os, tempfile as _tmp
+    body = json.dumps({
+        "pid": _os.getpid(),
+        "deadline": deadline,
+        "last_ping_ms": int(time.time() * 1000),
+    }, ensure_ascii=True)
+    p = _cc_listening_path()
+    fd, tmp = _tmp.mkstemp(prefix="cc-listening-", suffix=".json", dir=str(p.parent))
+    try:
+        with _os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(body)
+            f.flush()
+            _os.fsync(f.fileno())
+        _os.replace(tmp, p)
+        tmp = ""
+    finally:
+        if tmp:
+            try:
+                _os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def _remove_cc_listening() -> None:
+    try:
+        _cc_listening_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def cmd_wait_for_submit(timeout_seconds: int = 600) -> dict:
     """Block until pending-actions.json appears, then return its actions.
 
@@ -1225,21 +1272,34 @@ def cmd_wait_for_submit(timeout_seconds: int = 600) -> dict:
     Actions are enriched before return: ``notes-comment`` actions receive the
     connector's current NOTES.md content so CC can edit intelligently rather
     than appending blindly.
+
+    While waiting, writes/refreshes ``cc-listening.json`` every poll cycle so
+    the cockpit UI can show a live "CC ready" indicator and disable the submit
+    button when CC is not listening.
     """
     pending_path = _resolve_state_root() / "pending-actions.json"
     deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        if pending_path.exists():
-            try:
-                data = json.loads(pending_path.read_text(encoding="utf-8"))
-                actions = _enrich_actions(data.get("actions", []))
-                submitted_at = data.get("submitted_at", 0)
-                processed = pending_path.with_name("pending-actions.processed.json")
-                pending_path.rename(processed)
-                return {"ok": True, "actions": actions, "submitted_at": submitted_at, "action_count": len(actions)}
-            except (json.JSONDecodeError, OSError):
-                pass
-        time.sleep(0.5)
+    _write_cc_listening(deadline)
+    _last_ping = time.time()
+    try:
+        while time.time() < deadline:
+            if pending_path.exists():
+                try:
+                    data = json.loads(pending_path.read_text(encoding="utf-8"))
+                    actions = _enrich_actions(data.get("actions", []))
+                    submitted_at = data.get("submitted_at", 0)
+                    processed = pending_path.with_name("pending-actions.processed.json")
+                    pending_path.rename(processed)
+                    return {"ok": True, "actions": actions, "submitted_at": submitted_at, "action_count": len(actions)}
+                except (json.JSONDecodeError, OSError):
+                    pass
+            time.sleep(0.5)
+            # Refresh heartbeat every 2 s so the page sees a live signal.
+            if time.time() - _last_ping >= 2:
+                _write_cc_listening(deadline)
+                _last_ping = time.time()
+    finally:
+        _remove_cc_listening()
     return {"ok": False, "timeout": True, "actions": []}
 
 
