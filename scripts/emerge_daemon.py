@@ -256,8 +256,21 @@ class EmergeDaemon:
 
         py_path = pipeline_dir / f"{pipeline_name}.py"
         yaml_path = pipeline_dir / f"{pipeline_name}.yaml"
-        py_path.write_text(py_src, encoding="utf-8")
-        yaml_path.write_text(yaml_src, encoding="utf-8")
+
+        # Atomic writes using temp file + os.replace to prevent partial state
+        for dest_path, content in ((py_path, py_src), (yaml_path, yaml_src)):
+            fd, tmp = tempfile.mkstemp(prefix=".crystallize-", dir=str(pipeline_dir))
+            tmp_path = tmp
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(content)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, dest_path)
+                tmp_path = ""
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
 
         preview_lines = py_src.splitlines()[:20]
         code_preview = "\n".join(preview_lines)
