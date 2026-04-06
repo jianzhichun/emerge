@@ -1128,32 +1128,10 @@ class EmergeDaemon:
                                 "required": [],
                             },
                         },
-                        {
-                            "name": "icc_read",
-                            "description": "Run a read pipeline and return structured rows with verification",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "connector": {"type": "string", "description": "Connector name (e.g. zwcad, mock)"},
-                                    "pipeline": {"type": "string", "description": "Pipeline name (e.g. state, layers)"},
-                                    "target_profile": {"type": "string", "description": "Remote runner key if applicable"},
-                                },
-                                "required": ["connector", "pipeline"],
-                            },
-                        },
-                        {
-                            "name": "icc_write",
-                            "description": "Run a write pipeline with verification and rollback/stop policy enforcement",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "connector": {"type": "string", "description": "Connector name (e.g. zwcad, mock)"},
-                                    "pipeline": {"type": "string", "description": "Pipeline name (e.g. apply-change, add-wall)"},
-                                    "target_profile": {"type": "string", "description": "Remote runner key if applicable"},
-                                },
-                                "required": ["connector", "pipeline"],
-                            },
-                        },
+                        # icc_read and icc_write are intentionally omitted from the schema.
+                        # They remain callable internally but are deprecated for CC use.
+                        # Use icc_span_open(intent_signature='<connector>.(read|write).<name>')
+                        # instead — the span bridge executes the pipeline automatically when stable.
                         {
                             "name": "icc_goal_ingest",
                             "description": "Submit a goal event proposal to Goal Control Plane and get the latest decision snapshot.",
@@ -1390,6 +1368,24 @@ class EmergeDaemon:
             if notes_uri not in already_noted:
                 # Connector has tracked entries but no NOTES.md — expose notes so CC can read intents table
                 static.append({"uri": notes_uri, "name": f"{cname} connector notes", "mimeType": "text/markdown", "description": f"Tracked intents for {cname} connector (no NOTES.md yet)."})
+        # connector://spans: per-connector span intent index
+        span_candidates = self._span_tracker._load_candidates().get("spans", {})
+        span_connectors: set[str] = set()
+        for sig in span_candidates:
+            if _PIPELINE_KEY_RE.match(sig):
+                span_connectors.add(sig.split(".", 1)[0])
+        for cname in sorted(span_connectors):
+            spans_uri = f"connector://{cname}/spans"
+            if spans_uri not in already_noted:
+                static.append({
+                    "uri": spans_uri,
+                    "name": f"{cname} span intents",
+                    "mimeType": "application/json",
+                    "description": (
+                        f"JSON index of all flywheel-tracked span intents for {cname}, "
+                        "with policy status and skeleton generation state."
+                    ),
+                })
         return static
 
     def _read_resource(self, uri: str) -> dict[str, Any]:
@@ -1463,6 +1459,13 @@ class EmergeDaemon:
                 if resource == "intents":
                     data = self._get_connector_intents(connector)
                     return {"uri": uri, "mimeType": "application/json", "text": json.dumps(data)}
+                if resource == "spans":
+                    candidates = self._span_tracker._load_candidates().get("spans", {})
+                    relevant = {
+                        k: v for k, v in candidates.items()
+                        if k.startswith(f"{connector}.")
+                    }
+                    return {"uri": uri, "mimeType": "application/json", "text": json.dumps(relevant, ensure_ascii=False)}
         raise KeyError(f"Resource not found: {uri}")
 
     def _get_connector_intents(self, connector: str) -> dict[str, Any]:

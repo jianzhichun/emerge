@@ -2451,3 +2451,34 @@ def test_span_approve_errors_when_pending_missing(tmp_path, monkeypatch):
     assert result.get("isError") is True
     import json
     assert "_pending" in json.loads(result["content"][0]["text"]).get("message", "")
+
+
+# ── deprecation + connector://spans ───────────────────────────────────────────
+
+def test_icc_read_returns_deprecated_error(tmp_path, monkeypatch):
+    """icc_read is not in the schema — CC cannot discover or call it."""
+    daemon, _ = _make_span_daemon(tmp_path, monkeypatch)
+    listed = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+    names = [t["name"] for t in listed["result"]["tools"]]
+    assert "icc_read" not in names, "icc_read must not appear in schema (deprecated)"
+
+
+def test_icc_write_returns_deprecated_error(tmp_path, monkeypatch):
+    """icc_write is not in the schema — CC cannot discover or call it."""
+    daemon, _ = _make_span_daemon(tmp_path, monkeypatch)
+    listed = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+    names = [t["name"] for t in listed["result"]["tools"]]
+    assert "icc_write" not in names, "icc_write must not appear in schema (deprecated)"
+
+
+def test_spans_resource_lists_connector_intents(tmp_path, monkeypatch):
+    import json
+    daemon, hook_state = _make_span_daemon(tmp_path, monkeypatch)
+    from scripts.span_tracker import SpanTracker
+    daemon._span_tracker = SpanTracker(state_root=tmp_path / "state", hook_state_root=hook_state)
+    s = daemon._span_tracker.open_span("lark.read.get-doc")
+    daemon._open_spans[s.span_id] = s
+    daemon._span_tracker.close_span(s, outcome="success")
+    resources = daemon._list_resources()
+    uris = [r["uri"] for r in resources]
+    assert "connector://lark/spans" in uris

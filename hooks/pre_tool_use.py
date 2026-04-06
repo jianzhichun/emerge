@@ -24,13 +24,8 @@ def main() -> None:
     # Validation rules per tool
     error_msg: str | None = None
 
-    if tool_name.endswith("__icc_read") or tool_name.endswith("__icc_write"):
-        connector = str(arguments.get("connector", "")).strip()
-        pipeline = str(arguments.get("pipeline", "")).strip()
-        if not connector:
-            error_msg = "icc_read/icc_write: 'connector' argument is required"
-        elif not pipeline:
-            error_msg = "icc_read/icc_write: 'pipeline' argument is required"
+    # icc_read / icc_write are removed from schema (deprecated: use icc_span_open).
+    # No validation block needed — PreToolUse only fires for schema-listed tools.
 
     if tool_name.endswith("__icc_exec"):
         mode = str(arguments.get("mode", "inline_code")).strip()
