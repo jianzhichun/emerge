@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/version-v0.2.4-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-192%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-205%20passing-brightgreen?logo=pytest)
 
 **Emerge** is a Claude Code plugin that implements a **muscle-memory flywheel**: repeated work is tracked via `icc_exec`, promoted through a **policy registry** (explore → canary → stable), and can be **crystallized** into connector pipelines so the same tasks run as structured `icc_read` / `icc_write` instead of ad-hoc code.
 
@@ -150,7 +150,14 @@ The runner is a **stateless Python executor** — it accepts `icc_exec` only. Al
 | `EMERGE_RUNNER_TIMEOUT_S` | Per-request timeout (s)                         | `30`           |
 | `EMERGE_OPERATOR_MONITOR` | Enable OperatorMonitor thread in daemon         | `0`            |
 | `EMERGE_MONITOR_POLL_S`   | EventBus poll interval (seconds)                | `5`            |
-| `EMERGE_MONITOR_MACHINES` | Comma-separated runner profile names to monitor | all configured |
+| `EMERGE_MONITOR_MACHINES` | Comma-separated runner profile names to monitor | `default` |
+| `EMERGE_STATE_ROOT`         | Override where session state (WAL, checkpoints, registry) is written | `~/.emerge/sessions` |
+| `EMERGE_SESSION_ID`         | Override the derived session identifier                               | derived from cwd+git  |
+| `EMERGE_RUNNER_CONFIG_PATH` | Path to `runner-map.json` (overrides default location)               | `~/.emerge/runner-map.json` |
+| `EMERGE_SETTINGS_PATH`      | Override settings file path                                           | `~/.emerge/settings.json` |
+| `EMERGE_SCRIPT_ROOTS`       | Comma-separated allowed roots for `script_ref` resolution             | project root |
+| `EMERGE_TARGET_PROFILE`     | Default runner target profile for `repl_admin` commands              | `default` |
+| `CLAUDE_PLUGIN_DATA`        | Hook-state root used by `icc_reconcile` and hooks                    | `~/.claude/plugin-data` |
 
 
 Persisted route map (`~/.emerge/runner-map.json`):
