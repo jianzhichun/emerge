@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.goal_control_plane import GoalControlPlane  # noqa: E402
 from scripts.policy_config import default_hook_state_root  # noqa: E402
+from scripts.span_tracker import is_read_only_tool  # noqa: E402
 from scripts.state_tracker import (  # noqa: E402
     LEVEL_CORE_CRITICAL,
     LEVEL_CORE_SECONDARY,
@@ -94,7 +95,55 @@ def main() -> None:
         goal_override=str(snap.get("text", "")),
         goal_source_override=str(snap.get("source", "unset")),
     )
+    # ── span action recording ──────────────────────────────────────────────
+    # Skip icc_exec entirely: its Python code paths are captured in ExecSession WAL.
+    # A span skeleton built from icc_exec tool names would be useless.
+    _is_icc_exec = tool_name.endswith("__icc_exec")
+    _active_span_id = ""
+    _active_span_intent = ""
+    if not _is_icc_exec and tool_name:
+        try:
+            _raw_state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+            _active_span_id = str(_raw_state.get("active_span_id", "") or "")
+            _active_span_intent = str(_raw_state.get("active_span_intent", "") or "")
+        except Exception:
+            _active_span_id = ""
+        if _active_span_id:
+            import hashlib as _hashlib
+            import time as _time
+            _has_se = not is_read_only_tool(tool_name)
+            _args_raw = json.dumps(payload.get("tool_input", {}), sort_keys=True, ensure_ascii=True)
+            _args_hash = _hashlib.sha256(_args_raw.encode()).hexdigest()[:16]
+            _action = {
+                "tool_name": tool_name,
+                "args_hash": _args_hash,
+                "has_side_effects": _has_se,
+                "ts_ms": int(_time.time() * 1000),
+            }
+            _buf = state_root / "active-span-actions.jsonl"
+            try:
+                with _buf.open("a", encoding="utf-8") as _f:
+                    _f.write(json.dumps(_action, ensure_ascii=True) + "\n")
+            except Exception:
+                pass
+    # ── end span action recording ──────────────────────────────────────────
+
     save_tracker(state_path, tracker)
+
+    # Re-persist active span fields: save_tracker only writes known StateTracker
+    # fields and drops active_span_id. Re-merge so subsequent PostToolUse calls
+    # can still see the active span.
+    if _active_span_id:
+        import os as _os
+        try:
+            _state_now = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+            _state_now["active_span_id"] = _active_span_id
+            _state_now["active_span_intent"] = _active_span_intent
+            _tmp_state = state_path.with_suffix(".tmp")
+            _tmp_state.write_text(json.dumps(_state_now, ensure_ascii=False), encoding="utf-8")
+            _os.replace(_tmp_state, state_path)
+        except Exception:
+            pass
 
     # Do NOT echo updatedMCPToolOutput — we have no modifications to make,
     # and echoing the full result back wastes bandwidth on every tool call.

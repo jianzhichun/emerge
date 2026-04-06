@@ -267,3 +267,102 @@ def test_pre_compact_resets_tracker_state_and_keeps_goal_in_snapshot(tmp_path: P
     snap = json.loads((tmp_path / "goal-snapshot.json").read_text())
     assert snap["text"] == "deploy hypermesh pipeline"
     assert snap["source"] == "hook_payload"
+
+
+def test_session_start_clears_stale_active_span(tmp_path, monkeypatch):
+    """SessionStart must clear active_span_id left by a crashed previous session."""
+    import json, subprocess, sys
+    hook_state = tmp_path / "hook-state"
+    hook_state.mkdir()
+    stale_state = {
+        "active_span_id": "stale-uuid",
+        "active_span_intent": "lark.read.get-doc",
+        "goal": "",
+        "goal_source": "unset",
+        "deltas": [],
+    }
+    (hook_state / "state.json").write_text(json.dumps(stale_state), encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(hook_state))
+
+    result = subprocess.run(
+        [sys.executable, "hooks/session_start.py"],
+        input=json.dumps({}),
+        capture_output=True, text=True,
+        cwd=str(Path(__file__).parents[1]),
+    )
+    assert result.returncode == 0
+    state = json.loads((hook_state / "state.json").read_text())
+    assert "active_span_id" not in state
+    assert "active_span_intent" not in state
+
+
+def _run_post_hook(payload: dict, hook_state: Path) -> dict:
+    import json, subprocess, sys, os
+    env = {**os.environ, "CLAUDE_PLUGIN_DATA": str(hook_state)}
+    result = subprocess.run(
+        [sys.executable, "hooks/post_tool_use.py"],
+        input=json.dumps(payload),
+        capture_output=True, text=True,
+        cwd=str(Path(__file__).parents[1]),
+        env=env,
+    )
+    return json.loads(result.stdout) if result.stdout.strip() else {}
+
+
+def test_post_tool_use_records_action_when_span_active(tmp_path):
+    import json
+    hook_state = tmp_path / "hook-state"
+    hook_state.mkdir()
+    state = {"active_span_id": "span-123", "active_span_intent": "lark.read.get-doc",
+             "goal": "", "goal_source": "unset", "deltas": []}
+    (hook_state / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    _run_post_hook({"tool_name": "mcp__lark_doc__get",
+                    "tool_result": {"content": [{"type": "text", "text": "{}"}]}},
+                   hook_state)
+    buf = hook_state / "active-span-actions.jsonl"
+    assert buf.exists()
+    rec = json.loads(buf.read_text().strip())
+    assert rec["tool_name"] == "mcp__lark_doc__get"
+    assert rec["has_side_effects"] is False  # __get is read-only
+
+
+def test_post_tool_use_excludes_icc_exec_from_span(tmp_path):
+    import json
+    hook_state = tmp_path / "hook-state"
+    hook_state.mkdir()
+    state = {"active_span_id": "span-123", "active_span_intent": "lark.read.get-doc",
+             "goal": "", "goal_source": "unset", "deltas": []}
+    (hook_state / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    _run_post_hook({"tool_name": "emerge__icc_exec",
+                    "tool_result": {"content": [{"type": "text", "text": "{}"}]}},
+                   hook_state)
+    buf = hook_state / "active-span-actions.jsonl"
+    assert not buf.exists() or buf.read_text().strip() == "", \
+        "icc_exec must not be recorded as a span action"
+
+
+def test_post_tool_use_no_recording_without_active_span(tmp_path):
+    hook_state = tmp_path / "hook-state"
+    hook_state.mkdir()
+    (hook_state / "state.json").write_text("{}", encoding="utf-8")
+    _run_post_hook({"tool_name": "mcp__lark_doc__get",
+                    "tool_result": {"content": [{"type": "text", "text": "{}"}]}},
+                   hook_state)
+    buf = hook_state / "active-span-actions.jsonl"
+    assert not buf.exists() or buf.read_text().strip() == ""
+
+
+def test_post_tool_use_preserves_active_span_id_across_calls(tmp_path):
+    """active_span_id must survive in state.json after post_tool_use (so next call still records)."""
+    import json
+    hook_state = tmp_path / "hook-state"
+    hook_state.mkdir()
+    state = {"active_span_id": "span-xyz", "active_span_intent": "lark.read.get-doc",
+             "goal": "", "goal_source": "unset", "deltas": []}
+    (hook_state / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    _run_post_hook({"tool_name": "mcp__lark_doc__get",
+                    "tool_result": {"content": [{"type": "text", "text": "{}"}]}},
+                   hook_state)
+    after = json.loads((hook_state / "state.json").read_text())
+    assert after.get("active_span_id") == "span-xyz", \
+        "active_span_id must persist in state.json after post_tool_use"
