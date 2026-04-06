@@ -283,10 +283,27 @@ class EmergeDaemon:
         target_root = Path(env_root_str).expanduser() if env_root_str else _USER_CONNECTOR_ROOT
 
         pipeline_dir = target_root / connector / "pipelines" / mode
+        # Path traversal guard — ensure resolved path stays inside target_root
+        try:
+            pipeline_dir.resolve().relative_to(target_root.resolve())
+        except ValueError as _e:
+            raise ValueError(
+                f"icc_crystallize: connector/mode path escapes connector root "
+                f"(connector={connector!r}, mode={mode!r})"
+            ) from _e
         pipeline_dir.mkdir(parents=True, exist_ok=True)
 
         py_path = pipeline_dir / f"{pipeline_name}.py"
         yaml_path = pipeline_dir / f"{pipeline_name}.yaml"
+        # Guard individual file paths too
+        for _check_path in (py_path, yaml_path):
+            try:
+                _check_path.resolve().relative_to(target_root.resolve())
+            except ValueError as _e:
+                raise ValueError(
+                    f"icc_crystallize: pipeline_name path escapes connector root "
+                    f"(pipeline_name={pipeline_name!r})"
+                ) from _e
 
         # Atomic writes using temp file + os.replace to prevent partial state
         for dest_path, content in ((py_path, py_src), (yaml_path, yaml_src)):

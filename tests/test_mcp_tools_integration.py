@@ -1746,7 +1746,7 @@ def test_pre_tool_use_rejects_invalid_intent_signature_format():
     )
     out = _json.loads(result.stdout)
     assert out["decision"] == "block"
-    assert "lowercase" in out["reason"] or "dot-notation" in out["reason"]
+    assert "read|write" in out["reason"] or "read" in out["reason"]
 
 
 def test_pre_tool_use_rejects_two_part_intent_signature():

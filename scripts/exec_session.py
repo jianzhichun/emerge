@@ -60,6 +60,9 @@ class ExecSession:
         meta = metadata or {}
         no_replay = bool(meta.get("no_replay", False))
 
+        # Execution timeout — default 120 s, overridable via env var
+        _exec_timeout = int(os.environ.get("EMERGE_EXEC_TIMEOUT_S", "120"))
+
         with self._exec_lock:
             stdout_buf = io.StringIO()
             stderr_buf = io.StringIO()
@@ -70,12 +73,34 @@ class ExecSession:
                 for key, value in inject_vars.items():
                     self._globals[key] = value
 
-            try:
-                with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
-                    exec(code, self._globals, self._globals)
-            except Exception:
+            _exc_holder: list[BaseException] = []
+
+            def _run() -> None:
+                try:
+                    with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
+                        exec(code, self._globals, self._globals)  # noqa: S102
+                except Exception as _e:
+                    _exc_holder.append(_e)
+
+            _t = threading.Thread(target=_run, daemon=True)
+            _t.start()
+            _t.join(timeout=_exec_timeout)
+            if _t.is_alive():
+                # Thread is still running — mark as error; we cannot kill it but
+                # the daemon flag ensures it won't block process exit.
                 is_error = True
-                error_message = traceback.format_exc()
+                error_message = (
+                    f"ExecTimeout: code execution exceeded {_exec_timeout}s limit\n"
+                    f"Thread is still running in background (daemon=True)."
+                )
+            elif _exc_holder:
+                is_error = True
+                error_message = traceback.format_exception_only(
+                    type(_exc_holder[0]), _exc_holder[0]
+                ).__class__.__name__
+                error_message = "".join(
+                    traceback.format_exception(type(_exc_holder[0]), _exc_holder[0], _exc_holder[0].__traceback__)
+                )
 
             stdout = stdout_buf.getvalue()
             stderr = stderr_buf.getvalue()

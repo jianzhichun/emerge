@@ -51,12 +51,13 @@ def main() -> None:
             )
         else:
             import re as _re
-            _sig_pattern = _re.compile(r'^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*){2,}$')
+            # Must be <connector>.(read|write).<name> — middle segment must be read or write
+            _sig_pattern = _re.compile(r'^[a-z][a-z0-9_-]*\.(read|write)\.[a-z][a-z0-9_./-]*$')
             if not _sig_pattern.match(intent_signature):
                 error_msg = (
                     f"icc_exec: intent_signature {intent_signature!r} is invalid. "
-                    "Must be lowercase dot-notation with at least 3 parts: connector.mode.operation "
-                    "(e.g. 'zwcad.read.state', 'hypermesh.write.apply-change'). "
+                    "Must be <connector>.(read|write).<name> — e.g. 'zwcad.read.state', "
+                    "'hypermesh.write.apply-change'. Middle segment must be 'read' or 'write'. "
                     "Check connector://notes to see existing intents for this connector."
                 )
 
@@ -73,12 +74,17 @@ def main() -> None:
         connector = str(arguments.get("connector", "")).strip()
         pipeline_name = str(arguments.get("pipeline_name", "")).strip()
         mode = str(arguments.get("mode", "")).strip()
+        _safe_seg = __import__("re").compile(r"^[a-z0-9][a-z0-9_-]*$")
         if not intent_signature:
             error_msg = "icc_crystallize: 'intent_signature' is required"
         elif not connector:
             error_msg = "icc_crystallize: 'connector' is required"
+        elif not _safe_seg.match(connector):
+            error_msg = "icc_crystallize: 'connector' must be lowercase alphanumeric/underscore/dash, no path separators"
         elif not pipeline_name:
             error_msg = "icc_crystallize: 'pipeline_name' is required"
+        elif ".." in pipeline_name or "/" in pipeline_name or "\\" in pipeline_name:
+            error_msg = "icc_crystallize: 'pipeline_name' cannot contain '..', '/', or '\\'"
         elif mode not in ("read", "write"):
             error_msg = f"icc_crystallize: 'mode' must be read or write, got {mode!r}"
 
