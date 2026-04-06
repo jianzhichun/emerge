@@ -226,28 +226,6 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .btn-sm:hover { border-color: #58a6ff; color: #58a6ff; }
 .notes-comment-input-area { padding: 8px 0 2px; display: flex; flex-direction: column; gap: 5px; }
 .notes-comment-input-area .prompt-add-btn { align-self: flex-end; }
-/* Scenario cards */
-.scenario-card { background: #0d1117; border: 1px solid #1a2a3a; border-radius: 4px; padding: 7px 10px; margin-bottom: 5px; }
-.scenario-card-row { display: flex; align-items: flex-start; gap: 8px; }
-.scenario-info { flex: 1; }
-.scenario-name { font-size: 12px; color: #e6edf3; font-weight: 600; }
-.scenario-name-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.scenario-flywheel-badge { padding: 1px 7px; border-radius: 10px; font-size: 10px; border: 1px solid #30363d; }
-.scenario-flywheel-badge.explore { background: #1c2128; color: #8b949e; border-color: #30363d; }
-.scenario-flywheel-badge.canary  { background: #2d2208; color: #d29922; border-color: #4a3a10; }
-.scenario-flywheel-badge.stable  { background: #1b2d1b; color: #3fb950; border-color: #2a4a2a; }
-.scenario-desc { font-size: 10px; color: #8b949e; margin-top: 2px; }
-.scenario-meta { font-size: 10px; color: #484f58; margin-top: 2px; }
-.add-btn { padding: 3px 10px; background: #1a2a3a; border: 1px solid #58a6ff; border-radius: 3px; color: #58a6ff; font-size: 11px; cursor: pointer; flex-shrink: 0; }
-.add-btn:hover { background: #1f3a5a; }
-/* Scenario arg form */
-.scenario-args-form { display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid #1a2a3a; }
-.arg-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.arg-row label { font-size: 10px; color: #58a6ff; width: 120px; flex-shrink: 0; }
-.arg-row input { flex: 1; background: #0d1117; border: 1px solid #30363d; color: #ccc; border-radius: 3px; padding: 4px 7px; font-size: 11px; font-family: inherit; }
-.arg-row input:focus { outline: none; border-color: #58a6ff; }
-.arg-row input.secret { color: #484f58; font-style: italic; }
-.scenario-form-actions { display: flex; gap: 6px; justify-content: flex-end; }
 /* Component slots */
 .component-slot { border: 1px dashed #30363d; border-radius: 4px; padding: 6px; margin-bottom: 8px; }
 .component-slot iframe { width: 100%; border: none; min-height: 200px; }
@@ -770,7 +748,7 @@ function switchTab(tab) {
 function getAvailableConnectorPanels(connectorName) {
   const connector = assetsData && assetsData.connectors ? assetsData.connectors[connectorName] : null;
   const panels = ['pipelines', 'notes'];
-  const hasControls = connector && ((connector.scenarios && connector.scenarios.length) || (connector.components && connector.components.length));
+  const hasControls = connector && (connector.components && connector.components.length);
   if (hasControls) panels.push('controls');
   return panels;
 }
@@ -1193,12 +1171,12 @@ function renderConnectorTab(name) {
   const connPipelines = allPipelines.filter(p => (p.key || '').startsWith(name + '.'));
   const queuedKeys = new Set(queue.map(q => q.data && q.data.key).filter(Boolean));
   const safeN = name.replace(/'/g, "\\'");
-  const hasControls = (c.scenarios && c.scenarios.length) || (c.components && c.components.length);
+  const hasControls = c.components && c.components.length;
   const panel = getActiveConnectorPanel(name);
   const panelDefs = [
     { id: 'pipelines', label: 'Pipelines', count: connPipelines.length, visible: true },
     { id: 'notes', label: 'Notes', count: c.notes ? 1 : 0, visible: true },
-    { id: 'controls', label: 'Controls', count: hasControls ? ((c.scenarios || []).length + (c.components || []).length) : 0, visible: hasControls },
+    { id: 'controls', label: 'Controls', count: hasControls ? c.components.length : 0, visible: hasControls },
   ].filter(p => p.visible);
 
   let html = `<div class="connector-panel-tabs" role="tablist" aria-label="Connector sections">`;
@@ -1241,51 +1219,13 @@ function renderConnectorTab(name) {
     <div class="notes-block">${notesHtml}</div>
     </div>`;
   } else if (panel === 'controls' && hasControls) {
-    html += `<div role="tabpanel" id="conn-panel-controls" aria-labelledby="conn-tab-controls">
-    `;
-
-    if (c.scenarios && c.scenarios.length) {
-      c.scenarios.forEach((s, idx) => {
-        if (s.error) {
-          html += `<div class="scenario-card" style="border-color:#4a1a1a">
-            <div class="scenario-name">✗ ${escHtml(s.name || 'invalid scenario')}</div>
-            <div class="scenario-desc" style="color:#f85149">${escHtml(s.error)}</div>
-            <div class="scenario-meta">${escHtml(s.filename || '')}</div>
-          </div>`;
-          return;
-        }
-        const exec = s.execution || {};
-        const flywheel = exec.flywheel || {};
-        const fwStatus = (flywheel.status || 'explore');
-        const autoMode = (exec.auto && exec.auto.mode) ? exec.auto.mode : 'assist';
-        const formId = `scenario-form-${escHtml(name)}-${idx}`;
-        const argsJson = escHtml(JSON.stringify(s.required_args || []));
-        const execJson = escHtml(JSON.stringify(exec));
-        html += `<div class="scenario-card">
-          <div class="scenario-card-row">
-            <div class="scenario-info">
-              <div class="scenario-name-row">
-                <div class="scenario-name">${escHtml(s.name)}</div>
-                <span class="scenario-flywheel-badge ${escHtml(fwStatus)}">${escHtml(fwStatus)}</span>
-              </div>
-              <div class="scenario-desc">${escHtml((s.description || '').slice(0, 120))}</div>
-              <div class="scenario-meta">${s.step_count} steps${s.has_rollback ? ' · has rollback' : ''}${s.required_args && s.required_args.length ? ' · args: ' + escHtml(s.required_args.join(', ')) : ''} · ${escHtml(exec.tool || '?')} → ${escHtml(exec.pipeline || '?')} · auto:${escHtml(autoMode)}</div>
-            </div>
-            <button class="add-btn" onclick="toggleScenarioForm('${formId}','${safeN}','${escHtml(s.name).replace(/'/g,"\\'")}',${argsJson},${execJson})">▶ Run</button>
-          </div>
-          <div class="scenario-args-form" id="${formId}"></div>
-        </div>`;
-      });
-    }
-
-    if (c.components && c.components.length) {
-      c.components.forEach(comp => {
-        html += `<div class="component-slot">
-          <div class="component-label">📦 ${escHtml(comp.filename)} <span>${escHtml((comp.context || '').slice(0, 80))}</span></div>
-          <iframe src="/api/components/${encodeURIComponent(name)}/${encodeURIComponent(comp.filename)}" onload="resizeIframe(this)"></iframe>
-        </div>`;
-      });
-    }
+    html += `<div role="tabpanel" id="conn-panel-controls" aria-labelledby="conn-tab-controls">`;
+    c.components.forEach(comp => {
+      html += `<div class="component-slot">
+        <div class="component-label">${escHtml(comp.filename)} <span>${escHtml((comp.context || '').slice(0, 80))}</span></div>
+        <iframe src="/api/components/${encodeURIComponent(name)}/${encodeURIComponent(comp.filename)}" onload="resizeIframe(this)"></iframe>
+      </div>`;
+    });
     html += `</div>`;
   }
 
@@ -1400,102 +1340,6 @@ function submitNotesComment(connector) {
     data: { type: 'notes-comment', connector, comment },
   });
   input.focus();
-}
-
-// ── Scenario arg form ─────────────────────────────────────────────────────────
-function toggleScenarioForm(formId, connector, scenarioName, requiredArgs, execution) {
-  const form = document.getElementById(formId);
-  if (!form) return;
-  if (form.style.display === 'block') {
-    form.style.display = 'none';
-    return;
-  }
-  const safeConnector = connector.replace(/'/g, "\\'");
-  const safeScenario = scenarioName.replace(/'/g, "\\'");
-  const exec = execution || {};
-  const tool = exec.tool || 'icc_write';
-  const pipeline = exec.pipeline || '';
-  const mode = exec.mode || (tool === 'icc_read' ? 'read' : 'write');
-  const intentSignature = exec.intent_signature || `${connector}.${mode}.${pipeline}`;
-  const auto = (exec.auto && typeof exec.auto === 'object') ? exec.auto : {};
-  const autoMode = auto.mode || 'assist';
-  const crystallizeOnReady = !!auto.crystallize_when_synthesis_ready;
-  const flywheel = (exec.flywheel && typeof exec.flywheel === 'object') ? exec.flywheel : {};
-  const synthesisReady = !!flywheel.synthesis_ready;
-  const safeTool = String(tool).replace(/'/g, "\\'");
-  const safePipeline = String(pipeline).replace(/'/g, "\\'");
-  const safeIntent = String(intentSignature).replace(/'/g, "\\'");
-  const safeAutoMode = String(autoMode).replace(/'/g, "\\'");
-
-  if (!requiredArgs || !requiredArgs.length) {
-    // No args — enqueue immediately
-    const callArgs = { connector, pipeline, scenario: scenarioName };
-    enqueue({
-      id: ++queueIdSeq,
-      type: 'tool-call',
-      label: `Run: ${scenarioName}`,
-      subLabel: connector,
-      command: `${tool} connector=${connector} pipeline=${pipeline} scenario=${scenarioName}`,
-      data: {
-        type: 'tool-call',
-        intent_signature: intentSignature,
-        call: { tool, arguments: callArgs },
-        meta: { scope: `${connector}/${scenarioName}`, connector, scenario: scenarioName, source: 'cockpit.controls' },
-        auto: { mode: autoMode, crystallize_when_synthesis_ready: crystallizeOnReady },
-        flywheel: { status: flywheel.status || 'explore', synthesis_ready: synthesisReady },
-      },
-    });
-    return;
-  }
-
-  let fieldsHtml = requiredArgs.map(arg => {
-    const isSecret = ['token', 'password', 'secret', 'key'].some(s => arg.toLowerCase().includes(s));
-    const placeholder = isSecret ? '(will be provided via CC)' : '';
-    return `<div class="arg-row">
-      <label>${escHtml(arg)}</label>
-      <input type="text" data-arg="${escHtml(arg)}" class="${isSecret ? 'secret' : ''}" placeholder="${placeholder}" ${isSecret ? 'disabled' : ''} />
-    </div>`;
-  }).join('');
-
-  form.innerHTML = `${fieldsHtml}
-    <div class="scenario-meta" style="margin:4px 0 8px">Exec: ${escHtml(tool)} → ${escHtml(pipeline)} · intent: ${escHtml(intentSignature)} · auto:${escHtml(autoMode)}</div>
-    <div class="scenario-form-actions">
-      <button class="btn-sm" onclick="document.getElementById('${formId}').style.display='none'">Cancel</button>
-      <button class="btn-sm" style="border-color:#58a6ff;color:#58a6ff" onclick="submitScenarioForm('${formId}','${safeConnector}','${safeScenario}','${safeTool}','${safePipeline}','${safeIntent}','${safeAutoMode}',${crystallizeOnReady},${synthesisReady})">▶ Add to Queue</button>
-    </div>`;
-  form.style.display = 'block';
-  const first = form.querySelector('input:not([disabled])');
-  if (first) first.focus();
-}
-
-function submitScenarioForm(formId, connector, scenarioName, tool, pipeline, intentSignature, autoMode, crystallizeWhenReady, synthesisReady) {
-  const form = document.getElementById(formId);
-  if (!form) return;
-  const args = {};
-  form.querySelectorAll('input[data-arg]').forEach(inp => {
-    if (inp.disabled) {
-      args[inp.dataset.arg] = '(provide via CC)';
-    } else {
-      args[inp.dataset.arg] = inp.value;
-    }
-  });
-  form.style.display = 'none';
-  const callArgs = { ...args, connector, pipeline, scenario: scenarioName };
-  enqueue({
-    id: ++queueIdSeq,
-    type: 'tool-call',
-    label: `Run: ${scenarioName}`,
-    subLabel: connector,
-    command: `${tool} connector=${connector} pipeline=${pipeline} scenario=${scenarioName}`,
-    data: {
-      type: 'tool-call',
-      intent_signature: intentSignature,
-      call: { tool, arguments: callArgs },
-      meta: { scope: `${connector}/${scenarioName}`, connector, scenario: scenarioName, source: 'cockpit.controls' },
-      auto: { mode: autoMode, crystallize_when_synthesis_ready: !!crystallizeWhenReady },
-      flywheel: { synthesis_ready: !!synthesisReady },
-    },
-  });
 }
 
 // ── Action Queue ──────────────────────────────────────────────────────────────

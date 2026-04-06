@@ -178,9 +178,10 @@ Any red flag means stop and return to RED.
 When any `intent_signature` for this vertical reaches `stable` status in
 `policy://current`, prompt the operator:
 
-> "`<vertical>.*` 管道飞轮已稳定。是否也建立反向飞轮来观察操作者行为，
-> 让 AI 主动识别并接管重复操作？如需要，请调用
-> `writing-vertical-adapter` skill。"
+> "`<vertical>.*` pipeline flywheel is stable. Consider establishing a reverse
+> flywheel to observe operator behavior and proactively identify repetitive
+> actions the AI can take over. If needed, invoke the
+> `writing-vertical-adapter` skill."
 
 This connects the forward flywheel (AI learns to DO tasks) to the reverse
 flywheel (AI learns to RECOGNIZE when humans are doing those tasks repeatedly).

@@ -8,38 +8,40 @@ Always invoke the admin CLI via the **Emerge plugin root** (not the user's open 
 
 Steps:
 
-1. **启动服务器**（后台运行，`run_in_background: true`）：
+1. **Start the server** (background, `run_in_background: true`):
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" serve --open --port 0`
-   - 幂等：已有实例时直接返回已有 URL。
-   - 等 1 秒后读取输出，提取 URL（`Cockpit running at http://localhost:PORT`）。
+   - Idempotent: if an instance is already running, it returns the existing URL.
+   - Wait ~1 second, then read output to extract the URL (`Cockpit running at http://localhost:PORT`).
 
-2. **打印状态摘要**：
+2. **Print status summary**:
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" policy-status --pretty`
-   告知用户：URL、pipeline 总数/explore/canary/stable、有 consecutive_failures 的 pipeline。
+   Report to the user: URL, total pipeline count (explore/canary/stable), any pipelines with consecutive_failures.
 
-3. **读取 connector 资产**：
-   - 扫描 `~/.emerge/connectors/`，读各 connector 的 `NOTES.md`、`scenarios/*.yaml`、`cockpit/*.html`
-   - 为有丰富资产的 connector 生成 HTML 组件，inject 到 `POST http://localhost:<PORT>/api/inject-component`
+3. **Sense vertical assets and inject controls** (CC-driven, framework-agnostic):
+   - Read each connector's assets under `~/.emerge/connectors/` (`NOTES.md`, `scenarios/*.yaml`, `pipelines/`, `cockpit/*.html`, etc.)
+   - Based on your understanding of the vertical context, decide which assets are worth surfacing as Cockpit controls (e.g. scenario cards, quick actions)
+   - Inject generated HTML components via `POST http://localhost:<PORT>/api/inject-component`
+   - If no valuable vertical assets are found, do nothing — the framework does not scan or render scenarios on its own
 
-4. **进入 dispatch 循环**（核心）：
+4. **Enter the dispatch loop** (core):
 
-   反复执行以下步骤，直到用户明确说"关闭驾驶舱"：
+   Repeat the following steps until the user explicitly says "close cockpit":
 
-   a. 调用（阻塞，最长等 10 分钟）：
+   a. Call (blocking, up to 10 min timeout):
       `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" wait-for-submit`
-      - 该命令阻塞直到用户在浏览器点击 Submit，返回 `{"ok": true, "actions": [...], "action_count": N}`
-      - 若返回 `{"ok": false, "timeout": true}`：说明 10 分钟内无提交，重新调用（驾驶舱还开着）
+      - Blocks until the user clicks Submit in the browser; returns `{"ok": true, "actions": [...], "action_count": N}`
+      - If it returns `{"ok": false, "timeout": true}`: no submission within 10 min — call again (cockpit is still open)
 
-   b. 收到 actions 后，按序执行每条：
-      - `pipeline-set` → `repl_admin.py pipeline-set --pipeline-key <key> --set <field>=<value>`（每个 field 一个 --set）
+   b. Process received actions sequentially:
+      - `pipeline-set` → `repl_admin.py pipeline-set --pipeline-key <key> --set <field>=<value>` (one --set per field)
       - `pipeline-delete` → `repl_admin.py pipeline-delete --pipeline-key <key>`
-      - `notes-comment` → 在 `~/.emerge/connectors/<connector>/NOTES.md` 末尾追加 `\n\n<!-- <ISO timestamp> -->\n<comment>`
-      - `notes-edit` → 整体覆写 `~/.emerge/connectors/<connector>/NOTES.md`
-     - `tool-call` → **deterministic call only**：按 action 中的 `call.tool` + `call.arguments` 直接执行（`icc_read`/`icc_write`），禁止改写为自由推理代码
-       - 若 `auto.mode=auto` 且 `flywheel.synthesis_ready=true`，执行后追加一条 crystallize 建议（不阻塞当前结果返回）
-      - `crystallize-component` → 写入 `~/.emerge/connectors/<connector>/cockpit/<filename>.html` 和 `<filename>.context.md`
+      - `notes-comment` → append `\n\n<!-- <ISO timestamp> -->\n<comment>` to `~/.emerge/connectors/<connector>/NOTES.md`
+      - `notes-edit` → overwrite `~/.emerge/connectors/<connector>/NOTES.md` entirely
+      - `tool-call` → **deterministic call only**: execute exactly `call.tool` + `call.arguments` (`icc_read`/`icc_write`); do not rewrite as free-form reasoning
+        - If `auto.mode=auto` and `flywheel.synthesis_ready=true`, append a crystallization suggestion after execution (do not block the result)
+      - `crystallize-component` → write to `~/.emerge/connectors/<connector>/cockpit/<filename>.html` and `<filename>.context.md`
 
-   c. 执行完毕后，在终端简要汇报结果，然后回到步骤 a 继续等待下一次提交。
+   c. After execution, briefly report results in the terminal, then return to step a to await the next submission.
 
-5. **关闭驾驶舱**：用户说关闭/退出时：
+5. **Close the cockpit**: when the user says close/exit:
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" serve-stop`
