@@ -2224,3 +2224,44 @@ def test_connector_import_rejects_path_traversal(tmp_path: Path):
     assert result.get("ok") is False, f"Expected path traversal rejection, got: {result}"
     assert "path traversal" in result.get("error", "").lower()
     assert not (tmp_path / "evil.txt").exists()
+
+
+# ── auto-crystallize tests ────────────────────────────────────────────────────
+
+def _drive_exec_to_synthesis_ready(daemon, intent_sig: str, n: int = 21) -> None:
+    """Run icc_exec enough times to reach synthesis_ready (canary threshold)."""
+    for _ in range(n):
+        daemon.call_tool("icc_exec", {
+            "intent_signature": intent_sig,
+            "code": "__result = [{'val': 1}]",
+            "result_var": "__result",
+        })
+
+
+def test_auto_crystallize_creates_pipeline_at_synthesis_ready(tmp_path, monkeypatch):
+    import json
+    from scripts.emerge_daemon import EmergeDaemon
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path / "state"))
+    connector_root = tmp_path / "connectors"
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
+    daemon = EmergeDaemon()
+    _drive_exec_to_synthesis_ready(daemon, "mock.read.auto-crystallize-test")
+    py_path = connector_root / "mock" / "pipelines" / "read" / "auto-crystallize-test.py"
+    yaml_path = connector_root / "mock" / "pipelines" / "read" / "auto-crystallize-test.yaml"
+    assert py_path.exists(), "auto-crystallize should have created .py"
+    assert yaml_path.exists(), "auto-crystallize should have created .yaml"
+
+
+def test_auto_crystallize_does_not_overwrite_existing(tmp_path, monkeypatch):
+    from scripts.emerge_daemon import EmergeDaemon
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path / "state"))
+    connector_root = tmp_path / "connectors"
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
+    # Pre-create the pipeline file
+    py_dir = connector_root / "mock" / "pipelines" / "read"
+    py_dir.mkdir(parents=True)
+    existing = py_dir / "auto-crystallize-test.py"
+    existing.write_text("# human-authored\n", encoding="utf-8")
+    daemon = EmergeDaemon()
+    _drive_exec_to_synthesis_ready(daemon, "mock.read.auto-crystallize-test")
+    assert existing.read_text() == "# human-authored\n", "must not overwrite existing pipeline"

@@ -319,7 +319,7 @@ class SpanTracker:
                 if (
                     rec.get("intent_signature") == intent_signature
                     and rec.get("outcome") == "success"
-                    and int(rec.get("closed_at_ms", 0)) > best_ts
+                    and int(rec.get("closed_at_ms", 0)) >= best_ts
                 ):
                     best = rec
                     best_ts = int(rec["closed_at_ms"])

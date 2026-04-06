@@ -400,6 +400,39 @@ class EmergeDaemon:
             })}],
         }
 
+    def _auto_crystallize(
+        self,
+        *,
+        intent_signature: str,
+        connector: str,
+        pipeline_name: str,
+        mode: str,
+        target_profile: str = "default",
+    ) -> None:
+        """Auto-crystallize icc_exec WAL at synthesis_ready.
+
+        Silently skips if pipeline file already exists (human-authored wins).
+        Silently skips if no synthesizable WAL entry found.
+        Never raises — failures are swallowed to avoid disrupting policy bookkeeping.
+        """
+        from scripts.pipeline_engine import _USER_CONNECTOR_ROOT
+        try:
+            env_root_str = os.environ.get("EMERGE_CONNECTOR_ROOT", "").strip()
+            target_root = Path(env_root_str).expanduser() if env_root_str else _USER_CONNECTOR_ROOT
+            pipeline_dir = target_root / connector / "pipelines" / mode
+            py_path = pipeline_dir / f"{pipeline_name}.py"
+            if py_path.exists():
+                return  # never overwrite existing file
+            self._crystallize(
+                intent_signature=intent_signature,
+                connector=connector,
+                pipeline_name=pipeline_name,
+                mode=mode,
+                target_profile=target_profile,
+            )
+        except Exception:
+            pass  # auto-crystallize is best-effort
+
     @staticmethod
     def _tool_error(text: str) -> dict[str, Any]:
         return {"isError": True, "content": [{"type": "text", "text": text}]}
@@ -1495,6 +1528,20 @@ class EmergeDaemon:
                                     "session_id": self._base_session_id,
                                 },
                             )
+                        except Exception:
+                            pass
+                        # Auto-crystallize: derive connector/mode/name from intent_signature
+                        try:
+                            _parts = intent_sig.split(".", 2)
+                            if len(_parts) == 3:
+                                _conn, _mode, _name = _parts
+                                self._auto_crystallize(
+                                    intent_signature=intent_sig,
+                                    connector=_conn,
+                                    pipeline_name=_name,
+                                    mode=_mode,
+                                    target_profile=entry.get("target_profile", "default"),
+                                )
                         except Exception:
                             pass
         elif status == "canary":
