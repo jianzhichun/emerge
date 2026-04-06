@@ -1154,6 +1154,7 @@ def main() -> None:
     parser.add_argument("--pkg", default="", help="Package zip path for connector-import")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing connector/registry on import")
     parser.add_argument("--open", action="store_true", help="Open browser after starting cockpit server")
+    parser.add_argument("--port", type=int, default=0, help="Port for cockpit serve (0 = auto-assign free port)")
     args = parser.parse_args()
 
     if args.command == "status":
@@ -1219,7 +1220,7 @@ def main() -> None:
             overwrite=bool(args.overwrite),
         )
     elif args.command == "serve":
-        port = int(args.runner_port) if getattr(args, "runner_port", None) else 0
+        port = getattr(args, "port", 0) or 0
         open_b = getattr(args, "open", False)
         result = cmd_serve(port=port, open_browser=open_b)
         print(f"Cockpit running at {result['url']}")
