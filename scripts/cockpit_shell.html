@@ -11,8 +11,8 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .session-info { font-size: 11px; color: #8b949e; margin-left: auto; }
 .thresholds-bar { background: #0d1117; border-bottom: 1px solid #21262d; padding: 5px 16px; display: flex; gap: 16px; flex-wrap: wrap; font-size: 11px; color: #8b949e; align-items: center; }
 .thresholds-bar span b { color: #79c0ff; }
-.thresholds-bar .edit-link { margin-left: auto; color: #484f58; cursor: pointer; font-size: 10px; text-decoration: underline; }
-.thresholds-bar .edit-link:hover { color: #79c0ff; }
+.thresh-edit-btn { background: #161b22; border: 1px solid #388bfd; border-radius: 4px; color: #388bfd; font-size: 10px; padding: 2px 9px; cursor: pointer; flex-shrink: 0; font-family: inherit; }
+.thresh-edit-btn:hover { background: #1c2a3a; }
 /* Settings modal */
 .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.65); z-index: 100; align-items: center; justify-content: center; }
 .modal-overlay.open { display: flex; }
@@ -147,6 +147,10 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .component-label { font-size: 10px; color: #484f58; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
 /* Status bar */
 .status-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 22px; background: #161b22; border-top: 1px solid #21262d; display: flex; align-items: center; padding: 0 12px; font-size: 10px; color: #8b949e; gap: 16px; z-index: 10; }
+#refresh-timer { margin-left: auto; display: flex; align-items: center; gap: 5px; color: #484f58; }
+#refresh-timer .bar-track { width: 40px; height: 3px; background: #21262d; border-radius: 2px; overflow: hidden; }
+#refresh-timer .bar-fill { height: 100%; background: #388bfd; border-radius: 2px; transition: width 1s linear; }
+#refresh-timer .tick { font-size: 9px; min-width: 16px; text-align: right; }
 /* Overview dashboard */
 .overview-grid { display: grid; grid-template-columns: 230px 1fr; gap: 12px; margin-bottom: 14px; align-items: start; }
 .overview-donut-wrap { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
@@ -214,8 +218,8 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 </div>
 
 <div class="thresholds-bar" id="thresholds-bar">
-  <span>loading thresholds…</span>
-  <span class="edit-link" onclick="openSettingsModal()">⚙ Edit thresholds</span>
+  <button class="thresh-edit-btn" onclick="openSettingsModal()">⚙ Thresholds</button>
+  <span>loading…</span>
 </div>
 
 <!-- Settings modal -->
@@ -299,7 +303,10 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 <div class="status-bar">
   <span id="status-msg">Ready</span>
   <span id="cc-indicator" style="font-size:11px;margin-left:12px">○ CC offline</span>
-  <span id="last-refresh"></span>
+  <span id="refresh-timer">
+    <span class="bar-track"><span class="bar-fill" id="refresh-bar" style="width:100%"></span></span>
+    <span class="tick" id="refresh-tick">5s</span>
+  </span>
 </div>
 
 <script>
@@ -357,12 +364,34 @@ let queueIdSeq = 0;
 let ccListening = false;  // whether wait-for-submit is active in CC
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
+const REFRESH_INTERVAL_S = 5;
+let _refreshCountdown = REFRESH_INTERVAL_S;
+
 async function init() {
   await Promise.all([refreshPolicy(), refreshAssets(), refreshStatus()]);
   renderTabs();
   renderCurrentTab();
-  setInterval(refreshPolicy, 5000);
+  _resetRefreshTimer();
+  setInterval(async () => {
+    await refreshPolicy();
+    _resetRefreshTimer();
+  }, REFRESH_INTERVAL_S * 1000);
   setInterval(refreshStatus, 3000);
+  setInterval(_tickRefreshTimer, 1000);
+}
+
+function _resetRefreshTimer() {
+  _refreshCountdown = REFRESH_INTERVAL_S;
+  _tickRefreshTimer();
+}
+
+function _tickRefreshTimer() {
+  if (_refreshCountdown > 0) _refreshCountdown--;
+  const pct = (_refreshCountdown / REFRESH_INTERVAL_S) * 100;
+  const bar = document.getElementById('refresh-bar');
+  const tick = document.getElementById('refresh-tick');
+  if (bar) bar.style.width = pct + '%';
+  if (tick) tick.textContent = _refreshCountdown > 0 ? _refreshCountdown + 's' : '…';
 }
 
 async function refreshPolicy() {
@@ -372,7 +401,6 @@ async function refreshPolicy() {
     renderThresholds();
     renderTabs();
     refreshPolicyDisplay();
-    document.getElementById('last-refresh').textContent = 'refreshed ' + new Date().toLocaleTimeString();
   } catch(e) {
     document.getElementById('status-msg').textContent = 'Connection failed: ' + e.message;
   }
@@ -480,14 +508,15 @@ function renderThresholds() {
   if (!policyData) return;
   const t = policyData.thresholds || {};
   const bar = document.getElementById('thresholds-bar');
-  bar.innerHTML = [
-    `promote success≥<b>${t.promote_min_success_rate}</b>`,
-    `verify≥<b>${t.promote_min_verify_rate}</b>`,
-    `attempts≥<b>${t.promote_min_attempts}</b>`,
-    `rollback_failures=<b>${t.rollback_consecutive_failures}</b>`,
-    `stable_attempts≥<b>${t.stable_min_attempts}</b>`,
-  ].map(s => `<span>${s}</span>`).join('') +
-    `<span class="edit-link" onclick="openSettingsModal()">⚙ Edit</span>`;
+  bar.innerHTML =
+    `<button class="thresh-edit-btn" onclick="openSettingsModal()">⚙ Thresholds</button>` +
+    [
+      `promote success≥<b>${t.promote_min_success_rate}</b>`,
+      `verify≥<b>${t.promote_min_verify_rate}</b>`,
+      `attempts≥<b>${t.promote_min_attempts}</b>`,
+      `rollback_failures=<b>${t.rollback_consecutive_failures}</b>`,
+      `stable_attempts≥<b>${t.stable_min_attempts}</b>`,
+    ].map(s => `<span>${s}</span>`).join('');
   document.getElementById('session-info').textContent =
     `Session: ${(policyData.session_id || '').slice(0, 20)} · Goal: ${policyData.goal || 'unset'}`;
 }
