@@ -1328,3 +1328,20 @@ def test_cloud_server_policy_registry_tracks_pipeline_key(tmp_path: Path):
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_server_info_version_matches_plugin_json():
+    import json as _json
+    from pathlib import Path
+    daemon = EmergeDaemon()
+    req = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2024-11-05",
+        "capabilities": {},
+        "clientInfo": {"name": "test", "version": "0"},
+    }}
+    resp = daemon.handle_jsonrpc(req)
+    reported = resp["result"]["serverInfo"]["version"]
+    plugin_version = _json.loads(
+        (Path(__file__).resolve().parents[1] / ".claude-plugin" / "plugin.json").read_text()
+    )["version"]
+    assert reported == plugin_version, f"serverInfo.version={reported!r} != plugin.json version={plugin_version!r}"

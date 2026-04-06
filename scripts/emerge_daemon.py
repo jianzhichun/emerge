@@ -82,6 +82,11 @@ class EmergeDaemon:
             _settings = {}
         _default_metrics_path = default_emerge_home() / "metrics.jsonl"
         self._sink = get_sink(_settings, default_path=_default_metrics_path)
+        try:
+            _plugin_manifest = resolved_root / ".claude-plugin" / "plugin.json"
+            self._version = json.loads(_plugin_manifest.read_text(encoding="utf-8")).get("version", "0.0.0")
+        except Exception:
+            self._version = "0.0.0"
         self._operator_monitor: "OperatorMonitor | None" = None
 
     def _get_runner_router(self) -> "RunnerRouter | None":
@@ -514,7 +519,7 @@ class EmergeDaemon:
                         "prompts": {},
                         "logging": {},
                     },
-                    "serverInfo": {"name": "emerge", "version": "0.2.0"},
+                    "serverInfo": {"name": "emerge", "version": self._version},
                 },
             }
 
