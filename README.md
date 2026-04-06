@@ -157,6 +157,8 @@ The runner is a **stateless Python executor** — it accepts `icc_exec` only. Al
 | `EMERGE_SETTINGS_PATH`      | Override settings file path                                           | `~/.emerge/settings.json` |
 | `EMERGE_SCRIPT_ROOTS`       | Comma-separated allowed roots for `script_ref` resolution             | project root |
 | `EMERGE_TARGET_PROFILE`     | Default runner target profile for `repl_admin` commands              | `default` |
+| `EMERGE_COCKPIT_DISABLE`    | `1` to disable the `PendingActionMonitor` thread in the daemon       | enabled   |
+| `EMERGE_REPL_ROOT`          | Override the repl state root directory                               | `~/.emerge/repl` |
 | `CLAUDE_PLUGIN_DATA`        | Hook-state root used by `icc_reconcile` and hooks                    | `~/.claude/plugin-data` |
 
 

@@ -988,6 +988,10 @@ def cmd_submit_actions(actions: list) -> dict:
     return {"ok": True, "action_count": len(actions), "pending_path": str(pending_path)}
 
 
+class _ReuseAddrTCPServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+
+
 class _CockpitHandler(http.server.BaseHTTPRequestHandler):
     _shell_path: "Path" = Path(__file__).parent / "cockpit_shell.html"
     _injected: dict = {}  # connector -> list[str html]
@@ -1090,8 +1094,7 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
 
 def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
     """Start the cockpit HTTP server in a background daemon thread. Returns port and URL."""
-    server = socketserver.ThreadingTCPServer(("127.0.0.1", port), _CockpitHandler)
-    server.allow_reuse_address = True
+    server = _ReuseAddrTCPServer(("127.0.0.1", port), _CockpitHandler)
     actual_port = server.server_address[1]
     url = f"http://localhost:{actual_port}"
     t = threading.Thread(target=server.serve_forever, daemon=True)
