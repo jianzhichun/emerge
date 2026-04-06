@@ -32,8 +32,37 @@ def default_exec_root() -> Path:
     return default_emerge_home() / "repl"
 
 
-def default_hook_state_root() -> Path:
+def _plugin_data_pin_path() -> Path:
+    """Path to the file that records where CC set CLAUDE_PLUGIN_DATA at install time."""
+    return default_emerge_home() / "plugin_data_path"
+
+
+def resolve_plugin_data_root() -> Path:
+    """Return the directory CC uses for plugin state (CLAUDE_PLUGIN_DATA).
+
+    Priority:
+    1. CLAUDE_PLUGIN_DATA env var (set by CC in hook execution context)
+    2. Contents of ~/.emerge/plugin_data_path (written by setup hook)
+    3. Fallback: ~/.emerge/hook-state (legacy / dev environments)
+    """
+    import os as _os
+    env = _os.environ.get("CLAUDE_PLUGIN_DATA", "").strip()
+    if env:
+        return Path(env)
+    pin = _plugin_data_pin_path()
+    if pin.exists():
+        try:
+            pinned = pin.read_text(encoding="utf-8").strip()
+            if pinned:
+                return Path(pinned)
+        except OSError:
+            pass
     return default_emerge_home() / "hook-state"
+
+
+def default_hook_state_root() -> Path:
+    """Legacy name kept for compatibility — delegates to resolve_plugin_data_root()."""
+    return resolve_plugin_data_root()
 
 
 def stable_token(raw: str, *, max_prefix: int = 48) -> str:
