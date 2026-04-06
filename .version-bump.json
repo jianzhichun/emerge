@@ -10,7 +10,8 @@
       ".git",
       ".version-bump.json",
       "scripts/bump-version.sh",
-      "docs/"
+      "docs/",
+      ".claude/commands/release.md"
     ]
   }
 }
