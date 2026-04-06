@@ -718,3 +718,64 @@ def test_cli_connector_import(tmp_path):
     )
     assert result["ok"] is True
     assert (dest_connector_root / "mycon" / "pipelines" / "read" / "state.py").exists()
+
+
+def test_enrich_actions_injects_notes_content_for_notes_comment(tmp_path):
+    """_enrich_actions enriches notes-comment with current_notes, notes_path, instruction."""
+    connector_root = tmp_path / "connectors"
+    notes_path = connector_root / "zwcad" / "NOTES.md"
+    notes_path.parent.mkdir(parents=True)
+    notes_path.write_text("# ZWCAD Notes\nCOM quirk: init order matters.", encoding="utf-8")
+
+    actions = [{"type": "notes-comment", "connector": "zwcad", "comment": "fix the init order section"}]
+
+    import os
+    old = os.environ.get("EMERGE_CONNECTOR_ROOT")
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(connector_root)
+    try:
+        result = repl_admin._enrich_actions(actions)
+    finally:
+        if old is None:
+            os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+        else:
+            os.environ["EMERGE_CONNECTOR_ROOT"] = old
+
+    assert len(result) == 1
+    a = result[0]
+    assert "current_notes" in a
+    assert "COM quirk" in a["current_notes"]
+    assert "notes_path" in a
+    assert "instruction" in a
+    assert "do NOT blindly append" in a["instruction"]
+
+
+def test_enrich_actions_passes_through_non_notes_actions(tmp_path):
+    """_enrich_actions leaves non-notes-comment actions unchanged."""
+    actions = [
+        {"type": "pipeline-promote", "key": "zwcad.read.state"},
+        {"type": "pipeline-demote", "key": "zwcad.write.add-wall"},
+    ]
+    result = repl_admin._enrich_actions(actions)
+    assert result == actions
+
+
+def test_enrich_actions_handles_missing_notes_file(tmp_path):
+    """_enrich_actions still enriches even when NOTES.md doesn't exist yet."""
+    connector_root = tmp_path / "connectors"
+    connector_root.mkdir()
+    actions = [{"type": "notes-comment", "connector": "zwcad", "comment": "first note"}]
+
+    import os
+    old = os.environ.get("EMERGE_CONNECTOR_ROOT")
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(connector_root)
+    try:
+        result = repl_admin._enrich_actions(actions)
+    finally:
+        if old is None:
+            os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+        else:
+            os.environ["EMERGE_CONNECTOR_ROOT"] = old
+
+    a = result[0]
+    assert a["current_notes"] == ""
+    assert "instruction" in a

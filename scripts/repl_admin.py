@@ -1161,6 +1161,38 @@ def cmd_serve_stop() -> dict:
         return {"ok": False, "reason": str(e)}
 
 
+def _enrich_actions(actions: list) -> list:
+    """Enrich action payloads with context CC needs to execute them intelligently.
+
+    For ``notes-comment`` actions: inject the connector's current NOTES.md content
+    so CC can treat the comment as an edit instruction (not a literal append).
+    """
+    connector_root = _resolve_connector_root()
+    enriched = []
+    for action in actions:
+        a = dict(action)
+        if a.get("type") == "notes-comment":
+            connector = a.get("connector", "")
+            if connector:
+                notes_path = connector_root / connector / "NOTES.md"
+                try:
+                    notes_path.resolve().relative_to(connector_root.resolve())
+                    current_notes = notes_path.read_text(encoding="utf-8") if notes_path.exists() else ""
+                except (ValueError, OSError):
+                    current_notes = ""
+                a["current_notes"] = current_notes
+                a["notes_path"] = str(notes_path)
+                a["instruction"] = (
+                    "The user has provided an edit instruction for the connector's NOTES.md. "
+                    "Read `current_notes`, apply the `comment` as a natural-language edit "
+                    "(e.g. fix a mistake, add a detail, restructure a section, remove stale info). "
+                    "Rewrite the file at `notes_path` with your judgment — do NOT blindly append. "
+                    "Preserve existing useful content. Keep the file concise and accurate."
+                )
+        enriched.append(a)
+    return enriched
+
+
 def cmd_wait_for_submit(timeout_seconds: int = 600) -> dict:
     """Block until pending-actions.json appears, then return its actions.
 
@@ -1168,6 +1200,10 @@ def cmd_wait_for_submit(timeout_seconds: int = 600) -> dict:
     the user submits from the browser, then CC executes the returned actions.
     Renames the file to .processed.json before returning so the next call
     starts fresh.
+
+    Actions are enriched before return: ``notes-comment`` actions receive the
+    connector's current NOTES.md content so CC can edit intelligently rather
+    than appending blindly.
     """
     pending_path = _resolve_state_root() / "pending-actions.json"
     deadline = time.time() + timeout_seconds
@@ -1175,7 +1211,7 @@ def cmd_wait_for_submit(timeout_seconds: int = 600) -> dict:
         if pending_path.exists():
             try:
                 data = json.loads(pending_path.read_text(encoding="utf-8"))
-                actions = data.get("actions", [])
+                actions = _enrich_actions(data.get("actions", []))
                 submitted_at = data.get("submitted_at", 0)
                 processed = pending_path.with_name("pending-actions.processed.json")
                 pending_path.rename(processed)
