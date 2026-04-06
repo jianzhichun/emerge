@@ -36,6 +36,13 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .submit-btn:hover { background: #2a4a3a; }
 .submit-btn:disabled { opacity: 0.4; cursor: default; }
 .clear-btn { width: 100%; padding: 4px; background: none; border: none; color: #484f58; font-size: 11px; cursor: pointer; margin-top: 4px; }
+.prompt-input-area { padding: 8px 10px; border-bottom: 1px solid #21262d; flex-shrink: 0; display: flex; flex-direction: column; gap: 5px; }
+.prompt-textarea { width: 100%; box-sizing: border-box; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; color: #e6edf3; font-size: 11px; padding: 5px 7px; resize: vertical; min-height: 54px; font-family: inherit; }
+.prompt-textarea:focus { outline: none; border-color: #58a6ff; }
+.prompt-add-btn { background: #162032; border: 1px solid #1f6feb; border-radius: 4px; color: #58a6ff; font-size: 11px; padding: 4px 10px; cursor: pointer; align-self: flex-end; }
+.prompt-add-btn:hover { background: #1f3a5a; }
+.queue-item.prompt { background: #0d1117; border-color: #30363d; }
+.queue-item .action-label b.prompt-lbl { color: #d2a8ff; }
 /* Section headers inside connector tab */
 .sec-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #484f58; margin: 16px 0 6px; display: flex; align-items: center; gap: 8px; }
 .sec-label:first-child { margin-top: 0; }
@@ -193,6 +200,10 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
   <div class="main-panel" id="main-panel">loading...</div>
   <div class="queue-panel">
     <div class="queue-header">📋 待提交操作 (<span id="queue-count">0</span>)</div>
+    <div class="prompt-input-area">
+      <textarea class="prompt-textarea" id="prompt-input" placeholder="输入全局指令…&#10;如：重置所有 canary 管道到 explore 状态" rows="3" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){enqueuePrompt();event.preventDefault()}"></textarea>
+      <button class="prompt-add-btn" onclick="enqueuePrompt()">＋ 加入队列</button>
+    </div>
     <div class="queue-items" id="queue-items"></div>
     <div class="queue-footer">
       <button class="submit-btn" id="submit-btn" onclick="submitQueue()" disabled>✓ 提交给 CC 执行 (0)</button>
@@ -941,6 +952,21 @@ function submitScenarioForm(formId, connector, scenarioName) {
 }
 
 // ── Action Queue ──────────────────────────────────────────────────────────────
+function enqueuePrompt() {
+  const ta = document.getElementById('prompt-input');
+  const prompt = ta.value.trim();
+  if (!prompt) return;
+  enqueue({
+    id: ++queueIdSeq,
+    type: 'global-prompt',
+    label: '全局指令',
+    subLabel: prompt.length > 60 ? prompt.slice(0, 60) + '…' : prompt,
+    command: `global-prompt`,
+    data: { type: 'global-prompt', prompt },
+  });
+  ta.value = '';
+}
+
 function enqueue(item) {
   queue.push(item);
   renderQueue();
@@ -974,13 +1000,16 @@ function renderQueue() {
   }
   container.innerHTML = queue.map(item => {
     const isDel = item.type === 'pipeline-delete';
+    const isPrompt = item.type === 'global-prompt';
     const isPromote = item.label.includes('stable') || item.label.includes('canary');
-    const labelClass = isDel ? 'del' : isPromote ? 'promote' : '';
-    return `<div class="queue-item ${isDel ? 'delete' : ''}">
+    const labelClass = isDel ? 'del' : isPrompt ? 'prompt-lbl' : isPromote ? 'promote' : '';
+    const itemClass = isDel ? 'delete' : isPrompt ? 'prompt' : '';
+    const sub = isPrompt ? escHtml(item.data.prompt) : escHtml(item.subLabel);
+    return `<div class="queue-item ${itemClass}">
       <div class="action-label">
         <b class="${labelClass}">${escHtml(item.label)}</b>
-        <span>${escHtml(item.subLabel)}</span>
-        <span style="color:#30363d;font-size:9px">${escHtml(item.command.slice(0, 50))}</span>
+        <span style="${isPrompt ? 'white-space:pre-wrap;word-break:break-word' : ''}">${sub}</span>
+        ${!isPrompt ? `<span style="color:#30363d;font-size:9px">${escHtml(item.command.slice(0, 50))}</span>` : ''}
       </div>
       <button class="remove" onclick="dequeue(${item.id})" title="移除">✕</button>
     </div>`;

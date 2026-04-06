@@ -1198,12 +1198,21 @@ def _enrich_actions(actions: list) -> list:
 
     For ``notes-comment`` actions: inject the connector's current NOTES.md content
     so CC can treat the comment as an edit instruction (not a literal append).
+
+    For ``global-prompt`` actions: inject an instruction telling CC to execute
+    the ``prompt`` field as a direct user request.
     """
     connector_root = _resolve_connector_root()
     enriched = []
     for action in actions:
         a = dict(action)
-        if a.get("type") == "notes-comment":
+        if a.get("type") == "global-prompt":
+            a["instruction"] = (
+                "The user has queued a free-form instruction via the Emerge Cockpit. "
+                "Execute the `prompt` field as a direct user request. "
+                "Treat it exactly as if the user had typed it in the chat."
+            )
+        elif a.get("type") == "notes-comment":
             connector = a.get("connector", "")
             if connector:
                 notes_path = connector_root / connector / "NOTES.md"
