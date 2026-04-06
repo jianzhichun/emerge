@@ -1149,6 +1149,31 @@ def cmd_serve_stop() -> dict:
         return {"ok": False, "reason": str(e)}
 
 
+def cmd_wait_for_submit(timeout_seconds: int = 600) -> dict:
+    """Block until pending-actions.json appears, then return its actions.
+
+    Used by the /cockpit command's dispatch loop: CC calls this, blocks until
+    the user submits from the browser, then CC executes the returned actions.
+    Renames the file to .processed.json before returning so the next call
+    starts fresh.
+    """
+    pending_path = _resolve_state_root() / "pending-actions.json"
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if pending_path.exists():
+            try:
+                data = json.loads(pending_path.read_text(encoding="utf-8"))
+                actions = data.get("actions", [])
+                submitted_at = data.get("submitted_at", 0)
+                processed = pending_path.with_name("pending-actions.processed.json")
+                pending_path.rename(processed)
+                return {"ok": True, "actions": actions, "submitted_at": submitted_at, "action_count": len(actions)}
+            except (json.JSONDecodeError, OSError):
+                pass
+        time.sleep(0.5)
+    return {"ok": False, "timeout": True, "actions": []}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Local REPL state admin utility")
     parser.add_argument(
@@ -1169,6 +1194,7 @@ def main() -> None:
             "connector-import",
             "serve",
             "serve-stop",
+            "wait-for-submit",
         ],
     )
     parser.add_argument("--pretty", action="store_true", help="Render human-readable output")
@@ -1283,6 +1309,11 @@ def main() -> None:
     elif args.command == "serve-stop":
         out = cmd_serve_stop()
         print(json.dumps(out))
+        sys.exit(0)
+    elif args.command == "wait-for-submit":
+        timeout = int(getattr(args, "runner_port", None) or 600)  # reuse --runner-port as timeout if needed
+        out = cmd_wait_for_submit(timeout_seconds=timeout)
+        print(json.dumps(out, ensure_ascii=False))
         sys.exit(0)
     else:
         out = cmd_clear()
