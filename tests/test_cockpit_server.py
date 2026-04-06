@@ -153,3 +153,50 @@ def test_serve_component_path_traversal_rejected(tmp_path, monkeypatch):
         assert False, "Should have raised"
     except urllib.error.HTTPError as e:
         assert e.code == 404
+
+
+def test_cockpit_full_flow(tmp_path, monkeypatch):
+    """Full flow: start server, check assets, submit actions, verify pending-actions.json written."""
+    import urllib.request
+
+    # Set up connector with NOTES and scenario
+    connector_root = tmp_path / "connectors"
+    (connector_root / "myconn" / "scenarios").mkdir(parents=True)
+    (connector_root / "myconn" / "NOTES.md").write_text("# Notes\nsome info", encoding="utf-8")
+    (connector_root / "myconn" / "scenarios" / "test.yaml").write_text(
+        "name: test\ndescription: a test\nsteps:\n  - name: s1\n    type: http_get\n    base_url: '{{ env_url }}'\n    path: /health\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
+    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
+
+    from scripts.repl_admin import cmd_serve
+    r = cmd_serve(port=0, open_browser=False)
+    base = r["url"]
+
+    # Assets endpoint includes connector
+    with urllib.request.urlopen(f"{base}/api/assets") as resp:
+        assets = json.loads(resp.read())
+    assert "myconn" in assets["connectors"]
+    assert assets["connectors"]["myconn"]["notes"] is not None
+    assert len(assets["connectors"]["myconn"]["scenarios"]) == 1
+
+    # Submit actions
+    actions = [
+        {"type": "notes-comment", "connector": "myconn", "comment": "test comment"},
+        {"type": "scenario-run", "connector": "myconn", "scenario": "test", "args": {"env_url": "http://localhost"}},
+    ]
+    body = json.dumps({"actions": actions}).encode()
+    req = urllib.request.Request(
+        f"{base}/api/submit", data=body,
+        headers={"Content-Type": "application/json"}, method="POST"
+    )
+    with urllib.request.urlopen(req) as resp:
+        result = json.loads(resp.read())
+    assert result["ok"]
+
+    # pending-actions.json should be written
+    pending = json.loads((tmp_path / "pending-actions.json").read_text())
+    assert len(pending["actions"]) == 2
+    assert pending["actions"][0]["type"] == "notes-comment"
+    assert pending["actions"][1]["type"] == "scenario-run"

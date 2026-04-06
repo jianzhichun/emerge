@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/version-v0.2.6-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-205%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-215%20passing-brightgreen?logo=pytest)
 
 **Emerge** is a Claude Code plugin that implements a **muscle-memory flywheel**: repeated work is tracked via `icc_exec`, promoted through a **policy registry** (explore → canary → stable), and can be **crystallized** into connector pipelines so the same tasks run as structured `icc_read` / `icc_write` instead of ad-hoc code.
 
@@ -255,9 +255,20 @@ flowchart LR
 | Operator monitor         | `scripts/operator_monitor.py`                                                                                                                  |
 | Ops / bootstrap          | `scripts/repl_admin.py`                                                                                                                        |
 | Test connector (mock)    | `tests/connectors/mock/pipelines/`                                                                                                             |
-| Slash commands           | `commands/` (`init`, `policy`, `runner-status`)                                                                                                |
+| Slash commands           | `commands/` (`init`, `policy`, `cockpit`, `runner-status`)                                                                                     |
 | Skills                   | `skills/` (`initializing-vertical-flywheel`, `remote-runner-dev`, `writing-vertical-adapter`, `operator-monitor-debug`, `policy-optimization`) |
 | Reference (submodule)    | `references/claude-code`                                                                                                                       |
+
+
+**Slash commands:**
+
+
+| Command          | Description                                                                                      |
+| ---------------- | ------------------------------------------------------------------------------------------------ |
+| `/init`          | Initialize a vertical flywheel from natural language context                                     |
+| `/policy`        | Show Emerge flywheel policy status dashboard                                                     |
+| `/cockpit`       | Browser dashboard — view flywheel state, queue pipeline/NOTES/scenario actions, submit to CC    |
+| `/runner-status` | Show remote runner health status                                                                 |
 
 
 ## Requirements
@@ -272,7 +283,7 @@ flowchart LR
 python -m pytest tests -q
 ```
 
-Current baseline: **192** tests passing.
+Current baseline: **215** tests passing.
 
 ## Repository layout
 
