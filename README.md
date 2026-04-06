@@ -1,6 +1,6 @@
 # Emerge
 
-![Version](https://img.shields.io/badge/version-v0.3.15-blue)
+![Version](https://img.shields.io/badge/version-v0.3.16-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
 ![Tests](https://img.shields.io/badge/tests-215%20passing-brightgreen?logo=pytest)
