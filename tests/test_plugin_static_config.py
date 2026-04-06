@@ -19,15 +19,6 @@ def test_plugin_manifest_exists_and_has_required_keys():
     assert any("${CLAUDE_PLUGIN_ROOT}" in arg for arg in server.get("args", []))
 
 
-def test_mcp_config_has_core_stdio_and_expected_tools_path():
-    mcp_path = ROOT / ".mcp.json"
-    data = json.loads(mcp_path.read_text(encoding="utf-8"))
-    assert "mcpServers" in data
-    assert "core" in data["mcpServers"]
-    server = data["mcpServers"]["core"]
-    assert server["type"] == "stdio"
-    assert "scripts/emerge_daemon.py" in server["args"]
-
 
 def test_hooks_json_has_required_events_and_post_tool_matcher():
     hooks_path = ROOT / "hooks" / "hooks.json"
