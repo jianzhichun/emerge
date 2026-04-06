@@ -97,6 +97,33 @@ def main() -> None:
         elif mode not in ("read", "write"):
             error_msg = f"icc_crystallize: 'mode' must be read or write, got {mode!r}"
 
+    if tool_name.endswith("__icc_span_open"):
+        import re as _re
+        intent_signature = str(arguments.get("intent_signature", "")).strip()
+        if not intent_signature:
+            error_msg = (
+                "icc_span_open: 'intent_signature' is required "
+                "(e.g. 'lark.read.get-doc'). "
+                "Format: <connector>.(read|write).<name>"
+            )
+        elif not _re.compile(r'^[a-z][a-z0-9_-]*\.(read|write)\.[a-z][a-z0-9_./-]*$').match(intent_signature):
+            error_msg = (
+                f"icc_span_open: intent_signature {intent_signature!r} is invalid. "
+                "Must be <connector>.(read|write).<name> — e.g. 'lark.read.get-doc'."
+            )
+
+    if tool_name.endswith("__icc_span_close"):
+        outcome = str(arguments.get("outcome", "")).strip()
+        if outcome not in ("success", "failure", "aborted"):
+            error_msg = (
+                f"icc_span_close: 'outcome' must be success/failure/aborted, got {outcome!r}"
+            )
+
+    if tool_name.endswith("__icc_span_approve"):
+        intent_signature = str(arguments.get("intent_signature", "")).strip()
+        if not intent_signature:
+            error_msg = "icc_span_approve: 'intent_signature' is required"
+
     if error_msg:
         # Return a block decision to reject the tool call
         out = {"decision": "block", "reason": error_msg}

@@ -366,3 +366,49 @@ def test_post_tool_use_preserves_active_span_id_across_calls(tmp_path):
     after = json.loads((hook_state / "state.json").read_text())
     assert after.get("active_span_id") == "span-xyz", \
         "active_span_id must persist in state.json after post_tool_use"
+
+
+def _run_pre_hook(payload: dict) -> dict:
+    import json, subprocess, sys, os
+    from pathlib import Path
+    result = subprocess.run(
+        [sys.executable, "hooks/pre_tool_use.py"],
+        input=json.dumps(payload),
+        capture_output=True, text=True,
+        cwd=str(Path(__file__).parents[1]),
+    )
+    return json.loads(result.stdout) if result.stdout.strip() else {}
+
+
+def test_pre_hook_blocks_span_open_missing_intent():
+    out = _run_pre_hook({"tool_name": "emerge__icc_span_open", "tool_input": {}})
+    assert out.get("decision") == "block"
+
+def test_pre_hook_blocks_span_open_invalid_intent():
+    out = _run_pre_hook({"tool_name": "emerge__icc_span_open",
+                         "tool_input": {"intent_signature": "no_mode_segment"}})
+    assert out.get("decision") == "block"
+
+def test_pre_hook_allows_valid_span_open():
+    out = _run_pre_hook({"tool_name": "emerge__icc_span_open",
+                         "tool_input": {"intent_signature": "lark.read.get-doc"}})
+    assert out.get("decision") != "block"
+
+def test_pre_hook_blocks_span_close_bad_outcome():
+    out = _run_pre_hook({"tool_name": "emerge__icc_span_close",
+                         "tool_input": {"outcome": "done"}})
+    assert out.get("decision") == "block"
+
+def test_pre_hook_allows_valid_span_close():
+    out = _run_pre_hook({"tool_name": "emerge__icc_span_close",
+                         "tool_input": {"outcome": "success"}})
+    assert out.get("decision") != "block"
+
+def test_pre_hook_blocks_span_approve_missing_intent():
+    out = _run_pre_hook({"tool_name": "emerge__icc_span_approve", "tool_input": {}})
+    assert out.get("decision") == "block"
+
+def test_pre_hook_allows_valid_span_approve():
+    out = _run_pre_hook({"tool_name": "emerge__icc_span_approve",
+                         "tool_input": {"intent_signature": "lark.write.create-doc"}})
+    assert out.get("decision") != "block"
