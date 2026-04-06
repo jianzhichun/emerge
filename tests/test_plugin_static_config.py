@@ -52,11 +52,10 @@ def test_hooks_json_commands_use_claude_plugin_root():
                 )
 
 
-def test_policy_command_uses_plugin_root_for_repl_admin():
-    policy_md = (ROOT / "commands" / "policy.md").read_text(encoding="utf-8")
-    assert "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" in policy_md
-    assert "policy-status" in policy_md
-    assert "python3 scripts/repl_admin.py" not in policy_md
+def test_cockpit_command_uses_plugin_root_for_repl_admin():
+    cockpit_md = (ROOT / "commands" / "cockpit.md").read_text(encoding="utf-8")
+    assert "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" in cockpit_md
+    assert "policy-status" in cockpit_md
 
 
 def test_init_command_has_valid_description_frontmatter():

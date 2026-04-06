@@ -122,7 +122,7 @@ def test_repl_admin_policy_status_reports_pipeline_registry(tmp_path: Path):
         assert policy["pipeline_count"] >= 1
         assert policy["thresholds"]["promote_min_attempts"] == 20
         keys = [item["key"] for item in policy["pipelines"]]
-        assert "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py" in keys
+        assert "zwcad.add_wall" in keys
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
@@ -154,7 +154,7 @@ def test_repl_admin_policy_status_pretty_output(tmp_path: Path):
         assert "Session:" in pretty
         assert "Thresholds:" in pretty
         assert "Pipelines:" in pretty
-        assert "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py" in pretty
+        assert "zwcad.add_wall" in pretty
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
@@ -197,8 +197,8 @@ def test_repl_admin_policy_status_includes_policy_execution_metrics(tmp_path: Pa
 
         policy = _run_admin(["policy-status"], env)
         by_key = {item["key"]: item for item in policy["pipelines"]}
-        stop_key = "pipeline::mock.write.add-wall"
-        rb_key = "pipeline::mock.write.add-wall-rollback"
+        stop_key = "mock.write.add-wall"
+        rb_key = "mock.write.add-wall-rollback"
         assert by_key[stop_key]["policy_enforced_count"] >= 1
         assert by_key[stop_key]["stop_triggered_count"] >= 1
         assert by_key[stop_key]["last_policy_action"] == "stop"
@@ -508,8 +508,8 @@ def test_connector_export_produces_zip(tmp_path):
     state_root.mkdir()
     (state_root / "pipelines-registry.json").write_text(json.dumps({
         "pipelines": {
-            "pipeline::mycon.read.state": {"status": "explore", "rollout_pct": 0},
-            "pipeline::other.read.state": {"status": "stable", "rollout_pct": 100},
+            "mycon.read.state": {"status": "explore", "rollout_pct": 0},
+            "other.read.state": {"status": "stable", "rollout_pct": 100},
         }
     }))
 
@@ -534,8 +534,8 @@ def test_connector_export_produces_zip(tmp_path):
         manifest = json.loads(zf.read("manifest.json"))
         assert manifest["name"] == "mycon"
         reg = json.loads(zf.read("pipelines-registry.json"))
-        assert "pipeline::mycon.read.state" in reg["pipelines"]
-        assert "pipeline::other.read.state" not in reg["pipelines"]
+        assert "mycon.read.state" in reg["pipelines"]
+        assert "other.read.state" not in reg["pipelines"]
 
 
 def test_connector_export_missing_connector_returns_error(tmp_path):
@@ -566,7 +566,7 @@ def _make_pkg(tmp_path: Path, connector: str = "mycon") -> Path:
     state_root = tmp_path / "src_repl"
     state_root.mkdir(exist_ok=True)
     (state_root / "pipelines-registry.json").write_text(json.dumps({
-        "pipelines": {f"pipeline::{connector}.read.state": {"status": "explore", "rollout_pct": 0}}
+        "pipelines": {f"{connector}.read.state": {"status": "explore", "rollout_pct": 0}}
     }))
 
     out_zip = tmp_path / f"{connector}-pkg.zip"
@@ -599,11 +599,11 @@ def test_connector_import_extracts_files_and_merges_registry(tmp_path):
     assert result["ok"] is True
     assert result["connector"] == "mycon"
     assert (dest_connector_root / "mycon" / "pipelines" / "read" / "state.py").exists()
-    assert "pipeline::mycon.read.state" in result["pipelines_merged"]
+    assert "mycon.read.state" in result["pipelines_merged"]
     assert result["pipelines_skipped"] == []
 
     reg = json.loads((dest_state_root / "pipelines-registry.json").read_text())
-    assert "pipeline::mycon.read.state" in reg["pipelines"]
+    assert "mycon.read.state" in reg["pipelines"]
 
 
 def test_connector_import_conflict_no_overwrite_returns_error(tmp_path):
@@ -639,7 +639,7 @@ def test_connector_import_overwrite_replaces_files_and_registry(tmp_path):
     dest_state_root = tmp_path / "dest_repl"
     dest_state_root.mkdir()
     (dest_state_root / "pipelines-registry.json").write_text(json.dumps({
-        "pipelines": {"pipeline::mycon.read.state": {"status": "stable", "rollout_pct": 100}}
+        "pipelines": {"mycon.read.state": {"status": "stable", "rollout_pct": 100}}
     }))
 
     result = repl_admin.cmd_connector_import(
@@ -652,7 +652,7 @@ def test_connector_import_overwrite_replaces_files_and_registry(tmp_path):
     assert result["ok"] is True
     assert existing_file.read_text() == "# state"
     reg = json.loads((dest_state_root / "pipelines-registry.json").read_text())
-    assert reg["pipelines"]["pipeline::mycon.read.state"]["status"] == "explore"
+    assert reg["pipelines"]["mycon.read.state"]["status"] == "explore"
 
 
 def test_cli_connector_export(tmp_path):
@@ -691,7 +691,7 @@ def test_cli_connector_import(tmp_path):
     src_state_root = tmp_path / "src_repl"
     src_state_root.mkdir()
     (src_state_root / "pipelines-registry.json").write_text(json.dumps({
-        "pipelines": {"pipeline::mycon.read.state": {"status": "explore", "rollout_pct": 0}}
+        "pipelines": {"mycon.read.state": {"status": "explore", "rollout_pct": 0}}
     }))
     pkg = tmp_path / "mycon-pkg.zip"
     repl_admin.cmd_connector_export(

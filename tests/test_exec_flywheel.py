@@ -100,7 +100,7 @@ def test_icc_exec_success_updates_candidate_registry(tmp_path: Path):
             / "candidates.json"
         )
         data = json.loads(registry.read_text(encoding="utf-8"))
-        key = "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py"
+        key = "zwcad.add_wall"
         assert key in data["candidates"]
         assert data["candidates"][key]["attempts"] == 1
         assert data["candidates"][key]["successes"] == 1
@@ -131,7 +131,7 @@ def test_auto_promotes_candidate_to_canary_when_thresholds_met(tmp_path: Path):
 
         reg = tmp_path / "state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
-        key = "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py"
+        key = "zwcad.add_wall"
         assert data["pipelines"][key]["status"] == "canary"
         assert data["pipelines"][key]["rollout_pct"] == 20
     finally:
@@ -180,7 +180,7 @@ def test_auto_rolls_back_canary_on_two_consecutive_failures(tmp_path: Path):
 
         reg = tmp_path / "state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
-        key = "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py"
+        key = "zwcad.add_wall"
         assert data["pipelines"][key]["status"] == "explore"
         assert data["pipelines"][key]["last_transition_reason"] == "two_consecutive_failures"
     finally:
@@ -219,7 +219,7 @@ def test_canary_sampling_progresses_to_stable(tmp_path: Path):
             )
         reg = tmp_path / "state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
-        key = "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py"
+        key = "zwcad.add_wall"
         assert data["pipelines"][key]["status"] == "stable"
         assert data["pipelines"][key]["rollout_pct"] == 100
     finally:
@@ -252,7 +252,7 @@ def test_stable_rolls_back_on_window_failure_rate(tmp_path: Path):
 
         reg = tmp_path / "state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
-        key = "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py"
+        key = "zwcad.add_wall"
         assert data["pipelines"][key]["status"] == "explore"
         assert data["pipelines"][key]["last_transition_reason"] == "window_failure_rate"
     finally:
@@ -300,7 +300,7 @@ def test_exec_degraded_argument_is_not_trusted_for_policy_counters(tmp_path: Pat
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
         daemon = EmergeDaemon(root=ROOT)
-        key = "mycader-1.zwcad::zwcad.add_wall::connectors/cade/actions/zwcad_add_wall.py"
+        key = "zwcad.add_wall"
         common = {
             "mode": "inline_code",
             "code": "x = 1",

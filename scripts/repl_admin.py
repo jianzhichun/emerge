@@ -155,10 +155,12 @@ def cmd_policy_status() -> dict:
 
 
 def _normalize_pipeline_key(key: str) -> str:
-    """Accept 'mock.read.layers' or 'pipeline::mock.read.layers' — always return full key."""
+    """Key is the plain intent signature (e.g. 'mock.read.layers'). Strip legacy prefixes."""
     key = key.strip()
-    if not key.startswith("pipeline::"):
-        key = f"pipeline::{key}"
+    for prefix in ("pipeline::", "flywheel::", "default::"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
     return key
 
 
@@ -251,11 +253,11 @@ def cmd_connector_export(
     s_root = state_root if state_root is not None else _resolve_state_root()
     _, registry_data = _load_registry(s_root)
 
-    prefix = f"pipeline::{connector}."
+    prefix = f"{connector}."
     filtered = {
         k: v
         for k, v in registry_data.get("pipelines", {}).items()
-        if k.startswith(prefix)
+        if k.startswith(prefix) or k == connector
     }
 
     out_path = Path(out)

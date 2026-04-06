@@ -11,13 +11,16 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .session-info { font-size: 11px; color: #8b949e; margin-left: auto; }
 .thresholds-bar { background: #0d1117; border-bottom: 1px solid #21262d; padding: 6px 16px; display: flex; gap: 20px; flex-wrap: wrap; font-size: 11px; color: #8b949e; }
 .thresholds-bar span b { color: #79c0ff; }
-.tabs { display: flex; border-bottom: 1px solid #30363d; background: #161b22; }
-.tab { padding: 8px 16px; cursor: pointer; font-size: 12px; color: #8b949e; border-bottom: 2px solid transparent; }
+.tabs { display: flex; border-bottom: 1px solid #30363d; background: #161b22; overflow-x: auto; flex-shrink: 0; }
+.tabs::-webkit-scrollbar { height: 3px; }
+.tabs::-webkit-scrollbar-thumb { background: #30363d; }
+.tab { padding: 8px 16px; cursor: pointer; font-size: 12px; color: #8b949e; border-bottom: 2px solid transparent; white-space: nowrap; flex-shrink: 0; }
 .tab.active { color: #e6edf3; border-bottom-color: #58a6ff; }
-.layout { display: flex; height: calc(100vh - 90px); }
-.main-panel { flex: 1; overflow-y: auto; padding: 12px 16px; }
-.queue-panel { width: 280px; border-left: 1px solid #21262d; display: flex; flex-direction: column; }
-.queue-header { padding: 10px 14px; font-size: 11px; color: #58a6ff; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #21262d; }
+.tab .warn { color: #f85149; margin-left: 4px; }
+.layout { display: flex; height: calc(100vh - 130px); }
+.main-panel { flex: 1; overflow-y: auto; padding: 12px 16px 28px; }
+.queue-panel { width: 300px; border-left: 1px solid #21262d; display: flex; flex-direction: column; }
+.queue-header { padding: 10px 14px; font-size: 11px; color: #58a6ff; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #21262d; flex-shrink: 0; }
 .queue-items { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 4px; }
 .queue-item { background: #0d1a0d; border: 1px solid #2a4a2a; border-radius: 4px; padding: 6px 8px; font-size: 11px; display: flex; align-items: flex-start; gap: 6px; }
 .queue-item.delete { background: #1a0d0d; border-color: #4a1a1a; }
@@ -28,16 +31,22 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .queue-item .action-label span { color: #8b949e; font-size: 10px; }
 .queue-item button.remove { background: none; border: none; color: #484f58; cursor: pointer; font-size: 14px; line-height: 1; padding: 0; }
 .queue-item button.remove:hover { color: #f85149; }
-.queue-footer { padding: 10px 12px; border-top: 1px solid #21262d; }
+.queue-footer { padding: 10px 12px; border-top: 1px solid #21262d; flex-shrink: 0; }
 .submit-btn { width: 100%; padding: 8px; background: #1a3a2a; border: 1px solid #3fb950; border-radius: 5px; color: #3fb950; font-size: 13px; font-weight: 600; cursor: pointer; }
 .submit-btn:hover { background: #2a4a3a; }
 .submit-btn:disabled { opacity: 0.4; cursor: default; }
 .clear-btn { width: 100%; padding: 4px; background: none; border: none; color: #484f58; font-size: 11px; cursor: pointer; margin-top: 4px; }
+/* Section headers inside connector tab */
+.sec-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #484f58; margin: 16px 0 6px; display: flex; align-items: center; gap: 8px; }
+.sec-label:first-child { margin-top: 0; }
+.sec-label .sec-count { color: #8b949e; }
+/* Overview section headers */
 .section-header { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin: 14px 0 6px; }
 .section-header.critical { color: #f85149; }
 .section-header.canary { color: #d29922; }
 .section-header.stable { color: #3fb950; }
 .section-header.explore { color: #8b949e; }
+/* Pipeline cards */
 .pipeline-card { background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 8px 12px; margin-bottom: 4px; }
 .pipeline-card.critical { border-left: 3px solid #f85149; }
 .pipeline-card.canary { border-left: 3px solid #d29922; }
@@ -52,27 +61,48 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .pipeline-metrics { font-size: 10px; color: #8b949e; margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; }
 .pipeline-metrics .warn { color: #f85149; }
 .pipeline-metrics .good { color: #3fb950; }
-.action-select { font-size: 11px; background: #1c2128; border: 1px solid #30363d; color: #8b949e; border-radius: 3px; padding: 2px 4px; cursor: pointer; }
-.action-select.active { border-color: #58a6ff; color: #58a6ff; }
-.connector-block { background: #161b22; border: 1px solid #21262d; border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
-.connector-header { background: #1c2128; padding: 10px 14px; display: flex; align-items: center; gap: 10px; }
-.connector-name { font-size: 13px; font-weight: 700; color: #ce93d8; }
-.connector-body { padding: 10px 14px; }
-.notes-block { background: #0d1117; border: 1px solid #1b2d1b; border-radius: 4px; padding: 8px 10px; font-size: 11px; color: #8b949e; white-space: pre-wrap; margin-bottom: 8px; }
-.notes-actions { display: flex; gap: 6px; margin-bottom: 8px; }
+.pipeline-actions { display: flex; gap: 4px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.act-btn { padding: 2px 8px; font-size: 10px; border-radius: 3px; cursor: pointer; border: 1px solid #30363d; background: #1c2128; color: #8b949e; white-space: nowrap; }
+.act-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+.act-btn.promote { border-color: #2a4a2a; color: #3fb950; }
+.act-btn.promote:hover { background: #1b2d1b; }
+.act-btn.demote { border-color: #4a3a10; color: #d29922; }
+.act-btn.demote:hover { background: #2d2208; }
+.act-btn.danger { border-color: #4a1a1a; color: #f85149; }
+.act-btn.danger:hover { background: #1a0d0d; }
+/* Notes */
+.notes-block { background: #0d1117; border: 1px solid #1b2d1b; border-radius: 4px; padding: 8px 10px; font-size: 11px; color: #8b949e; white-space: pre-wrap; margin-bottom: 6px; max-height: 200px; overflow-y: auto; }
+.notes-actions { display: flex; gap: 6px; margin-bottom: 4px; }
 .btn-sm { padding: 3px 10px; font-size: 11px; background: #1c2128; border: 1px solid #30363d; border-radius: 3px; color: #8b949e; cursor: pointer; }
 .btn-sm:hover { border-color: #58a6ff; color: #58a6ff; }
-.scenario-card { background: #0d1117; border: 1px solid #1a2a3a; border-radius: 4px; padding: 7px 10px; margin-bottom: 5px; display: flex; align-items: flex-start; gap: 8px; }
+/* Inline comment form */
+.comment-form { display: none; margin-top: 6px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; padding: 8px; }
+.comment-form textarea { width: 100%; background: #0d1117; border: 1px solid #30363d; color: #ccc; border-radius: 3px; padding: 6px 8px; font-size: 11px; font-family: inherit; resize: vertical; min-height: 60px; }
+.comment-form textarea:focus { outline: none; border-color: #58a6ff; }
+.comment-form-actions { display: flex; gap: 6px; margin-top: 6px; justify-content: flex-end; }
+/* Scenario cards */
+.scenario-card { background: #0d1117; border: 1px solid #1a2a3a; border-radius: 4px; padding: 7px 10px; margin-bottom: 5px; }
+.scenario-card-row { display: flex; align-items: flex-start; gap: 8px; }
 .scenario-info { flex: 1; }
 .scenario-name { font-size: 12px; color: #e6edf3; font-weight: 600; }
 .scenario-desc { font-size: 10px; color: #8b949e; margin-top: 2px; }
 .scenario-meta { font-size: 10px; color: #484f58; margin-top: 2px; }
 .add-btn { padding: 3px 10px; background: #1a2a3a; border: 1px solid #58a6ff; border-radius: 3px; color: #58a6ff; font-size: 11px; cursor: pointer; flex-shrink: 0; }
 .add-btn:hover { background: #1f3a5a; }
-.component-slot { border: 1px dashed #30363d; border-radius: 4px; padding: 6px; margin-top: 6px; }
+/* Scenario arg form */
+.scenario-args-form { display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid #1a2a3a; }
+.arg-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.arg-row label { font-size: 10px; color: #58a6ff; width: 120px; flex-shrink: 0; }
+.arg-row input { flex: 1; background: #0d1117; border: 1px solid #30363d; color: #ccc; border-radius: 3px; padding: 4px 7px; font-size: 11px; font-family: inherit; }
+.arg-row input:focus { outline: none; border-color: #58a6ff; }
+.arg-row input.secret { color: #484f58; font-style: italic; }
+.scenario-form-actions { display: flex; gap: 6px; justify-content: flex-end; }
+/* Component slots */
+.component-slot { border: 1px dashed #30363d; border-radius: 4px; padding: 6px; margin-bottom: 8px; }
 .component-slot iframe { width: 100%; border: none; min-height: 200px; }
 .component-label { font-size: 10px; color: #484f58; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
-.status-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 22px; background: #161b22; border-top: 1px solid #21262d; display: flex; align-items: center; padding: 0 12px; font-size: 10px; color: #8b949e; gap: 16px; }
+/* Status bar */
+.status-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 22px; background: #161b22; border-top: 1px solid #21262d; display: flex; align-items: center; padding: 0 12px; font-size: 10px; color: #8b949e; gap: 16px; z-index: 10; }
 </style>
 </head>
 <body>
@@ -84,10 +114,7 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 
 <div class="thresholds-bar" id="thresholds-bar">loading thresholds...</div>
 
-<div class="tabs">
-  <div class="tab active" onclick="switchTab('status')">By Status</div>
-  <div class="tab" onclick="switchTab('connector')">By Connector</div>
-</div>
+<div class="tabs" id="tabs-bar"><div class="tab active">Overview</div></div>
 
 <div class="layout">
   <div class="main-panel" id="main-panel">loading...</div>
@@ -111,12 +138,13 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 let policyData = null;
 let assetsData = null;
 let queue = [];
-let currentTab = 'status';
+let currentTab = 'overview';
 let queueIdSeq = 0;
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
 async function init() {
   await Promise.all([refreshPolicy(), refreshAssets()]);
+  renderTabs();
   renderCurrentTab();
   setInterval(refreshPolicy, 5000);
 }
@@ -126,7 +154,8 @@ async function refreshPolicy() {
     const r = await fetch('/api/policy');
     policyData = await r.json();
     renderThresholds();
-    if (currentTab === 'status') renderStatusTab();
+    renderTabs();
+    renderCurrentTab();
     document.getElementById('last-refresh').textContent = '刷新: ' + new Date().toLocaleTimeString();
   } catch(e) {
     document.getElementById('status-msg').textContent = '连接失败: ' + e.message;
@@ -137,22 +166,38 @@ async function refreshAssets() {
   try {
     const r = await fetch('/api/assets');
     assetsData = await r.json();
-    if (currentTab === 'connector') renderConnectorTab();
+    renderTabs();
+    renderCurrentTab();
   } catch(e) {}
 }
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
+function renderTabs() {
+  const connectors = assetsData ? Object.keys(assetsData.connectors || {}) : [];
+  const threshold = policyData ? (policyData.thresholds?.rollback_consecutive_failures || 2) : 2;
+  const allPipelines = policyData ? (policyData.pipelines || []) : [];
+
+  let html = `<div class="tab ${currentTab === 'overview' ? 'active' : ''}" onclick="switchTab('overview')">Overview</div>`;
+
+  connectors.forEach(name => {
+    const connPipelines = allPipelines.filter(p => (p.key || '').includes(name));
+    const hasCritical = connPipelines.some(p => (p.consecutive_failures || 0) >= threshold);
+    const warn = hasCritical ? '<span class="warn">⚠</span>' : '';
+    html += `<div class="tab ${currentTab === name ? 'active' : ''}" onclick="switchTab('${name.replace(/'/g, "\\'")}')">${escHtml(name)}${warn}</div>`;
+  });
+
+  document.getElementById('tabs-bar').innerHTML = html;
+}
+
 function switchTab(tab) {
   currentTab = tab;
-  document.querySelectorAll('.tab').forEach((el, i) => {
-    el.classList.toggle('active', (i === 0 && tab === 'status') || (i === 1 && tab === 'connector'));
-  });
+  renderTabs();
   renderCurrentTab();
 }
 
 function renderCurrentTab() {
-  if (currentTab === 'status') renderStatusTab();
-  else renderConnectorTab();
+  if (currentTab === 'overview') renderOverviewTab();
+  else renderConnectorTab(currentTab);
 }
 
 // ── Thresholds bar ────────────────────────────────────────────────────────────
@@ -168,25 +213,25 @@ function renderThresholds() {
     `stable_attempts≥<b>${t.stable_min_attempts}</b>`,
   ].map(s => `<span>${s}</span>`).join('');
   document.getElementById('session-info').textContent =
-    `Session: ${(policyData.session_id || '').slice(0,20)} · Goal: ${policyData.goal || 'unset'}`;
+    `Session: ${(policyData.session_id || '').slice(0, 20)} · Goal: ${policyData.goal || 'unset'}`;
 }
 
-// ── By Status tab ─────────────────────────────────────────────────────────────
-function renderStatusTab() {
+// ── Overview tab (all pipelines by status) ────────────────────────────────────
+function renderOverviewTab() {
   if (!policyData) return;
   const pipelines = policyData.pipelines || [];
-  const groups = { critical: [], canary: [], stable: [], explore: [] };
   const threshold = policyData.thresholds ? (policyData.thresholds.rollback_consecutive_failures || 2) : 2;
+  const groups = { critical: [], canary: [], stable: [], explore: [] };
   pipelines.forEach(p => {
-    if ((p.consecutive_failures || 0) >= threshold || ((p.consecutive_failures || 0) > 0 && p.success_rate === 0))
+    if ((p.consecutive_failures || 0) >= threshold)
       groups.critical.push(p);
     else if (p.status === 'canary') groups.canary.push(p);
     else if (p.status === 'stable') groups.stable.push(p);
     else groups.explore.push(p);
   });
 
-  let html = '';
   const queuedKeys = new Set(queue.map(q => q.data && q.data.key).filter(Boolean));
+  let html = '';
 
   if (groups.critical.length) {
     html += `<div class="section-header critical">⚠ Critical (${groups.critical.length})</div>`;
@@ -208,6 +253,85 @@ function renderStatusTab() {
   document.getElementById('main-panel').innerHTML = html;
 }
 
+// ── Single connector tab ──────────────────────────────────────────────────────
+function renderConnectorTab(name) {
+  if (!assetsData) {
+    document.getElementById('main-panel').innerHTML = '<div style="color:#8b949e;padding:20px">Loading assets...</div>';
+    return;
+  }
+  const c = (assetsData.connectors || {})[name];
+  if (!c) {
+    document.getElementById('main-panel').innerHTML = `<div style="color:#8b949e;padding:20px">Connector "${escHtml(name)}" not found.</div>`;
+    return;
+  }
+  const allPipelines = policyData ? (policyData.pipelines || []) : [];
+  const connPipelines = allPipelines.filter(p => (p.key || '').includes(name));
+  const queuedKeys = new Set(queue.map(q => q.data && q.data.key).filter(Boolean));
+  const safeN = name.replace(/'/g, "\\'");
+
+  let html = '';
+
+  // ── NOTES ──
+  if (c.notes) {
+    html += `<div class="sec-label">Notes <span class="sec-count">${c.notes.length > 600 ? '(truncated)' : ''}</span></div>
+    <div class="notes-block">${escHtml(c.notes.slice(0, 800))}${c.notes.length > 800 ? '\n...' : ''}</div>
+    <div class="notes-actions">
+      <button class="btn-sm" onclick="queueNotesComment('${safeN}')">+ Add comment</button>
+    </div>
+    <div class="comment-form" id="comment-form-${escHtml(name)}">
+      <textarea placeholder="Add comment to NOTES.md..."></textarea>
+      <div class="comment-form-actions">
+        <button class="btn-sm" onclick="cancelNotesComment('${safeN}')">Cancel</button>
+        <button class="btn-sm" style="border-color:#58a6ff;color:#58a6ff" onclick="submitNotesComment('${safeN}')">Add comment</button>
+      </div>
+    </div>`;
+  }
+
+  // ── PIPELINES ──
+  html += `<div class="sec-label">Pipelines <span class="sec-count">${connPipelines.length}</span></div>`;
+  if (connPipelines.length) {
+    connPipelines.forEach(p => { html += renderPipelineCard(p, queuedKeys); });
+  } else {
+    html += `<div style="color:#484f58;font-size:11px;padding:6px 0">No pipelines for this connector.</div>`;
+  }
+
+  // ── CONTROLS (Scenarios + injected components) ──
+  const hasControls = (c.scenarios && c.scenarios.length) || (c.components && c.components.length);
+  if (hasControls) {
+    html += `<div class="sec-label">Controls</div>`;
+
+    if (c.scenarios && c.scenarios.length) {
+      c.scenarios.forEach((s, idx) => {
+        const formId = `scenario-form-${escHtml(name)}-${idx}`;
+        const argsJson = escHtml(JSON.stringify(s.required_args || []));
+        html += `<div class="scenario-card">
+          <div class="scenario-card-row">
+            <div class="scenario-info">
+              <div class="scenario-name">${escHtml(s.name)}</div>
+              <div class="scenario-desc">${escHtml((s.description || '').slice(0, 120))}</div>
+              <div class="scenario-meta">${s.step_count} steps${s.has_rollback ? ' · has rollback' : ''}${s.required_args && s.required_args.length ? ' · args: ' + escHtml(s.required_args.join(', ')) : ''}</div>
+            </div>
+            <button class="add-btn" onclick="toggleScenarioForm('${formId}','${safeN}','${escHtml(s.name).replace(/'/g,"\\'")}',${argsJson})">▶ Run</button>
+          </div>
+          <div class="scenario-args-form" id="${formId}"></div>
+        </div>`;
+      });
+    }
+
+    if (c.components && c.components.length) {
+      c.components.forEach(comp => {
+        html += `<div class="component-slot">
+          <div class="component-label">📦 ${escHtml(comp.filename)} <span>${escHtml((comp.context || '').slice(0, 80))}</span></div>
+          <iframe src="/api/components/${encodeURIComponent(name)}/${encodeURIComponent(comp.filename)}" onload="resizeIframe(this)"></iframe>
+        </div>`;
+      });
+    }
+  }
+
+  document.getElementById('main-panel').innerHTML = html;
+}
+
+// ── Pipeline card ─────────────────────────────────────────────────────────────
 function renderPipelineCard(p, queuedKeys) {
   const key = p.key || '';
   const status = p.status || 'explore';
@@ -215,22 +339,33 @@ function renderPipelineCard(p, queuedKeys) {
   const cf = p.consecutive_failures || 0;
   const sr = p.success_rate != null ? p.success_rate.toFixed(2) : '?';
   const vr = p.verify_rate != null ? p.verify_rate.toFixed(2) : '?';
-  const actionOptions = {
-    explore: ['— action —', 'promote-canary', 'reset-failures', 'delete'],
-    canary:  ['— action —', 'promote-stable', 'demote-explore', 'delete'],
-    stable:  ['— action —', 'demote-canary', 'delete'],
+  const actionDefs = {
+    explore: [
+      { action: 'promote-canary', label: '→ canary', cls: 'promote' },
+      { action: 'reset-failures', label: 'reset ⚠', cls: '' },
+      { action: 'delete',         label: 'delete',   cls: 'danger' },
+    ],
+    canary: [
+      { action: 'promote-stable', label: '→ stable',  cls: 'promote' },
+      { action: 'demote-explore', label: '→ explore', cls: 'demote' },
+      { action: 'delete',         label: 'delete',    cls: 'danger' },
+    ],
+    stable: [
+      { action: 'demote-canary', label: '→ canary', cls: 'demote' },
+      { action: 'delete',        label: 'delete',   cls: 'danger' },
+    ],
   };
-  const opts = (actionOptions[status] || actionOptions.explore)
-    .map(a => `<option value="${a}">${a}</option>`).join('');
-  const cfClass = cf >= 2 ? 'warn' : cf > 0 ? 'warn' : '';
+  const safeKey = escHtml(key).replace(/'/g, "\\'");
+  const btns = (actionDefs[status] || actionDefs.explore)
+    .map(d => `<button class="act-btn ${d.cls}" onclick="onActionSelect('${d.action}','${safeKey}','${status}')">${d.label}</button>`)
+    .join('');
+  const cfClass = cf >= 2 ? 'warn' : '';
   return `
 <div class="pipeline-card ${cf >= 2 ? 'critical' : status} ${isQueued ? 'queued' : ''}">
   <div class="pipeline-card-row">
     <div class="pipeline-key">${escHtml(key)}</div>
     <span class="pipeline-badge badge-${status}">${status}${p.rollout_pct != null ? ' · ' + p.rollout_pct + '%' : ''}</span>
-    <select class="action-select" onchange="onActionSelect(this,'${escHtml(key).replace(/'/g,"\\'")}','${status}')">
-      ${opts}
-    </select>
+    <div class="pipeline-actions">${btns}</div>
   </div>
   <div class="pipeline-metrics">
     <span>success: <b class="${parseFloat(sr) >= 0.95 ? 'good' : 'warn'}">${sr}</b></span>
@@ -241,27 +376,22 @@ function renderPipelineCard(p, queuedKeys) {
 </div>`;
 }
 
-function onActionSelect(select, key, currentStatus) {
-  const action = select.value;
-  if (action === '— action —') return;
-  select.value = '— action —';
-
+function onActionSelect(action, key, currentStatus) {
   const actionMap = {
-    'promote-canary': { label: 'Promote → canary', type: 'pipeline-set', fields: {status:'canary', rollout_pct:20} },
-    'promote-stable': { label: 'Promote → stable', type: 'pipeline-set', fields: {status:'stable', rollout_pct:100} },
-    'demote-explore': { label: 'Demote → explore', type: 'pipeline-set', fields: {status:'explore', rollout_pct:0} },
-    'demote-canary':  { label: 'Demote → canary',  type: 'pipeline-set', fields: {status:'canary', rollout_pct:20} },
-    'reset-failures': { label: 'Reset failures',   type: 'pipeline-set', fields: {consecutive_failures:0} },
+    'promote-canary': { label: 'Promote → canary', type: 'pipeline-set', fields: { status: 'canary', rollout_pct: 20 } },
+    'promote-stable': { label: 'Promote → stable', type: 'pipeline-set', fields: { status: 'stable', rollout_pct: 100 } },
+    'demote-explore': { label: 'Demote → explore', type: 'pipeline-set', fields: { status: 'explore', rollout_pct: 0 } },
+    'demote-canary':  { label: 'Demote → canary',  type: 'pipeline-set', fields: { status: 'canary', rollout_pct: 20 } },
+    'reset-failures': { label: 'Reset failures',   type: 'pipeline-set', fields: { consecutive_failures: 0 } },
     'delete':         { label: 'Delete pipeline',  type: 'pipeline-delete' },
   };
   const def = actionMap[action];
   if (!def) return;
-
   enqueue({
     id: ++queueIdSeq,
     type: def.type,
     label: def.label,
-    subLabel: key.replace('pipeline::', ''),
+    subLabel: key,
     command: def.type === 'pipeline-delete'
       ? `pipeline-delete ${key}`
       : `pipeline-set ${key} ${JSON.stringify(def.fields)}`,
@@ -271,81 +401,25 @@ function onActionSelect(select, key, currentStatus) {
   });
 }
 
-// ── By Connector tab ──────────────────────────────────────────────────────────
-function renderConnectorTab() {
-  if (!assetsData) { document.getElementById('main-panel').innerHTML = '<div style="color:#8b949e;padding:20px">Loading...</div>'; return; }
-  const connectors = assetsData.connectors || {};
-  const pipelines = policyData ? (policyData.pipelines || []) : [];
-
-  let html = '';
-  Object.entries(connectors).forEach(([name, c]) => {
-    const connPipelines = pipelines.filter(p => (p.key || '').includes(name));
-    const hasCritical = connPipelines.some(p => (p.consecutive_failures || 0) >= 2);
-
-    html += `<div class="connector-block">
-      <div class="connector-header">
-        <span class="connector-name">${escHtml(name)}</span>
-        <span style="font-size:11px;color:#8b949e">${connPipelines.length} pipelines</span>
-        ${hasCritical ? '<span style="color:#f85149;font-size:11px">⚠ critical</span>' : ''}
-        ${c.scenarios && c.scenarios.length ? `<span style="font-size:10px;color:#58a6ff">${c.scenarios.length} scenarios</span>` : ''}
-      </div>
-      <div class="connector-body">`;
-
-    if (c.notes) {
-      html += `<div class="notes-block">${escHtml(c.notes.slice(0, 600))}${c.notes.length > 600 ? '\n...' : ''}</div>
-        <div class="notes-actions">
-          <button class="btn-sm" onclick="queueNotesComment('${escHtml(name)}')">+ Add comment</button>
-        </div>`;
-    }
-
-    if (c.scenarios && c.scenarios.length) {
-      html += `<div style="font-size:10px;color:#58a6ff;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;margin-top:8px;">▶ Scenarios</div>`;
-      c.scenarios.forEach(s => {
-        const argsJson = JSON.stringify(s.required_args || []);
-        html += `<div class="scenario-card">
-          <div class="scenario-info">
-            <div class="scenario-name">${escHtml(s.name)}</div>
-            <div class="scenario-desc">${escHtml((s.description || '').slice(0, 100))}</div>
-            <div class="scenario-meta">${s.step_count} steps${s.has_rollback ? ' · has rollback' : ''} · args: ${escHtml((s.required_args || []).join(', ') || 'none')}</div>
-          </div>
-          <button class="add-btn" onclick="queueScenario('${escHtml(name)}','${escHtml(s.name)}',${argsJson})">+ 加入队列</button>
-        </div>`;
-      });
-    }
-
-    if (c.components) {
-      c.components.forEach(comp => {
-        html += `<div class="component-slot">
-          <div class="component-label">📦 ${escHtml(comp.filename)} <span>${escHtml((comp.context || '').slice(0, 60))}</span></div>
-          <iframe src="/api/components/${escHtml(name)}/${escHtml(comp.filename)}" onload="resizeIframe(this)"></iframe>
-        </div>`;
-      });
-    }
-
-    if (connPipelines.length) {
-      html += `<div style="margin-top:8px;">`;
-      connPipelines.forEach(p => {
-        const cf = p.consecutive_failures || 0;
-        const dotColor = p.status === 'stable' ? '#3fb950' : p.status === 'canary' ? '#d29922' : cf >= 2 ? '#f85149' : '#8b949e';
-        html += `<div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:3px;">
-          <span style="width:7px;height:7px;border-radius:50%;background:${dotColor};flex-shrink:0"></span>
-          <span style="flex:1;color:#ccc">${escHtml(p.key || '')}</span>
-          <span style="color:#8b949e">${p.status}${cf > 0 ? ' · ⚠' + cf : ''}</span>
-        </div>`;
-      });
-      html += `</div>`;
-    }
-
-    html += `</div></div>`;
-  });
-
-  if (!html) html = '<div style="color:#8b949e;padding:20px">No connectors found in ~/.emerge/connectors/</div>';
-  document.getElementById('main-panel').innerHTML = html;
-}
-
+// ── Notes comment ─────────────────────────────────────────────────────────────
 function queueNotesComment(connector) {
-  const comment = prompt(`Add comment to ${connector} NOTES.md:`);
+  const form = document.getElementById('comment-form-' + connector);
+  if (!form) return;
+  form.style.display = 'block';
+  const ta = form.querySelector('textarea');
+  ta.value = '';
+  ta.focus();
+}
+function cancelNotesComment(connector) {
+  const form = document.getElementById('comment-form-' + connector);
+  if (form) form.style.display = 'none';
+}
+function submitNotesComment(connector) {
+  const form = document.getElementById('comment-form-' + connector);
+  if (!form) return;
+  const comment = form.querySelector('textarea').value.trim();
   if (!comment) return;
+  form.style.display = 'none';
   enqueue({
     id: ++queueIdSeq,
     type: 'notes-comment',
@@ -356,21 +430,65 @@ function queueNotesComment(connector) {
   });
 }
 
-function queueScenario(connector, scenarioName, requiredArgs) {
-  const args = {};
-  for (const arg of requiredArgs) {
-    if (['token', 'password', 'secret', 'key'].some(s => arg.toLowerCase().includes(s))) {
-      args[arg] = '(provide via CC)';
-    } else {
-      const val = prompt(`Arg for scenario "${scenarioName}": ${arg}`);
-      if (val === null) return;
-      args[arg] = val;
-    }
+// ── Scenario arg form ─────────────────────────────────────────────────────────
+function toggleScenarioForm(formId, connector, scenarioName, requiredArgs) {
+  const form = document.getElementById(formId);
+  if (!form) return;
+  if (form.style.display === 'block') {
+    form.style.display = 'none';
+    return;
   }
+  const safeConnector = connector.replace(/'/g, "\\'");
+  const safeScenario = scenarioName.replace(/'/g, "\\'");
+
+  if (!requiredArgs || !requiredArgs.length) {
+    // No args — enqueue immediately
+    enqueue({
+      id: ++queueIdSeq,
+      type: 'scenario-run',
+      label: `Run: ${scenarioName}`,
+      subLabel: connector,
+      command: `icc_exec intent=write.${connector}.apply-test scenario=${scenarioName}`,
+      data: { type: 'scenario-run', connector, scenario: scenarioName, args: {} },
+    });
+    return;
+  }
+
+  let fieldsHtml = requiredArgs.map(arg => {
+    const isSecret = ['token', 'password', 'secret', 'key'].some(s => arg.toLowerCase().includes(s));
+    const placeholder = isSecret ? '(will be provided via CC)' : '';
+    return `<div class="arg-row">
+      <label>${escHtml(arg)}</label>
+      <input type="text" data-arg="${escHtml(arg)}" class="${isSecret ? 'secret' : ''}" placeholder="${placeholder}" ${isSecret ? 'disabled' : ''} />
+    </div>`;
+  }).join('');
+
+  form.innerHTML = `${fieldsHtml}
+    <div class="scenario-form-actions">
+      <button class="btn-sm" onclick="document.getElementById('${formId}').style.display='none'">Cancel</button>
+      <button class="btn-sm" style="border-color:#58a6ff;color:#58a6ff" onclick="submitScenarioForm('${formId}','${safeConnector}','${safeScenario}')">▶ 加入队列</button>
+    </div>`;
+  form.style.display = 'block';
+  const first = form.querySelector('input:not([disabled])');
+  if (first) first.focus();
+}
+
+function submitScenarioForm(formId, connector, scenarioName) {
+  const form = document.getElementById(formId);
+  if (!form) return;
+  const args = {};
+  form.querySelectorAll('input[data-arg]').forEach(inp => {
+    if (inp.disabled) {
+      args[inp.dataset.arg] = '(provide via CC)';
+    } else {
+      args[inp.dataset.arg] = inp.value;
+    }
+  });
+  form.style.display = 'none';
   enqueue({
     id: ++queueIdSeq,
     type: 'scenario-run',
-    label: `Run scenario: ${scenarioName}`,
+    label: `Run: ${scenarioName}`,
     subLabel: connector,
     command: `icc_exec intent=write.${connector}.apply-test scenario=${scenarioName}`,
     data: { type: 'scenario-run', connector, scenario: scenarioName, args },
@@ -381,19 +499,19 @@ function queueScenario(connector, scenarioName, requiredArgs) {
 function enqueue(item) {
   queue.push(item);
   renderQueue();
-  if (currentTab === 'status') renderStatusTab();
+  if (currentTab === 'overview') renderOverviewTab();
 }
 
 function dequeue(id) {
   queue = queue.filter(q => q.id !== id);
   renderQueue();
-  if (currentTab === 'status') renderStatusTab();
+  if (currentTab === 'overview') renderOverviewTab();
 }
 
 function clearQueue() {
   queue = [];
   renderQueue();
-  if (currentTab === 'status') renderStatusTab();
+  if (currentTab === 'overview') renderOverviewTab();
 }
 
 function renderQueue() {
@@ -432,7 +550,7 @@ async function submitQueue() {
   try {
     const r = await fetch('/api/submit', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ actions }),
     });
     const result = await r.json();
@@ -440,7 +558,7 @@ async function submitQueue() {
       queue = [];
       renderQueue();
       document.getElementById('status-msg').textContent = `✓ 已提交 ${result.action_count} 条操作给 CC`;
-      if (currentTab === 'status') renderStatusTab();
+      if (currentTab === 'overview') renderOverviewTab();
     } else {
       document.getElementById('status-msg').textContent = '提交失败: ' + JSON.stringify(result);
       btn.disabled = false;

@@ -155,42 +155,40 @@ def test_icc_write_participates_in_pipeline_lifecycle_registry(tmp_path: Path):
 
         reg = tmp_path / "state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
-        key = "pipeline::mock.write.add-wall"
+        key = "mock.write.add-wall"
         assert data["pipelines"][key]["status"] == "canary"
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
 
 
-def test_flywheel_composed_key_can_be_shared_by_exec_and_pipeline(tmp_path: Path):
+def test_exec_and_pipeline_share_key_when_intent_matches(tmp_path: Path):
+    """icc_exec and icc_write both track under the same key when they share an intent_signature."""
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "compose"
     try:
         daemon = EmergeDaemon(root=ROOT)
+        # icc_exec tracks under intent_signature = "mock.write.add-wall"
         daemon.call_tool(
             "icc_exec",
             {
                 "mode": "inline_code",
                 "code": "x = 1",
-                "target_profile": "zwcad-profile",
-                "intent_signature": "zwcad.plan.wall",
-                "script_ref": "connectors/zwcad/actions/plan_wall.py",
-                "base_pipeline_id": "mock.write.add-wall",
+                "intent_signature": "mock.write.add-wall",
             },
         )
+        # icc_write tracks under pipeline_id = "mock.write.add-wall"
         daemon.call_tool(
             "icc_write",
             {
                 "connector": "mock",
                 "pipeline": "add-wall",
                 "length": 1000,
-                "exec_signature": "zwcad.plan.wall",
-                "script_ref": "connectors/zwcad/actions/plan_wall.py",
             },
         )
         registry = tmp_path / "state" / "compose" / "candidates.json"
         data = json.loads(registry.read_text(encoding="utf-8"))
-        key = "flywheel::mock.write.add-wall::zwcad.plan.wall::connectors/zwcad/actions/plan_wall.py"
+        key = "mock.write.add-wall"
         assert data["candidates"][key]["total_calls"] == 2
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
@@ -364,8 +362,8 @@ def test_zwcad_policy_registry_tracks_pipeline_key(tmp_path: Path):
         reg = tmp_path / "state" / "pipelines-registry.json"
         assert reg.exists(), "registry file not created"
         data = json.loads(reg.read_text(encoding="utf-8"))
-        assert "pipeline::zwcad.read.state" in data["pipelines"]
-        assert "pipeline::zwcad.write.apply-change" in data["pipelines"]
+        assert "zwcad.read.state" in data["pipelines"]
+        assert "zwcad.write.apply-change" in data["pipelines"]
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
@@ -394,7 +392,7 @@ def test_pipeline_registry_is_shared_across_sessions(tmp_path: Path):
         global_reg = state_root / "pipelines-registry.json"
         assert global_reg.exists(), "registry must be at state_root level, not session-scoped"
         data = json.loads(global_reg.read_text(encoding="utf-8"))
-        key = "pipeline::zwcad.read.state"
+        key = "zwcad.read.state"
         assert key in data["pipelines"], f"{key} missing from global registry"
         # 4 total calls (3 from A + 1 from B) must be reflected
         entry = data["pipelines"][key]
@@ -426,8 +424,8 @@ def test_pipeline_policy_metrics_are_recorded_for_stop_and_rollback(tmp_path: Pa
         reg = tmp_path / "state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
 
-        stop_key = "pipeline::mock.write.add-wall"
-        rb_key = "pipeline::mock.write.add-wall-rollback"
+        stop_key = "mock.write.add-wall"
+        rb_key = "mock.write.add-wall-rollback"
         assert data["pipelines"][stop_key]["policy_enforced_count"] >= 1
         assert data["pipelines"][stop_key]["stop_triggered_count"] >= 1
         assert data["pipelines"][stop_key]["last_policy_action"] == "stop"
@@ -611,7 +609,7 @@ def test_flywheel_exec_routes_to_pipeline_when_stable(tmp_path):
         daemon = EmergeDaemon(root=ROOT)
 
         # Status lives in pipelines-registry.json, keyed by the bridge candidate key
-        bridge_key = "flywheel::mock.read.layers::zwcad.plan.read::connectors/zwcad/read.py"
+        bridge_key = "mock.read.layers"
         pipelines = {
             "pipelines": {
                 bridge_key: {
@@ -647,7 +645,7 @@ def test_flywheel_exec_does_not_promote_when_candidate_is_canary(tmp_path):
     try:
         daemon = EmergeDaemon(root=ROOT)
 
-        bridge_key = "flywheel::mock.read.layers::zwcad.plan.read::connectors/zwcad/read.py"
+        bridge_key = "mock.read.layers"
         pipelines = {
             "pipelines": {
                 bridge_key: {
@@ -743,11 +741,12 @@ def test_icc_reconcile_correct_increments_human_fixes(tmp_path):
         os.environ.pop("EMERGE_SESSION_ID", None)
 
 
-def test_increment_human_fix_targets_most_recent_candidate_only(tmp_path):
-    """A single icc_reconcile(correct) must increment human_fixes on exactly ONE
-    candidate — the most recently used one (highest last_ts_ms) — even when multiple
-    candidates share the same intent_signature (exec, pipeline::, flywheel:: entries).
-    Incrementing all would inflate human_fix_rate for unrelated candidates."""
+def test_increment_human_fix_increments_unified_key(tmp_path):
+    """icc_reconcile(correct) increments human_fixes on the entry keyed by intent_signature.
+
+    With unified intent-based keys there is exactly one entry per intent — direct lookup,
+    no most-recent-timestamp scan needed.
+    """
     import json, os, time
     from pathlib import Path
     from scripts.emerge_daemon import EmergeDaemon
@@ -755,31 +754,25 @@ def test_increment_human_fix_targets_most_recent_candidate_only(tmp_path):
     ROOT = Path(__file__).resolve().parents[1]
     state_root = tmp_path / "state"
     os.environ["EMERGE_STATE_ROOT"] = str(state_root)
-    os.environ["EMERGE_SESSION_ID"] = "multi-cand-fix-test"
+    os.environ["EMERGE_SESSION_ID"] = "fix-test"
     try:
-        session_id = "multi-cand-fix-test"
-        session_dir = state_root / session_id
+        session_dir = state_root / "fix-test"
         session_dir.mkdir(parents=True, exist_ok=True)
 
         now = int(time.time() * 1000)
-        # Three candidates sharing the same intent_signature: exec, pipeline, bridge.
-        # The pipeline:: entry has the highest last_ts_ms — it is the "most recent".
         candidates = {
             "candidates": {
-                "default::zwcad.read.state::<inline>": {
+                "zwcad.read.state": {
                     "intent_signature": "zwcad.read.state",
+                    "source": "exec",
                     "attempts": 10, "successes": 9, "verify_passes": 9,
-                    "human_fixes": 0, "last_ts_ms": now - 2000,
+                    "human_fixes": 0, "last_ts_ms": now,
                 },
-                "pipeline::zwcad.read.state": {
-                    "intent_signature": "zwcad.read.state",
+                "other.read.state": {
+                    "intent_signature": "other.read.state",
+                    "source": "exec",
                     "attempts": 5, "successes": 5, "verify_passes": 5,
-                    "human_fixes": 0, "last_ts_ms": now - 500,  # most recent
-                },
-                "flywheel::zwcad.read.state::zwcad.read.state::script.py": {
-                    "intent_signature": "zwcad.read.state",
-                    "attempts": 3, "successes": 3, "verify_passes": 3,
-                    "human_fixes": 0, "last_ts_ms": now - 1500,
+                    "human_fixes": 0, "last_ts_ms": now,
                 },
             }
         }
@@ -789,12 +782,8 @@ def test_increment_human_fix_targets_most_recent_candidate_only(tmp_path):
         daemon._increment_human_fix("zwcad.read.state")
 
         updated = json.loads((session_dir / "candidates.json").read_text())["candidates"]
-
-        # Only the pipeline:: entry (most recent) must be incremented
-        assert updated["pipeline::zwcad.read.state"]["human_fixes"] == 1
-        # The other two must be untouched
-        assert updated["default::zwcad.read.state::<inline>"]["human_fixes"] == 0
-        assert updated["flywheel::zwcad.read.state::zwcad.read.state::script.py"]["human_fixes"] == 0
+        assert updated["zwcad.read.state"]["human_fixes"] == 1
+        assert updated["other.read.state"]["human_fixes"] == 0  # unrelated intent unchanged
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
@@ -1140,7 +1129,7 @@ def test_hypermesh_icc_write_participates_in_pipeline_lifecycle_registry(tmp_pat
 
         reg = tmp_path / "state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
-        key = "pipeline::hypermesh.write.apply-change"
+        key = "hypermesh.write.apply-change"
         assert key in data["pipelines"], f"Key {key!r} not found; keys={list(data['pipelines'])}"
         assert data["pipelines"][key]["status"] == "canary"
     finally:
@@ -1323,8 +1312,8 @@ def test_cloud_server_policy_registry_tracks_pipeline_key(tmp_path: Path):
         reg = tmp_path / "state" / "pipelines-registry.json"
         assert reg.exists(), "registry file not created"
         data = json.loads(reg.read_text(encoding="utf-8"))
-        assert "pipeline::cloud-server.read.state" in data["pipelines"]
-        assert "pipeline::cloud-server.write.apply-test" in data["pipelines"]
+        assert "cloud-server.read.state" in data["pipelines"]
+        assert "cloud-server.write.apply-test" in data["pipelines"]
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
@@ -1359,7 +1348,7 @@ def test_pending_action_monitor_detects_and_notifies(tmp_path: Path):
     monitor = PendingActionMonitor(state_root=tmp_path, write_push_fn=capture_push)
     monitor.start()
 
-    actions = [{"type": "pipeline-delete", "key": "pipeline::mock.read.does-not-exist"}]
+    actions = [{"type": "pipeline-delete", "key": "mock.read.does-not-exist"}]
     pending = {"submitted_at": int(time.time() * 1000) + 1000, "actions": actions}
     (tmp_path / "pending-actions.json").write_text(
         json.dumps(pending), encoding="utf-8"

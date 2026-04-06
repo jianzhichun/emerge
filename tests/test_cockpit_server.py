@@ -64,8 +64,8 @@ def test_cmd_submit_actions_writes_pending_file(tmp_path: Path, monkeypatch):
 
     from scripts.repl_admin import cmd_submit_actions
     actions = [
-        {"type": "pipeline-delete", "key": "pipeline::mock.read.does-not-exist"},
-        {"type": "pipeline-set", "key": "pipeline::mock.read.layers", "fields": {"status": "canary"}},
+        {"type": "pipeline-delete", "key": "mock.read.does-not-exist"},
+        {"type": "pipeline-set", "key": "mock.read.layers", "fields": {"status": "canary"}},
     ]
     result = cmd_submit_actions(actions)
 
@@ -81,7 +81,7 @@ def test_cmd_submit_actions_atomic_write(tmp_path: Path, monkeypatch):
     """Verify tmp file is used (no partial writes)."""
     monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
     from scripts.repl_admin import cmd_submit_actions
-    cmd_submit_actions([{"type": "pipeline-delete", "key": "pipeline::x"}])
+    cmd_submit_actions([{"type": "pipeline-delete", "key": "x"}])
     # tmp file should not exist after rename
     assert not (tmp_path / "pending-actions.json.tmp").exists()
     assert (tmp_path / "pending-actions.json").exists()
@@ -119,7 +119,7 @@ def test_serve_get_assets_returns_connectors(tmp_path, monkeypatch):
 
 def test_serve_post_submit_writes_pending(tmp_path, monkeypatch):
     url = _start_test_server(tmp_path, monkeypatch)
-    actions = [{"type": "pipeline-delete", "key": "pipeline::x"}]
+    actions = [{"type": "pipeline-delete", "key": "x"}]
     body = json.dumps({"actions": actions}).encode()
     req = urllib.request.Request(
         f"{url}/api/submit", data=body,

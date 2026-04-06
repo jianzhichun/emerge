@@ -95,13 +95,12 @@ class EmergeDaemon:
         return RunnerRouter.from_env()
 
     def _try_flywheel_bridge(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
-        intent_signature = str(arguments.get("intent_signature", "")).strip()
-        script_ref = str(arguments.get("script_ref", "")).strip()
         base_pipeline_id = str(arguments.get("base_pipeline_id", "")).strip()
-        if not (intent_signature and script_ref and base_pipeline_id):
+        if not base_pipeline_id:
             return None
 
-        key = self._bridge_candidate_key(base_pipeline_id, intent_signature, script_ref)
+        # Key is the pipeline_id itself — no prefixes, no runner dimension
+        key = base_pipeline_id
         pipelines_path = self._state_root / "pipelines-registry.json"
         pipelines_data = self._load_json_object(pipelines_path, root_key="pipelines")
         bridge_entry = pipelines_data.get("pipelines", {}).get(key)
@@ -128,7 +127,7 @@ class EmergeDaemon:
             return None
         result["bridge_promoted"] = True
         try:
-            self._sink.emit("flywheel.bridge.promoted", {"key": key, "pipeline_id": base_pipeline_id})
+            self._sink.emit("flywheel.bridge.promoted", {"key": base_pipeline_id, "pipeline_id": base_pipeline_id})
         except Exception:
             pass
         return result
@@ -1009,7 +1008,7 @@ class EmergeDaemon:
         entry = registry["candidates"].get(
             key,
             {
-                "source": "flywheel_composed" if key.startswith("flywheel::") else "pipeline",
+                "source": "pipeline",
                 "pipeline_id": pipeline_id,
                 "target_profile": target_profile,
                 "intent_signature": intent_signature or pipeline_id,
@@ -1029,6 +1028,9 @@ class EmergeDaemon:
                 "last_ts_ms": 0,
             },
         )
+        # Pipeline path is authoritative: always mark source=pipeline so
+        # synthesis_ready is never set for an already-crystallized intent.
+        entry["source"] = "pipeline"
         policy_enforced = bool(result.get("policy_enforced", False))
         stop_triggered = bool(result.get("stop_triggered", False))
         rollback_executed = bool(result.get("rollback_executed", False))
@@ -1119,7 +1121,7 @@ class EmergeDaemon:
                 pipeline["rollout_pct"] = 20
                 # Signal that this exec candidate can be crystallized into a pipeline
                 intent_sig = entry.get("intent_signature", "")
-                if intent_sig and not candidate_key.startswith("pipeline::"):
+                if intent_sig and entry.get("source") == "exec":
                     if self._has_synthesizable_wal_entry(intent_sig, entry.get("target_profile", "default")):
                         pipeline["synthesis_ready"] = True
                         try:
@@ -1336,43 +1338,23 @@ class EmergeDaemon:
                 os.unlink(tmp_path)
 
     def _increment_human_fix(self, intent_signature: str) -> None:
-        """Increment human_fixes on the single most-recently-used candidate matching intent_signature.
+        """Increment human_fixes for the candidate keyed by intent_signature.
 
-        Multiple candidate types (exec, pipeline::, flywheel::) can share the same
-        intent_signature. Incrementing all of them from one human correction would inflate
-        human_fix_rate across unrelated candidates and block promotion. We select only the
-        entry with the highest last_ts_ms — the one actually active when the correction occurred.
+        With unified intent-based keys there is exactly one entry per intent — direct lookup.
         """
         session_dir = self._state_root / self._base_session_id
         candidates_path = session_dir / "candidates.json"
         if not candidates_path.exists():
             return
         registry = self._load_json_object(candidates_path, root_key="candidates")
-
-        # Find the single most-recently-used candidate matching intent_signature.
-        best_key: str | None = None
-        best_ts: int = -1
-        for key, entry in registry["candidates"].items():
-            if not isinstance(entry, dict):
-                continue
-            if str(entry.get("intent_signature", "")) != intent_signature:
-                continue
-            ts = int(entry.get("last_ts_ms", 0))
-            if ts > best_ts:
-                best_ts = ts
-                best_key = key
-
-        if best_key is None:
+        entry = registry["candidates"].get(intent_signature)
+        if not isinstance(entry, dict):
             return
-
-        entry = registry["candidates"][best_key]
         entry["human_fixes"] = int(entry.get("human_fixes", 0)) + 1
-        registry["candidates"][best_key] = entry
+        registry["candidates"][intent_signature] = entry
         self._atomic_write_json(candidates_path, registry)
-        # Propagate updated human_fix_rate to pipelines-registry.json immediately
-        # so the flywheel reflects the correction without waiting for the next exec.
         try:
-            self._update_pipeline_registry(candidate_key=best_key, entry=entry)
+            self._update_pipeline_registry(candidate_key=intent_signature, entry=entry)
         except Exception:
             pass
 
@@ -1398,38 +1380,17 @@ class EmergeDaemon:
         return False
 
     @staticmethod
-    def _candidate_key(*, target_profile: str, intent_signature: str, script_ref: str) -> str:
-        return f"{target_profile}::{intent_signature}::{script_ref or '<inline>'}"
+    def _resolve_exec_candidate_key(*, arguments: dict[str, Any], target_profile: str) -> str:
+        """Key is intent_signature — runner and script are execution metadata, not identity."""
+        return str(arguments.get("intent_signature", "")).strip()
 
     @staticmethod
-    def _pipeline_candidate_key(pipeline_id: str) -> str:
-        return f"pipeline::{pipeline_id}"
-
-    @staticmethod
-    def _bridge_candidate_key(pipeline_id: str, intent_signature: str, script_ref: str) -> str:
-        return f"flywheel::{pipeline_id}::{intent_signature}::{script_ref}"
-
-    def _resolve_exec_candidate_key(self, *, arguments: dict[str, Any], target_profile: str) -> str:
-        intent_signature = str(arguments.get("intent_signature", "")).strip()
-        script_ref = str(arguments.get("script_ref", "")).strip() or "<inline>"
-        base_pipeline_id = str(arguments.get("base_pipeline_id", "")).strip()
-        if base_pipeline_id and intent_signature:
-            return self._bridge_candidate_key(base_pipeline_id, intent_signature, script_ref)
-        return self._candidate_key(
-            target_profile=target_profile,
-            intent_signature=intent_signature,
-            script_ref=script_ref,
-        )
-
-    def _resolve_pipeline_candidate_key(self, *, arguments: dict[str, Any], pipeline_id: str) -> str:
-        exec_signature = str(arguments.get("exec_signature", "")).strip()
-        script_ref = str(arguments.get("script_ref", "")).strip()
-        if exec_signature and script_ref:
-            return self._bridge_candidate_key(pipeline_id, exec_signature, script_ref)
-        return self._pipeline_candidate_key(pipeline_id)
+    def _resolve_pipeline_candidate_key(*, arguments: dict[str, Any], pipeline_id: str) -> str:
+        """Key is pipeline_id (= intent by convention: <connector>.<mode>.<op>)."""
+        return pipeline_id
 
     def _should_sample(self, candidate_key: str) -> bool:
-        if "::" not in candidate_key:
+        if not candidate_key:
             return True
         path = self._state_root / "pipelines-registry.json"
         if not path.exists():
