@@ -776,7 +776,6 @@ async function init() {
   _resetRefreshTimer();
   setInterval(async () => {
     await Promise.all([refreshPolicy(), refreshAssets(), refreshState(), refreshIntents()]);
-    renderCurrentTab();
     _lastRefreshAt = new Date();
     _resetRefreshTimer();
   }, REFRESH_INTERVAL_S * 1000);
@@ -817,11 +816,45 @@ async function refreshAssets() {
     const r = await fetch('/api/assets');
     assetsData = await r.json();
     renderTabs();
-    renderCurrentTab();
+    // Soft update: refresh data-driven parts without blowing away user input fields.
+    // Only do a full renderCurrentTab() for non-connector tabs or first load.
+    if (currentTab && !['overview','audit','session','state','operator'].includes(currentTab)) {
+      _softUpdateConnectorAssets(currentTab);
+    } else {
+      renderCurrentTab();
+    }
   } catch(e) {}
 }
 
+// Update connector assets (notes content, controls) without touching textarea values.
+function _softUpdateConnectorAssets(name) {
+  const c = assetsData && (assetsData.connectors || {})[name];
+  if (!c) return;
+  // Update notes content div if present — but never touch the textarea above it
+  const notesBlock = document.querySelector('#conn-panel-notes .notes-block');
+  if (notesBlock) {
+    notesBlock.innerHTML = c.notes ? renderMarkdown(c.notes) : '<p style="color:#8b949e">No NOTES.md yet for this connector.</p>';
+  }
+  // Update controls tab count badge
+  const hasControls = c.components && c.components.length;
+  const ctrlTab = document.querySelector('[aria-controls="conn-panel-controls"] .connector-panel-tab-count');
+  if (ctrlTab) ctrlTab.textContent = hasControls ? c.components.length : 0;
+  // If controls panel is active, re-render it using the same structure as renderConnectorTab
+  if (getActiveConnectorPanel(name) === 'controls') {
+    const ctrlPanel = document.getElementById('conn-panel-controls');
+    if (ctrlPanel) {
+      ctrlPanel.innerHTML = hasControls
+        ? c.components.map(comp => `<div class="component-slot">
+            <div class="component-label">${escHtml(comp.filename)} <span>${escHtml((comp.context || '').slice(0, 80))}</span></div>
+            <iframe src="/api/components/${encodeURIComponent(name)}/${encodeURIComponent(comp.filename)}" onload="resizeIframe(this)"></iframe>
+          </div>`).join('')
+        : '<div style="color:#484f58;font-size:11px;padding:6px 0">No injected controls yet.</div>';
+    }
+  }
+}
+
 async function refreshStatus() {
+  let serverPending = false;
   try {
     const r = await fetch('/api/status');
     const d = await r.json();
@@ -833,13 +866,20 @@ async function refreshStatus() {
       ccListening = true;
       ccListeningSignalKnown = false;
     }
+    serverPending = !!d.pending;
   } catch(e) {
     ccListening = false;
     ccListeningSignalKnown = true;
   }
   updateCcIndicator();
   const btn = document.getElementById('submit-btn');
-  if (btn) btn.disabled = queue.length === 0 || (ccListeningSignalKnown && !ccListening);
+  const statusMsg = document.getElementById('status-msg');
+  if (serverPending && statusMsg && !statusMsg.textContent.startsWith('✓')) {
+    statusMsg.textContent = '⏳ CC is processing previous submission…';
+  } else if (!serverPending && statusMsg && statusMsg.textContent.startsWith('⏳')) {
+    statusMsg.textContent = '';
+  }
+  if (btn) btn.disabled = queue.length === 0 || serverPending || (ccListeningSignalKnown && !ccListening);
 }
 
 async function refreshGoal() {
@@ -1019,10 +1059,6 @@ function refreshPolicyDisplay() {
   const connPipelines = allPipelines.filter(p => (p.key || '').startsWith(currentTab + '.'));
   const pipTabCount = document.getElementById('conn-panel-pipelines-count');
   if (pipTabCount) pipTabCount.textContent = connPipelines.length;
-  const deltaCount = document.querySelector('[aria-controls="conn-panel-deltas"] .connector-panel-tab-count');
-  if (deltaCount) deltaCount.textContent = _countConnDeltas(currentTab);
-  const riskCount = document.querySelector('[aria-controls="conn-panel-risks"] .connector-panel-tab-count');
-  if (riskCount) riskCount.textContent = _countConnRisks(currentTab);
   if (panel !== 'pipelines') return;
 
   const pipDiv = document.getElementById('conn-pipelines');
@@ -2296,139 +2332,6 @@ function renderConnectorTab(name) {
   document.getElementById('main-panel').innerHTML = html;
 }
 
-function _renderDeltasPanel(connectorName) {
-  const deltas = (stateData && stateData.deltas || []).filter(d => {
-    const sig = d.intent_signature || '';
-    return sig.startsWith(connectorName + '.') || (!sig && d.tool_name && d.tool_name.includes(connectorName));
-  });
-  if (!deltas.length) {
-    return `<div role="tabpanel" id="conn-panel-deltas" aria-labelledby="conn-tab-deltas" style="padding:12px;color:#8b949e;font-size:12px">No deltas for this connector.</div>`;
-  }
-  let html = `<div role="tabpanel" id="conn-panel-deltas" aria-labelledby="conn-tab-deltas" class="cp-panel-content">`;
-  deltas.forEach(d => {
-    const levelDot = d.level === 'core_critical' ? '🔴' : d.level === 'core_secondary' ? '🟡' : '⚪';
-    const prov = d.provisional ? '<span class="delta-prov">provisional</span>' : '';
-    const reconciled = d.reconcile_outcome ? `<span class="delta-reconcile ${d.reconcile_outcome}">${d.reconcile_outcome}</span>` : '';
-    const ts = d.ts_ms ? new Date(d.ts_ms).toLocaleTimeString() : '';
-    html += `<div class="cp-delta-row">
-      <span class="cp-delta-level">${levelDot}</span>
-      <span class="cp-delta-msg">${escHtml(d.message || '')}</span>
-      ${prov}${reconciled}
-      <span class="cp-delta-meta">${escHtml(d.intent_signature || '')} · ${ts}</span>
-      ${!d.reconcile_outcome ? `<span class="cp-delta-actions">
-        <button class="cp-btn-sm" onclick="cpDeltaReconcile('${escHtml(d.id)}','confirm')">✓</button>
-        <button type="button" class="cp-btn-sm warn" onclick="cpWarnAction(this,function(){cpDeltaReconcile('${escHtml(d.id)}','correct')})">↺</button>
-        <button class="cp-btn-sm danger" onclick="cpDeltaReconcile('${escHtml(d.id)}','retract')">✗</button>
-      </span>` : ''}
-    </div>`;
-  });
-  html += `</div>`;
-  return html;
-}
-
-function _renderRisksPanel(connectorName) {
-  const risks = (stateData && stateData.risks || []).filter(r => {
-    const sig = r.intent_signature || '';
-    const text = r.text || '';
-    return sig.startsWith(connectorName + '.') || text.toLowerCase().includes(connectorName.toLowerCase());
-  });
-  if (!risks.length) {
-    return `<div role="tabpanel" id="conn-panel-risks" aria-labelledby="conn-tab-risks" style="padding:12px;color:#8b949e;font-size:12px">No risks for this connector.</div>`;
-  }
-  let html = `<div role="tabpanel" id="conn-panel-risks" aria-labelledby="conn-tab-risks" class="cp-panel-content">`;
-  risks.forEach(r => {
-    const statusBadge = r.status === 'handled' ? '<span class="risk-status handled">handled</span>'
-      : r.status === 'snoozed' ? '<span class="risk-status snoozed">snoozed</span>'
-      : '<span class="risk-status open">open</span>';
-    html += `<div class="cp-risk-row">
-      <span class="cp-risk-icon">⚠</span>
-      <span class="cp-risk-text">${escHtml(r.text || '')}</span>
-      ${statusBadge}
-      ${r.status === 'open' ? `<span class="cp-risk-actions">
-        <button class="cp-btn-sm" onclick="cpRiskUpdate('${escHtml(r.risk_id)}','handle')">Handle</button>
-        <button class="cp-btn-sm" onclick="cpRiskUpdate('${escHtml(r.risk_id)}','snooze')">Snooze</button>
-      </span>` : ''}
-    </div>`;
-  });
-  html += `</div>`;
-  return html;
-}
-
-function _renderSpansPanel(connectorName) {
-  const innerId = 'cp-spans-' + connectorName.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const container = `<div role="tabpanel" id="conn-panel-spans" aria-labelledby="conn-tab-spans" class="cp-panel-content">
-    <div id="${innerId}" style="color:#8b949e;font-size:11px;padding:8px">Loading spans...</div>
-  </div>`;
-  setTimeout(async () => {
-    try {
-      const r = await fetch('/api/control-plane/spans?limit=30&intent=' + encodeURIComponent(connectorName));
-      const data = await r.json();
-      const el = document.getElementById(innerId);
-      if (!el) return;
-      const spans = (data.spans || []).filter(s => (s.intent_signature || '').startsWith(connectorName + '.'));
-      if (!spans.length) {
-        el.innerHTML = '<div style="color:#8b949e;font-size:11px;padding:8px">No spans for this connector.</div>';
-        return;
-      }
-      let html = '';
-      spans.forEach(s => {
-        const outcome = s.outcome || 'unknown';
-        const outClass = outcome === 'success' ? 'stable' : outcome === 'failure' ? 'critical' : '';
-        const dur = s.duration_ms ? (s.duration_ms / 1000).toFixed(1) + 's' : '—';
-        const ts = s.closed_at_ms ? new Date(s.closed_at_ms).toLocaleTimeString() : '';
-        html += `<div class="cp-span-row">
-          <span class="status-badge ${escHtml(outClass)}">${escHtml(outcome)}</span>
-          <span class="intent-key">${escHtml(s.intent_signature || '')}</span>
-          <span class="cp-span-meta">${s.action_count || 0} actions · ${s.side_effect_count || 0} side-effects · ${dur}</span>
-          <span class="cp-span-ts">${ts}</span>
-        </div>`;
-      });
-      el.innerHTML = html;
-    } catch(e) {
-      const el = document.getElementById(innerId);
-      if (el) el.innerHTML = '<div style="color:#f85149;font-size:11px;padding:8px">Failed to load spans</div>';
-    }
-  }, 0);
-  return container;
-}
-
-function _renderExecEventsPanel(connectorName) {
-  const innerId = 'cp-exec-' + connectorName.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const container = `<div role="tabpanel" id="conn-panel-exec-events" aria-labelledby="conn-tab-exec-events" class="cp-panel-content">
-    <div id="${innerId}" style="color:#8b949e;font-size:11px;padding:8px">Loading events...</div>
-  </div>`;
-  setTimeout(async () => {
-    try {
-      const r = await fetch('/api/control-plane/exec-events?limit=50&intent=' + encodeURIComponent(connectorName));
-      const data = await r.json();
-      const el = document.getElementById(innerId);
-      if (!el) return;
-      const events = (data.events || []).filter(e => (e.intent_signature || '').startsWith(connectorName + '.'));
-      if (!events.length) {
-        el.innerHTML = '<div style="color:#8b949e;font-size:11px;padding:8px">No exec events for this connector.</div>';
-        return;
-      }
-      let html = '<table class="cp-intent-table" style="font-size:11px"><thead><tr><th>Time</th><th>Intent</th><th>Mode</th><th>Result</th><th>Profile</th></tr></thead><tbody>';
-      events.forEach(ev => {
-        const ts = ev.ts_ms ? new Date(ev.ts_ms).toLocaleTimeString() : '';
-        const result = ev.is_error ? '<span class="critical">error</span>' : '<span class="stable">ok</span>';
-        html += `<tr>
-          <td>${ts}</td>
-          <td class="intent-key">${escHtml(ev.intent_signature || '')}</td>
-          <td>${escHtml(ev.mode || '')}</td>
-          <td>${result}</td>
-          <td>${escHtml(ev.target_profile || '')}</td>
-        </tr>`;
-      });
-      html += '</tbody></table>';
-      el.innerHTML = html;
-    } catch(e) {
-      const el = document.getElementById(innerId);
-      if (el) el.innerHTML = '<div style="color:#f85149;font-size:11px;padding:8px">Failed to load events</div>';
-    }
-  }, 0);
-  return container;
-}
 
 async function cpDeltaReconcile(deltaId, outcome) {
   const doReconcile = async () => {

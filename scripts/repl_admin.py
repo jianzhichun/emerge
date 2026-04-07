@@ -1083,10 +1083,17 @@ def cmd_assets() -> dict:
 
 
 def cmd_submit_actions(actions: list) -> dict:
-    """Atomically write pending-actions.json to trigger PendingActionMonitor."""
+    """Atomically write pending-actions.json to trigger CC dispatch loop.
+
+    Refuses if a previous submission has not yet been consumed by CC, so that
+    a slow CC response never silently drops an earlier batch of actions.
+    """
     state_root = _resolve_repl_root()
     state_root.mkdir(parents=True, exist_ok=True)
     pending_path = state_root / "pending-actions.json"
+    if pending_path.exists():
+        return {"ok": False, "error": "already_pending",
+                "message": "Previous submission not yet processed by CC — please wait."}
     tmp_p = state_root / "pending-actions.json.tmp"
     payload = {
         "submitted_at": int(time.time() * 1000),
@@ -1658,8 +1665,13 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/inject-component":
             connector = str(body.get("connector", "")).strip()
             html = str(body.get("html", ""))
+            replace = bool(body.get("replace", False))
             if connector and html:
-                _cockpit_append_injected_html(connector, html)
+                if replace:
+                    with _COCKPIT_INJECT_LOCK:
+                        _COCKPIT_INJECTED_HTML[connector] = [html]
+                else:
+                    _cockpit_append_injected_html(connector, html)
             self._json({"ok": True})
         elif path == "/api/control-plane/delta/reconcile":
             self._json(cmd_control_plane_delta_reconcile(
@@ -1760,6 +1772,36 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
 
 def _cockpit_pid_path() -> "Path":
     return _resolve_repl_root() / "cockpit.pid"
+
+
+def _wait_for_submit_pid_path() -> "Path":
+    return _resolve_repl_root() / "wait-for-submit.pid"
+
+
+def _wait_for_submit_acquire() -> None:
+    """Kill any existing wait-for-submit process, then write our own pid."""
+    import signal as _signal
+    pid_path = _wait_for_submit_pid_path()
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    if pid_path.exists():
+        try:
+            existing_pid = int(pid_path.read_text(encoding="utf-8").strip())
+            if existing_pid != os.getpid():
+                os.kill(existing_pid, _signal.SIGTERM)
+        except (OSError, ValueError):
+            pass
+        pid_path.unlink(missing_ok=True)
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+
+
+def _wait_for_submit_release() -> None:
+    pid_path = _wait_for_submit_pid_path()
+    try:
+        existing = pid_path.read_text(encoding="utf-8").strip()
+        if existing == str(os.getpid()):
+            pid_path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
@@ -1908,11 +1950,6 @@ def _write_cc_listening(deadline: float) -> None:
     )
 
 
-def _remove_cc_listening() -> None:
-    try:
-        _cc_listening_path().unlink(missing_ok=True)
-    except OSError:
-        pass
 
 
 def cmd_wait_for_submit(timeout_seconds: int = 600) -> dict:
@@ -1931,6 +1968,7 @@ def cmd_wait_for_submit(timeout_seconds: int = 600) -> dict:
     the cockpit UI can show a live "CC ready" indicator and disable the submit
     button when CC is not listening.
     """
+    _wait_for_submit_acquire()  # kill stale instance, write our pid
     state_root = _resolve_repl_root()
     state_root.mkdir(parents=True, exist_ok=True)
     pending_path = state_root / "pending-actions.json"
@@ -1946,6 +1984,7 @@ def cmd_wait_for_submit(timeout_seconds: int = 600) -> dict:
                     submitted_at = data.get("submitted_at", 0)
                     processed = pending_path.with_name("pending-actions.processed.json")
                     pending_path.rename(processed)
+                    processed.unlink(missing_ok=True)  # consumed; no need to keep on disk
                     return {"ok": True, "actions": actions, "submitted_at": submitted_at, "action_count": len(actions)}
                 except (json.JSONDecodeError, OSError):
                     pass
@@ -1955,7 +1994,10 @@ def cmd_wait_for_submit(timeout_seconds: int = 600) -> dict:
                 _write_cc_listening(deadline)
                 _last_ping = time.time()
     finally:
-        _remove_cc_listening()
+        _wait_for_submit_release()
+        # Write a grace-period heartbeat (30 s) instead of deleting, so the
+        # cockpit UI stays "CC ready" while CC re-arms for the next submission.
+        _write_cc_listening(time.time() + 30)
     return {"ok": False, "timeout": True, "actions": []}
 
 
