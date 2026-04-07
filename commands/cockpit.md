@@ -35,20 +35,21 @@ Steps:
       - You will be **notified automatically** when the command completes — do NOT poll or sleep.
 
    b. When notified of completion, **always read the output file** (`cat <output-file-path>`) before doing anything else — the task-notification only contains a summary, not the actions. Parse the JSON:
-      - `{"ok": true, "actions": [...]}` → process actions (step c)
       - `{"ok": false, "timeout": true}` → re-launch wait-for-submit in background (back to step a); no user message needed
       - If the user said "close cockpit" before the notification arrived, skip processing and go to step 5 instead.
+      - `{"ok": true, "actions": [...]}` → go to step c
 
-   c. Process received actions sequentially:
-      - `pipeline-set` → `repl_admin.py pipeline-set --pipeline-key <key> --set <field>=<value>` (one --set per field)
-      - `pipeline-delete` → `repl_admin.py pipeline-delete --pipeline-key <key>`
-      - `notes-comment` → append `\n\n<!-- <ISO timestamp> -->\n<comment>` to `~/.emerge/connectors/<connector>/NOTES.md`
-      - `notes-edit` → overwrite `~/.emerge/connectors/<connector>/NOTES.md` entirely
-      - `tool-call` → **deterministic call only**: execute exactly `call.tool` + `call.arguments` (`icc_read`/`icc_write`); do not rewrite as free-form reasoning
-        - If `auto.mode=auto` and `flywheel.synthesis_ready=true`, append a crystallization suggestion after execution (do not block the result)
-      - `crystallize-component` → write to `~/.emerge/connectors/<connector>/cockpit/<filename>.html` and `<filename>.context.md`
-
-   d. After processing, briefly report results, then immediately re-launch wait-for-submit in background (back to step a) — unless the user said "close cockpit".
+   c. **Re-arm FIRST, then process** — this order is critical:
+      1. **Immediately re-launch wait-for-submit in background** (back to step a pattern) so the frontend can accept the next submission while you process the current one.
+      2. Then process received actions sequentially:
+         - `pipeline-set` → `repl_admin.py pipeline-set --pipeline-key <key> --set <field>=<value>` (one --set per field)
+         - `pipeline-delete` → `repl_admin.py pipeline-delete --pipeline-key <key>`
+         - `notes-comment` → append `\n\n<!-- <ISO timestamp> -->\n<comment>` to `~/.emerge/connectors/<connector>/NOTES.md`
+         - `notes-edit` → overwrite `~/.emerge/connectors/<connector>/NOTES.md` entirely
+         - `tool-call` → **deterministic call only**: execute exactly `call.tool` + `call.arguments` (`icc_read`/`icc_write`); do not rewrite as free-form reasoning
+           - If `auto.mode=auto` and `flywheel.synthesis_ready=true`, append a crystallization suggestion after execution (do not block the result)
+         - `crystallize-component` → write to `~/.emerge/connectors/<connector>/cockpit/<filename>.html` and `<filename>.context.md`
+      3. Briefly report results. The next wait-for-submit is already running — no need to re-arm again.
 
 5. **Close the cockpit**: when the user says close/exit:
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" serve-stop`

@@ -2048,9 +2048,10 @@ def cmd_wait_for_submit(timeout_seconds: int = 600) -> dict:
                 _last_ping = time.time()
     finally:
         _wait_for_submit_release()
-        # Write a grace-period heartbeat (30 s) instead of deleting, so the
-        # cockpit UI stays "CC ready" while CC re-arms for the next submission.
-        _write_cc_listening(time.time() + 30)
+        # Write a grace-period heartbeat (5 min) instead of deleting, so the
+        # cockpit UI stays "CC ready" while CC processes the action and re-arms.
+        # 5 min covers typical CC processing time; re-arm overwrites this anyway.
+        _write_cc_listening(time.time() + 300)
     return {"ok": False, "timeout": True, "actions": []}
 
 
