@@ -42,6 +42,7 @@ from scripts.goal_control_plane import (
     EVENT_HUMAN_EDIT,
     GoalControlPlane,
 )
+from scripts.state_tracker import StateTracker, load_tracker, save_tracker
 
 
 def _local_plugin_version() -> str:
@@ -1103,6 +1104,283 @@ def cmd_submit_actions(actions: list) -> dict:
     return {"ok": True, "action_count": len(actions), "pending_path": str(pending_path)}
 
 
+# ---------------------------------------------------------------------------
+# Control-plane read API
+# ---------------------------------------------------------------------------
+
+
+def cmd_control_plane_state() -> dict:
+    """Full StateTracker snapshot for cockpit."""
+    pin_plugin_data_path_if_present()
+    state_path = Path(default_hook_state_root()) / "state.json"
+    tracker = load_tracker(state_path)
+    d = tracker.to_dict()
+    return {
+        "ok": True,
+        "deltas": d.get("deltas", []),
+        "risks": d.get("open_risks", []),
+        "verification_state": d.get("verification_state", "verified"),
+        "consistency_window_ms": d.get("consistency_window_ms", 0),
+        "active_span_id": d.get("active_span_id"),
+        "active_span_intent": d.get("active_span_intent"),
+    }
+
+
+def cmd_control_plane_intents() -> dict:
+    """Merged intent list from pipelines-registry + span-candidates + exec candidates."""
+    policy = cmd_policy_status()
+    intents: dict[str, dict] = {}
+    for p in policy.get("pipelines", []):
+        key = p.get("key", "")
+        if not key:
+            continue
+        intents[key] = {
+            "intent_signature": key,
+            "source": "exec",
+            "policy_status": p.get("status", "explore"),
+            "success_rate": p.get("success_rate"),
+            "human_fix_rate": p.get("human_fix_rate"),
+            "consecutive_failures": p.get("consecutive_failures", 0),
+            "frozen": p.get("frozen", False),
+            "updated_at_ms": p.get("updated_at_ms", 0),
+        }
+    state_root = _resolve_state_root()
+    span_cand_path = state_root / "span-candidates.json"
+    if span_cand_path.exists():
+        try:
+            sc = json.loads(span_cand_path.read_text(encoding="utf-8"))
+            for key, entry in sc.get("spans", {}).items():
+                att = int(entry.get("attempts", 0))
+                succ = int(entry.get("successes", 0))
+                if key in intents:
+                    intents[key]["source"] = "both"
+                    intents[key]["span_status"] = _span_policy_label(entry)
+                else:
+                    intents[key] = {
+                        "intent_signature": key,
+                        "source": "span",
+                        "policy_status": _span_policy_label(entry),
+                        "success_rate": round(succ / att, 4) if att else None,
+                        "human_fix_rate": None,
+                        "consecutive_failures": int(entry.get("consecutive_failures", 0)),
+                        "frozen": entry.get("frozen", False),
+                        "updated_at_ms": int(entry.get("last_ts_ms", 0)),
+                    }
+        except Exception:
+            pass
+    return {"ok": True, "intents": list(intents.values())}
+
+
+def _span_policy_label(entry: dict) -> str:
+    att = int(entry.get("attempts", 0))
+    succ = int(entry.get("successes", 0))
+    if att == 0:
+        return "explore"
+    rate = succ / att
+    if att >= 40 and rate >= 0.97:
+        return "stable"
+    if att >= 20 and rate >= 0.95:
+        return "canary"
+    return "explore"
+
+
+def cmd_control_plane_session() -> dict:
+    """Session health: checkpoint + recovery + WAL stats."""
+    session_dir, wal_path, checkpoint_path = _session_paths()
+    wal_entries = 0
+    if wal_path.exists():
+        with wal_path.open("r", encoding="utf-8") as f:
+            wal_entries = sum(1 for line in f if line.strip())
+    checkpoint = None
+    if checkpoint_path.exists():
+        try:
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    recovery = None
+    recovery_path = session_dir / "recovery.json"
+    if recovery_path.exists():
+        try:
+            recovery = json.loads(recovery_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {
+        "ok": True,
+        "session_id": _resolve_session_id(),
+        "session_dir": str(session_dir),
+        "wal_entries": wal_entries,
+        "checkpoint": checkpoint,
+        "recovery": recovery,
+    }
+
+
+def cmd_control_plane_exec_events(limit: int = 100, since_ms: int = 0, intent: str = "") -> dict:
+    """Paginated exec events from session."""
+    session_dir, _, _ = _session_paths()
+    events_path = session_dir / "exec-events.jsonl"
+    events: list[dict] = []
+    if events_path.exists():
+        for line in events_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except Exception:
+                continue
+            if since_ms and int(ev.get("ts_ms", 0)) < since_ms:
+                continue
+            if intent and ev.get("intent_signature") != intent:
+                continue
+            events.append(ev)
+    events.sort(key=lambda e: int(e.get("ts_ms", 0)), reverse=True)
+    return {"ok": True, "events": events[:limit]}
+
+
+def cmd_control_plane_pipeline_events(limit: int = 100, since_ms: int = 0, intent: str = "") -> dict:
+    """Paginated pipeline events from session."""
+    session_dir, _, _ = _session_paths()
+    events_path = session_dir / "pipeline-events.jsonl"
+    events: list[dict] = []
+    if events_path.exists():
+        for line in events_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except Exception:
+                continue
+            if since_ms and int(ev.get("ts_ms", 0)) < since_ms:
+                continue
+            if intent and ev.get("intent_signature") != intent:
+                continue
+            events.append(ev)
+    events.sort(key=lambda e: int(e.get("ts_ms", 0)), reverse=True)
+    return {"ok": True, "events": events[:limit]}
+
+
+def cmd_control_plane_spans(limit: int = 50, intent: str = "") -> dict:
+    """Recent span WAL entries."""
+    state_root = _resolve_state_root()
+    wal_path = state_root / "span-wal" / "spans.jsonl"
+    spans: list[dict] = []
+    if wal_path.exists():
+        for line in wal_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                sp = json.loads(line)
+            except Exception:
+                continue
+            if intent and sp.get("intent_signature") != intent:
+                continue
+            spans.append(sp)
+    spans.sort(key=lambda s: int(s.get("closed_at_ms", 0) or 0), reverse=True)
+    return {"ok": True, "spans": spans[:limit]}
+
+
+def cmd_control_plane_span_candidates() -> dict:
+    """All span candidate entries."""
+    state_root = _resolve_state_root()
+    path = state_root / "span-candidates.json"
+    if not path.exists():
+        return {"ok": True, "candidates": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {"ok": True, "candidates": data.get("spans", {})}
+    except Exception:
+        return {"ok": True, "candidates": {}}
+
+
+# ---------------------------------------------------------------------------
+# Control-plane write API
+# ---------------------------------------------------------------------------
+
+
+def cmd_control_plane_delta_reconcile(delta_id: str, outcome: str, intent_signature: str = "") -> dict:
+    pin_plugin_data_path_if_present()
+    state_path = Path(default_hook_state_root()) / "state.json"
+    tracker = load_tracker(state_path)
+    tracker.reconcile_delta(delta_id, outcome)
+    save_tracker(state_path, tracker)
+    return {"ok": True, "delta_id": delta_id, "outcome": outcome}
+
+
+def cmd_control_plane_risk_update(
+    risk_id: str, action: str, reason: str = "", snooze_duration_ms: int = 3600000,
+) -> dict:
+    pin_plugin_data_path_if_present()
+    state_path = Path(default_hook_state_root()) / "state.json"
+    tracker = load_tracker(state_path)
+    tracker.update_risk(risk_id, action=action, reason=reason or None, snooze_duration_ms=snooze_duration_ms)
+    save_tracker(state_path, tracker)
+    return {"ok": True, "risk_id": risk_id, "action": action}
+
+
+def cmd_control_plane_risk_add(text: str, intent_signature: str = "") -> dict:
+    pin_plugin_data_path_if_present()
+    state_path = Path(default_hook_state_root()) / "state.json"
+    tracker = load_tracker(state_path)
+    tracker.add_risk(text, intent_signature=intent_signature or None)
+    save_tracker(state_path, tracker)
+    return {"ok": True, "text": text}
+
+
+def cmd_control_plane_policy_freeze(key: str) -> dict:
+    state_root = _resolve_state_root()
+    registry_path = state_root / "pipelines-registry.json"
+    if not registry_path.exists():
+        return {"ok": False, "error": "no pipelines-registry.json"}
+    data = json.loads(registry_path.read_text(encoding="utf-8"))
+    if key not in data.get("pipelines", {}):
+        return {"ok": False, "error": f"pipeline {key!r} not found"}
+    data["pipelines"][key]["frozen"] = True
+    registry_path.write_text(json.dumps(data, ensure_ascii=True, indent=2), encoding="utf-8")
+    return {"ok": True, "key": key, "frozen": True}
+
+
+def cmd_control_plane_policy_unfreeze(key: str) -> dict:
+    state_root = _resolve_state_root()
+    registry_path = state_root / "pipelines-registry.json"
+    if not registry_path.exists():
+        return {"ok": False, "error": "no pipelines-registry.json"}
+    data = json.loads(registry_path.read_text(encoding="utf-8"))
+    if key not in data.get("pipelines", {}):
+        return {"ok": False, "error": f"pipeline {key!r} not found"}
+    data["pipelines"][key]["frozen"] = False
+    registry_path.write_text(json.dumps(data, ensure_ascii=True, indent=2), encoding="utf-8")
+    return {"ok": True, "key": key, "frozen": False}
+
+
+def cmd_control_plane_session_export() -> dict:
+    pin_plugin_data_path_if_present()
+    state_path = Path(default_hook_state_root()) / "state.json"
+    tracker = load_tracker(state_path)
+    session_dir, wal_path, checkpoint_path = _session_paths()
+    snapshot = {
+        "state_tracker": tracker.to_dict(),
+        "session_id": _resolve_session_id(),
+    }
+    if checkpoint_path.exists():
+        try:
+            snapshot["checkpoint"] = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"ok": True, "snapshot": snapshot}
+
+
+def cmd_control_plane_session_reset(confirm: str) -> dict:
+    if confirm != "RESET":
+        return {"ok": False, "error": "must pass confirm='RESET'"}
+    export = cmd_control_plane_session_export()
+    pin_plugin_data_path_if_present()
+    state_path = Path(default_hook_state_root()) / "state.json"
+    save_tracker(state_path, StateTracker())
+    return {"ok": True, "reset": True, "pre_reset_snapshot": export.get("snapshot")}
+
+
 def _cmd_set_goal(body: dict) -> dict:
     """Submit a human_edit goal event and return the active snapshot."""
     goal = str(body.get("goal", "")).strip()
@@ -1293,6 +1571,34 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self._json(_cmd_goal_history(limit=limit))
         elif path.startswith("/api/components/"):
             self._serve_component(path)
+        elif path == "/api/control-plane/state":
+            self._json(cmd_control_plane_state())
+        elif path == "/api/control-plane/intents":
+            self._json(cmd_control_plane_intents())
+        elif path == "/api/control-plane/session":
+            self._json(cmd_control_plane_session())
+        elif path.startswith("/api/control-plane/exec-events"):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            self._json(cmd_control_plane_exec_events(
+                limit=int(qs.get("limit", ["100"])[0]),
+                since_ms=int(qs.get("since_ms", ["0"])[0]),
+                intent=qs.get("intent", [""])[0],
+            ))
+        elif path.startswith("/api/control-plane/pipeline-events"):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            self._json(cmd_control_plane_pipeline_events(
+                limit=int(qs.get("limit", ["100"])[0]),
+                since_ms=int(qs.get("since_ms", ["0"])[0]),
+                intent=qs.get("intent", [""])[0],
+            ))
+        elif path == "/api/control-plane/span-candidates":
+            self._json(cmd_control_plane_span_candidates())
+        elif path.startswith("/api/control-plane/spans"):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            self._json(cmd_control_plane_spans(
+                limit=int(qs.get("limit", ["50"])[0]),
+                intent=qs.get("intent", [""])[0],
+            ))
         else:
             self._err(404)
 
@@ -1314,6 +1620,32 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             if connector and html:
                 _cockpit_append_injected_html(connector, html)
             self._json({"ok": True})
+        elif path == "/api/control-plane/delta/reconcile":
+            self._json(cmd_control_plane_delta_reconcile(
+                delta_id=str(body.get("delta_id", "")),
+                outcome=str(body.get("outcome", "")),
+                intent_signature=str(body.get("intent_signature", "")),
+            ))
+        elif path == "/api/control-plane/risk/update":
+            self._json(cmd_control_plane_risk_update(
+                risk_id=str(body.get("risk_id", "")),
+                action=str(body.get("action", "")),
+                reason=str(body.get("reason", "")),
+                snooze_duration_ms=int(body.get("snooze_duration_ms", 3600000)),
+            ))
+        elif path == "/api/control-plane/risk/add":
+            self._json(cmd_control_plane_risk_add(
+                text=str(body.get("text", "")),
+                intent_signature=str(body.get("intent_signature", "")),
+            ))
+        elif path == "/api/control-plane/policy/freeze":
+            self._json(cmd_control_plane_policy_freeze(key=str(body.get("key", ""))))
+        elif path == "/api/control-plane/policy/unfreeze":
+            self._json(cmd_control_plane_policy_unfreeze(key=str(body.get("key", ""))))
+        elif path == "/api/control-plane/session/export":
+            self._json(cmd_control_plane_session_export())
+        elif path == "/api/control-plane/session/reset":
+            self._json(cmd_control_plane_session_reset(confirm=str(body.get("confirm", ""))))
         else:
             self._err(404)
 
