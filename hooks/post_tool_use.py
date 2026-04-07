@@ -52,6 +52,11 @@ def main() -> None:
     level = _classify_level(tool_name)
     provisional = bool(payload.get("provisional", False))
 
+    tool_input = payload.get("tool_input", {}) or {}
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+    intent_signature = str(tool_input.get("intent_signature", "")).strip() or None
+
     # verification_state lives inside content[0]["text"] (serialized JSON), not in the
     # outer MCP wrapper. Parse it out; fall back to "verified" if absent or unparseable.
     verification_state = "verified"
@@ -69,6 +74,8 @@ def main() -> None:
         level=level,
         verification_state=verification_state,
         provisional=provisional,
+        intent_signature=intent_signature,
+        tool_name=tool_name,
     )
 
     # Propagate degraded pipeline verification as an open risk
