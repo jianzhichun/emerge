@@ -185,8 +185,20 @@ class GoalControlPlane:
 
     def read_ledger(self, limit: int = 100) -> list[dict[str, Any]]:
         self.ensure_initialized()
+        # Read only the tail of the file: seek backward from EOF to avoid loading
+        # the full ledger into memory when it grows large over time.
+        _MAX_TAIL_BYTES = 256 * 1024  # 256 KB covers ~2000 typical entries
         rows: list[dict[str, Any]] = []
-        for line in self.ledger_path.read_text(encoding="utf-8").splitlines():
+        try:
+            size = self.ledger_path.stat().st_size
+            with self.ledger_path.open("rb") as f:
+                if size > _MAX_TAIL_BYTES:
+                    f.seek(-_MAX_TAIL_BYTES, 2)
+                    f.readline()  # skip partial first line
+                raw = f.read().decode("utf-8", errors="replace")
+        except OSError:
+            return rows
+        for line in raw.splitlines():
             line = line.strip()
             if not line:
                 continue

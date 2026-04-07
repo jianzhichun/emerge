@@ -13,6 +13,7 @@ LEVEL_CORE_CRITICAL = "core_critical"
 LEVEL_CORE_SECONDARY = "core_secondary"
 LEVEL_PERIPHERAL = "peripheral"
 MAX_GOAL_CHARS = 120
+MAX_DELTAS = 500  # hard cap per session; pre_compact resets on compaction
 
 
 class StateTracker:
@@ -70,6 +71,11 @@ class StateTracker:
         )
         if verification_state == "degraded":
             self.state["verification_state"] = "degraded"
+        # Hard cap: keep the most recent MAX_DELTAS entries to prevent unbounded growth.
+        # pre_compact.py resets the tracker on compaction, so this only matters for
+        # very long sessions with many icc_* calls.
+        if len(self.state["deltas"]) > MAX_DELTAS:
+            self.state["deltas"] = self.state["deltas"][-MAX_DELTAS:]
         return delta_id
 
     def add_risk(

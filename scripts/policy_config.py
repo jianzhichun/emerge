@@ -208,3 +208,25 @@ def load_settings() -> dict:
     _SETTINGS_CACHE = merged
     return _SETTINGS_CACHE
 
+
+def truncate_jsonl_if_needed(path: "Path", max_lines: int, trigger_ratio: float = 1.5) -> None:
+    """Truncate a .jsonl file to *max_lines* when it exceeds max_lines * trigger_ratio.
+
+    Reads the file once and rewrites only when the trigger threshold is crossed,
+    so the amortised cost per append is O(1) for normal operation.
+    Silently ignores all errors (disk full, permissions, etc.).
+    """
+    try:
+        if not path.exists():
+            return
+        text = path.read_text(encoding="utf-8")
+        lines = [l for l in text.splitlines() if l.strip()]
+        if len(lines) <= int(max_lines * trigger_ratio):
+            return
+        trimmed = "\n".join(lines[-max_lines:]) + "\n"
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(trimmed, encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        pass
+

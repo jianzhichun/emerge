@@ -262,6 +262,16 @@ class SpanTracker:
         if span.description:
             entry["description"] = span.description
         candidates["spans"][key] = entry
+        # Hard cap: evict oldest entries (by last_ts_ms) when over MAX_CANDIDATES.
+        _MAX_CANDIDATES = 1000
+        if len(candidates["spans"]) > _MAX_CANDIDATES:
+            evict_count = len(candidates["spans"]) - _MAX_CANDIDATES
+            sorted_keys = sorted(
+                candidates["spans"],
+                key=lambda k: candidates["spans"][k].get("last_ts_ms", 0),
+            )
+            for evict_key in sorted_keys[:evict_count]:
+                del candidates["spans"][evict_key]
         self._atomic_write(self._candidates_path(), candidates)
 
     def get_policy_status(self, intent_signature: str) -> str:

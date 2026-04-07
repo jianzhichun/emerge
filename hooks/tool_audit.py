@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.policy_config import default_exec_root, default_hook_state_root, derive_session_id  # noqa: E402
+from scripts.policy_config import default_exec_root, default_hook_state_root, derive_session_id, truncate_jsonl_if_needed  # noqa: E402
 from scripts.span_tracker import is_read_only_tool  # noqa: E402
 
 
@@ -64,8 +64,10 @@ def main() -> None:
     }
     try:
         session_dir.mkdir(parents=True, exist_ok=True)
-        with (session_dir / "tool-events.jsonl").open("a", encoding="utf-8") as f:
+        events_path = session_dir / "tool-events.jsonl"
+        with events_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=True) + "\n")
+        truncate_jsonl_if_needed(events_path, max_lines=5_000)
     except Exception:
         pass
 

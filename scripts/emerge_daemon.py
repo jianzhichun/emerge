@@ -34,6 +34,7 @@ from scripts.policy_config import (  # noqa: E402
     default_exec_root,
     default_hook_state_root,
     pin_plugin_data_path_if_present,
+    truncate_jsonl_if_needed,
 )
 from scripts.runner_client import RunnerRouter  # noqa: E402
 from scripts.exec_session import ExecSession  # noqa: E402
@@ -1607,10 +1608,14 @@ class EmergeDaemon:
         session_dir = self._state_root / self._base_session_id
         session_dir.mkdir(parents=True, exist_ok=True)
         events_path = session_dir / "exec-events.jsonl"
-        with events_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=True) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
+        try:
+            with events_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(event, ensure_ascii=True) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            truncate_jsonl_if_needed(events_path, max_lines=10_000)
+        except OSError:
+            pass  # disk full or permissions — non-fatal; policy state written elsewhere
 
         try:
             self._sink.emit(
@@ -1732,10 +1737,14 @@ class EmergeDaemon:
         }
 
         events_path = session_dir / "pipeline-events.jsonl"
-        with events_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=True) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
+        try:
+            with events_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(event, ensure_ascii=True) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            truncate_jsonl_if_needed(events_path, max_lines=10_000)
+        except OSError:
+            pass  # disk full or permissions — non-fatal
 
         try:
             _mode = "read" if "read" in tool_name else "write"

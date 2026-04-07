@@ -1029,9 +1029,16 @@ def _injected_runtime_basename(i: int) -> str:
     return f"injected-runtime-{i}.html"
 
 
+_MAX_INJECTED_PER_CONNECTOR = 50  # guard against runaway accumulation
+
+
 def _cockpit_append_injected_html(connector: str, html: str) -> None:
     with _COCKPIT_INJECT_LOCK:
-        _COCKPIT_INJECTED_HTML.setdefault(connector, []).append(html)
+        items = _COCKPIT_INJECTED_HTML.setdefault(connector, [])
+        items.append(html)
+        if len(items) > _MAX_INJECTED_PER_CONNECTOR:
+            # Drop oldest entries, keep the most recent ones
+            _COCKPIT_INJECTED_HTML[connector] = items[-_MAX_INJECTED_PER_CONNECTOR:]
 
 
 def _cockpit_list_injected_html(connector: str) -> list[str]:
