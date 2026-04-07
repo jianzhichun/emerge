@@ -265,7 +265,7 @@ flowchart LR
 | Operator monitor         | `scripts/operator_monitor.py`                                                                                                                  |
 | Ops / bootstrap          | `scripts/repl_admin.py`                                                                                                                        |
 | Test connector (mock)    | `tests/connectors/mock/pipelines/`                                                                                                             |
-| Slash commands           | `commands/` (`init`, `policy`, `cockpit`, `runner-status`)                                                                                     |
+| Slash commands           | `commands/` (`init`, `cockpit`, `runner-status`, `import`, `export`)                                                                            |
 | Skills                   | `skills/` (`initializing-vertical-flywheel`, `remote-runner-dev`, `writing-vertical-adapter`, `operator-monitor-debug`, `policy-optimization`) |
 | Reference (submodule)    | `references/claude-code`                                                                                                                       |
 
@@ -276,9 +276,10 @@ flowchart LR
 | Command          | Description                                                                                      |
 | ---------------- | ------------------------------------------------------------------------------------------------ |
 | `/init`          | Initialize a vertical flywheel from natural language context                                     |
-| `/policy`        | Show Emerge flywheel policy status dashboard                                                     |
 | `/cockpit`       | Browser dashboard — view flywheel state, queue pipeline/NOTES/scenario actions, submit to CC    |
 | `/runner-status` | Show remote runner health status                                                                 |
+| `/import`        | Import a connector asset package zip into local connector/pipeline state                         |
+| `/export`        | Export a connector asset package zip (connector files + registry entries)                        |
 
 
 ## Requirements
