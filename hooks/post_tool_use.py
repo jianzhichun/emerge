@@ -1,9 +1,13 @@
+"""PostToolUse hook for emerge MCP tools (icc_read/write/exec/reconcile/crystallize).
+
+General CC tool calls (Bash, Read, Grep, etc.) are handled by tool_audit.py via
+a separate PostToolUse matcher. This script only runs for emerge-specific tools.
+"""
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-import re
 import sys
 import time
 from pathlib import Path
@@ -13,7 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.goal_control_plane import GoalControlPlane  # noqa: E402
-from scripts.policy_config import default_exec_root, default_hook_state_root, derive_session_id  # noqa: E402
+from scripts.policy_config import default_hook_state_root  # noqa: E402
 from scripts.span_tracker import is_read_only_tool  # noqa: E402
 from scripts.state_tracker import (  # noqa: E402
     LEVEL_CORE_CRITICAL,
@@ -23,8 +27,6 @@ from scripts.state_tracker import (  # noqa: E402
     save_tracker,
 )
 
-_EMERGE_TOOL_RE = re.compile(r"__icc_")
-
 
 def _classify_level(tool_name: str) -> str:
     if tool_name.endswith("__icc_write"):
@@ -32,42 +34,6 @@ def _classify_level(tool_name: str) -> str:
     if tool_name.endswith("__icc_read"):
         return LEVEL_CORE_SECONDARY
     return LEVEL_PERIPHERAL
-
-
-def _args_summary(tool_input: dict) -> str:
-    """Return a short readable summary of tool arguments (max 120 chars)."""
-    if not tool_input:
-        return ""
-    for key in ("file_path", "pattern", "command", "query", "path", "old_string", "content"):
-        if key in tool_input:
-            val = str(tool_input[key])
-            return val[:120] if len(val) > 120 else val
-    for k, v in tool_input.items():
-        val = str(v)
-        return f"{k}: {val[:80]}"
-    return ""
-
-
-def _write_tool_event(tool_name: str, payload: dict) -> None:
-    """Append a lightweight tool-event record to the session-scoped tool-events.jsonl."""
-    tool_input = payload.get("tool_input", {}) or {}
-    if not isinstance(tool_input, dict):
-        tool_input = {}
-    session_id = derive_session_id(os.environ.get("EMERGE_SESSION_ID"), Path.cwd())
-    session_dir = default_exec_root() / session_id
-    event = {
-        "tool_name": tool_name,
-        "ts_ms": int(time.time() * 1000),
-        "args_summary": _args_summary(tool_input),
-        "has_side_effects": not is_read_only_tool(tool_name),
-    }
-    try:
-        session_dir.mkdir(parents=True, exist_ok=True)
-        events_path = session_dir / "tool-events.jsonl"
-        with events_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=True) + "\n")
-    except Exception:
-        pass
 
 
 def _record_span_action(
@@ -116,20 +82,10 @@ def main() -> None:
         payload = {}
 
     tool_name = payload.get("tool_name", "")
-    state_root = Path(default_hook_state_root())
-    state_path = state_root / "state.json"
-
-    # Non-emerge tools: lightweight path — write tool-event + span action, skip
-    # heavy delta/GoalControlPlane machinery and additionalContext injection.
-    if not _EMERGE_TOOL_RE.search(tool_name):
-        _write_tool_event(tool_name, payload)
-        _record_span_action(tool_name, payload, state_root, state_path)
-        print(json.dumps({}))
-        return
-
-    # ── Emerge tool full path ────────────────────────────────────────────────
     raw_result = payload.get("tool_result", {})
     result = raw_result if isinstance(raw_result, dict) else {}
+    state_root = Path(default_hook_state_root())
+    state_path = state_root / "state.json"
     tracker = load_tracker(state_path)
     goal_cp = GoalControlPlane(state_root)
     goal_cp.ensure_initialized()

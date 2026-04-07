@@ -46,11 +46,20 @@
     ],
     "PostToolUse": [
       {
-        "matcher": ".*",
+        "matcher": "mcp__plugin_.*emerge.*__icc_(read|write|exec|reconcile|crystallize)",
         "hooks": [
           {
             "type": "command",
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/post_tool_use.py"
+          }
+        ]
+      },
+      {
+        "matcher": "^(?!mcp__plugin_.*emerge.*__icc_).*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/tool_audit.py"
           }
         ]
       }

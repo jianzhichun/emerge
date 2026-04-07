@@ -96,9 +96,13 @@ class EmergeDaemon:
         state_root = Path(
             os.environ.get("EMERGE_STATE_ROOT") or str(default_exec_root())
         ).expanduser().resolve()
+        # Session ID is derived from the active project directory (CWD when CC starts
+        # the daemon), not from the plugin installation directory. This matches the
+        # derivation used by repl_admin and PostToolUse hooks.
+        _project_root = Path(os.environ.get("EMERGE_PROJECT_ROOT", "")).resolve() if os.environ.get("EMERGE_PROJECT_ROOT") else Path.cwd()
         self._base_session_id = derive_session_id(
             os.environ.get("EMERGE_SESSION_ID"),
-            resolved_root,
+            _project_root,
         )
         self._state_root = state_root
         self._sessions_by_profile: dict[str, ExecSession] = {}

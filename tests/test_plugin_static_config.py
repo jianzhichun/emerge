@@ -28,10 +28,14 @@ def test_hooks_json_has_required_events_and_post_tool_matcher():
         assert event in hooks
         assert isinstance(hooks[event], list) and hooks[event]
 
-    # PostToolUse fires for all tools (".*") so general CC tool calls
-    # (Bash, Read, Grep, etc.) are recorded in tool-events.jsonl for audit.
-    matcher = hooks["PostToolUse"][0]["matcher"]
-    assert matcher == ".*"
+    # Two PostToolUse entries:
+    # [0] emerge icc_* tools → full delta/span/context path (post_tool_use.py)
+    # [1] all other tools   → lightweight audit path (tool_audit.py)
+    assert len(hooks["PostToolUse"]) == 2
+    emerge_matcher = hooks["PostToolUse"][0]["matcher"]
+    assert "icc_" in emerge_matcher
+    audit_matcher = hooks["PostToolUse"][1]["matcher"]
+    assert "tool_audit" in hooks["PostToolUse"][1]["hooks"][0]["command"]
 
 
 def test_hooks_json_commands_use_claude_plugin_root():
