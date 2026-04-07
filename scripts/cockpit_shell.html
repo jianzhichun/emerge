@@ -306,6 +306,31 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .conn-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; padding: 2px 0; }
 .conn-group-name { font-size: 10px; font-weight: 700; letter-spacing: 0.5px; padding: 1px 7px; border-radius: 3px; }
 .conn-group-count { font-size: 10px; color: #484f58; }
+.cp-summary { margin-bottom: 16px; }
+.cp-stat-strip { display: flex; gap: 8px; margin-bottom: 12px; }
+.cp-stat-card { flex: 1; background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 10px 12px; text-align: center; }
+.cp-stat-card.degraded { border-color: #f85149; background: #1a0f0f; }
+.cp-stat-card.warning { border-color: #d29922; }
+.cp-stat-num { font-size: 18px; font-weight: bold; color: #e6edf3; }
+.cp-stat-num.critical { color: #f85149; }
+.cp-stat-num.canary { color: #d29922; }
+.cp-stat-label { font-size: 10px; color: #8b949e; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+.cp-intent-table-wrap { overflow-x: auto; }
+.cp-intent-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.cp-intent-table th { text-align: left; padding: 6px 10px; background: #161b22; border-bottom: 1px solid #30363d; color: #8b949e; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+.cp-intent-table td { padding: 6px 10px; border-bottom: 1px solid #21262d; }
+.cp-intent-table tr:hover { background: #161b22; }
+.cp-intent-table td.critical { color: #f85149; }
+.intent-key { color: #58a6ff; font-family: 'SF Mono', Consolas, monospace; }
+.source-badge { font-size: 10px; padding: 1px 5px; border-radius: 3px; }
+.source-badge.exec { color: #79c0ff; background: #0d1f33; }
+.source-badge.span { color: #d2a8ff; background: #1f0d33; }
+.source-badge.both { color: #a5d6ff; background: #0d2233; }
+.status-badge { font-size: 10px; padding: 1px 5px; border-radius: 3px; font-weight: 600; }
+.status-badge.explore { color: #8b949e; background: #21262d; }
+.status-badge.canary { color: #d29922; background: #2d2000; }
+.status-badge.stable { color: #3fb950; background: #0d2000; }
+.status-badge.rollback { color: #f85149; background: #2d0000; }
 </style>
 </head>
 <body>
@@ -470,6 +495,8 @@ function groupByConnector(pipelines) {
 // ── State ────────────────────────────────────────────────────────────────────
 let policyData = null;
 let assetsData = null;
+let stateData = null;
+let intentsData = null;
 let queue = [];
 let currentTab = 'overview';
 let connectorPanelByTab = {};
@@ -485,7 +512,7 @@ let _refreshCountdown = REFRESH_INTERVAL_S;
 let _lastRefreshAt = null;
 
 async function init() {
-  await Promise.all([refreshPolicy(), refreshAssets(), refreshStatus(), refreshGoal(), refreshGoalHistory()]);
+  await Promise.all([refreshPolicy(), refreshAssets(), refreshStatus(), refreshGoal(), refreshGoalHistory(), refreshState(), refreshIntents()]);
   _lastRefreshAt = new Date();
   applyViewStateFromUrl();
   renderTabs();
@@ -504,7 +531,8 @@ async function init() {
   });
   _resetRefreshTimer();
   setInterval(async () => {
-    await Promise.all([refreshPolicy(), refreshAssets()]);
+    await Promise.all([refreshPolicy(), refreshAssets(), refreshState(), refreshIntents()]);
+    renderCurrentTab();
     _lastRefreshAt = new Date();
     _resetRefreshTimer();
   }, REFRESH_INTERVAL_S * 1000);
@@ -590,6 +618,20 @@ async function refreshGoalHistory() {
     const d = await r.json();
     goalHistory = (d && d.events) ? d.events : [];
     renderGoalHistoryDropdown();
+  } catch(e) {}
+}
+
+async function refreshState() {
+  try {
+    const r = await fetch('/api/control-plane/state');
+    stateData = await r.json();
+  } catch(e) {}
+}
+
+async function refreshIntents() {
+  try {
+    const r = await fetch('/api/control-plane/intents');
+    intentsData = await r.json();
   } catch(e) {}
 }
 
@@ -967,7 +1009,69 @@ function renderOverviewTab() {
   const statCanaryClass = groups.canary.length ? ' canary' : '';
   const statStableClass = groups.stable.length ? ' stable' : '';
 
-  let html = `<div class="overview-grid">
+  // ── Intent summary section (from control-plane APIs) ──
+  const risks = stateData && stateData.risks ? stateData.risks.filter(r => r.status === 'open') : [];
+  const deltas = stateData && stateData.deltas ? stateData.deltas : [];
+  const unreconciledDeltas = deltas.filter(d => d.provisional && !d.reconcile_outcome);
+  const degraded = stateData && stateData.verification_state === 'degraded';
+  const intents = intentsData && intentsData.intents ? intentsData.intents : [];
+
+  let intentHtml = `<div class="cp-summary">
+    <div class="cp-stat-strip">
+      <div class="cp-stat-card">
+        <div class="cp-stat-num">${intents.length}</div>
+        <div class="cp-stat-label">Total Intents</div>
+      </div>
+      <div class="cp-stat-card${degraded ? ' degraded' : ''}">
+        <div class="cp-stat-num ${degraded ? 'critical' : ''}">${degraded ? 'DEGRADED' : 'VERIFIED'}</div>
+        <div class="cp-stat-label">Verification State</div>
+      </div>
+      <div class="cp-stat-card${risks.length ? ' warning' : ''}">
+        <div class="cp-stat-num ${risks.length ? 'canary' : ''}">${risks.length}</div>
+        <div class="cp-stat-label">Open Risks</div>
+      </div>
+      <div class="cp-stat-card${unreconciledDeltas.length ? ' warning' : ''}">
+        <div class="cp-stat-num ${unreconciledDeltas.length ? 'canary' : ''}">${unreconciledDeltas.length}</div>
+        <div class="cp-stat-label">Unreconciled</div>
+      </div>
+    </div>`;
+
+  if (intents.length) {
+    intentHtml += `<div class="cp-intent-table-wrap">
+      <table class="cp-intent-table">
+        <thead>
+          <tr>
+            <th>Intent Signature</th>
+            <th>Source</th>
+            <th>Status</th>
+            <th>Success</th>
+            <th>Human Fix</th>
+            <th>Failures</th>
+            <th>Frozen</th>
+          </tr>
+        </thead>
+        <tbody>`;
+    intents.forEach(i => {
+      const statusClass = i.policy_status || 'explore';
+      const sr = i.success_rate != null ? (i.success_rate * 100).toFixed(0) + '%' : '—';
+      const hfr = i.human_fix_rate != null ? (i.human_fix_rate * 100).toFixed(0) + '%' : '—';
+      const connector = (i.intent_signature || '').split('.')[0];
+      const connJs = String(connector || '').replace(/'/g, "\\'");
+      intentHtml += `<tr onclick="switchTab('${connJs}')" style="cursor:pointer">
+        <td class="intent-key">${escHtml(i.intent_signature || '')}</td>
+        <td><span class="source-badge ${escHtml(i.source || 'exec')}">${escHtml(i.source || 'exec')}</span></td>
+        <td><span class="status-badge ${escHtml(statusClass)}">${escHtml(statusClass)}</span></td>
+        <td>${sr}</td>
+        <td>${hfr}</td>
+        <td class="${(i.consecutive_failures || 0) > 0 ? 'critical' : ''}">${i.consecutive_failures || 0}</td>
+        <td>${i.frozen ? '🔒' : ''}</td>
+      </tr>`;
+    });
+    intentHtml += `</tbody></table></div>`;
+  }
+  intentHtml += `</div>`;
+
+  let html = intentHtml + `<div class="overview-grid">
     <div class="overview-donut-wrap">
       <canvas id="overview-donut" width="160" height="160"></canvas>
       <div class="donut-legend">
