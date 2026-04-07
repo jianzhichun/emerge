@@ -311,10 +311,24 @@ class StateTracker:
             goal_source_override=goal_source_override,
         )
         token_json = json.dumps(token, ensure_ascii=True, separators=(",", ":"))
+
+        # When the session is idle (no goal, no deltas, no risks), skip the
+        # human-readable section — it would only add token noise with empty values.
+        goal_text = context["Goal"]
+        delta_text = context["Delta"]
+        risks_text = context["Open Risks"]
+        is_idle = (
+            goal_text in ("Not set.", "")
+            and delta_text in ("- No changes.", "")
+            and risks_text in ("- None.", "")
+        )
+        if is_idle:
+            return f"FLYWHEEL_TOKEN\n{token_json}"
+
         return (
-            f"Goal\n{context['Goal']}\n\n"
-            f"Delta\n{context['Delta']}\n\n"
-            f"Open Risks\n{context['Open Risks']}\n\n"
+            f"Goal\n{goal_text}\n\n"
+            f"Delta\n{delta_text}\n\n"
+            f"Open Risks\n{risks_text}\n\n"
             f"FLYWHEEL_TOKEN\n{token_json}"
         )
 
