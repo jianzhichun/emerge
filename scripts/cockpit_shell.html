@@ -233,9 +233,22 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 /* Status bar */
 .status-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 22px; background: #161b22; border-top: 1px solid #21262d; display: flex; align-items: center; padding: 0 12px; font-size: 10px; color: #8b949e; gap: 16px; z-index: 10; }
 #refresh-timer { margin-left: auto; display: flex; align-items: center; gap: 5px; color: #484f58; }
-#refresh-timer .bar-track { width: 40px; height: 3px; background: #21262d; border-radius: 2px; overflow: hidden; }
-#refresh-timer .bar-fill { height: 100%; background: #388bfd; border-radius: 2px; transition: width 1s linear; }
-#refresh-timer .tick { font-size: 9px; min-width: 16px; text-align: right; }
+#refresh-timer .bar-track { width: 48px; height: 4px; background: #21262d; border-radius: 2px; overflow: hidden; display: inline-block; }
+#refresh-timer .bar-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #1f6feb 0%, #58a6ff 50%, #1f6feb 100%);
+  background-size: 200% 100%;
+  border-radius: 2px;
+  transition: width 1s linear;
+  animation: refresh-shimmer 1.4s linear infinite;
+}
+#refresh-timer .tick { font-size: 9px; min-width: 32px; text-align: right; color: #8b949e; }
+#refresh-timer .last { font-size: 9px; min-width: 78px; color: #6e7681; }
+@keyframes refresh-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
 /* Overview dashboard */
 .overview-grid { display: grid; grid-template-columns: 230px 1fr; gap: 12px; margin: 12px 0 14px; align-items: start; }
 .overview-donut-wrap { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
@@ -403,7 +416,8 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
   <span id="cc-indicator" style="font-size:11px;margin-left:12px">○ CC offline</span>
   <span id="refresh-timer">
     <span class="bar-track"><span class="bar-fill" id="refresh-bar" style="width:100%"></span></span>
-    <span class="tick" id="refresh-tick">5s</span>
+    <span class="tick" id="refresh-tick">in 5s</span>
+    <span class="last" id="refresh-last">last --:--:--</span>
   </span>
 </div>
 
@@ -468,9 +482,11 @@ let selectedGoalEventId = '';
 // ── Bootstrap ────────────────────────────────────────────────────────────────
 const REFRESH_INTERVAL_S = 5;
 let _refreshCountdown = REFRESH_INTERVAL_S;
+let _lastRefreshAt = null;
 
 async function init() {
   await Promise.all([refreshPolicy(), refreshAssets(), refreshStatus(), refreshGoal(), refreshGoalHistory()]);
+  _lastRefreshAt = new Date();
   applyViewStateFromUrl();
   renderTabs();
   renderCurrentTab();
@@ -489,6 +505,7 @@ async function init() {
   _resetRefreshTimer();
   setInterval(async () => {
     await Promise.all([refreshPolicy(), refreshAssets()]);
+    _lastRefreshAt = new Date();
     _resetRefreshTimer();
   }, REFRESH_INTERVAL_S * 1000);
   setInterval(refreshStatus, 3000);
@@ -501,12 +518,14 @@ function _resetRefreshTimer() {
 }
 
 function _tickRefreshTimer() {
-  if (_refreshCountdown > 0) _refreshCountdown--;
   const pct = (_refreshCountdown / REFRESH_INTERVAL_S) * 100;
   const bar = document.getElementById('refresh-bar');
   const tick = document.getElementById('refresh-tick');
+  const last = document.getElementById('refresh-last');
   if (bar) bar.style.width = pct + '%';
-  if (tick) tick.textContent = _refreshCountdown > 0 ? _refreshCountdown + 's' : '…';
+  if (tick) tick.textContent = _refreshCountdown > 0 ? 'in ' + _refreshCountdown + 's' : 'refreshing…';
+  if (last) last.textContent = _lastRefreshAt ? ('last ' + _lastRefreshAt.toLocaleTimeString()) : 'last --:--:--';
+  if (_refreshCountdown > 0) _refreshCountdown--;
 }
 
 async function refreshPolicy() {
