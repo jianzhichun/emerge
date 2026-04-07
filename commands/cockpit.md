@@ -18,20 +18,35 @@ Steps:
    Report to the user: URL, total pipeline count (explore/canary/stable), any pipelines with consecutive_failures.
 
 3. **Sense vertical assets and inject controls** (CC-driven, framework-agnostic) — **do this before step 4**:
-   - Run `policy-status --pretty` output is already in hand from step 2; also read `~/.emerge/connectors/<connector>/NOTES.md` and any `scenarios/*.yaml` or `cockpit/*.html` files for each connector.
-   - **Always inject a panel for every connector that has pipelines** — do not skip even if no explicit `cockpit/*.html` exists. Generate a compact HTML control panel that includes:
-     - A quick-actions section: one button per crystallized pipeline (read/write/debug), styled by status (explore=gray, canary=yellow, stable=green)
-     - A notes snippet: first 10 lines of NOTES.md if present
-     - Any scenario cards from `scenarios/*.yaml` if present
-   - For each connector panel, call `POST http://localhost:<PORT>/api/inject-component` with JSON body `{"connector": "<name>", "html": "<full HTML document>", "id": "<slot-id>", "replace": true}`.
-     - `replace: true` clears all existing injections for the connector before adding this one (use on first inject per session).
-     - `id` (optional): named slot — if a slot with this id already exists it is updated in-place; otherwise a new slot is appended. Omit `id` for anonymous append-only slots.
-   - Injected fragments appear under the connector **Controls** tab as `injected-runtime-0.html`, … (session-only; use `crystallize-component` to persist under `cockpit/*.html`). The UI refreshes assets on the same interval as policy (~5s), or the user can reload the page.
-   - **Interactive components**: injected HTML runs inside an iframe on the same origin. Buttons can submit actions back to CC via the `window.cockpit` API exposed by the parent:
-     - Add to queue (user confirms before sending): `window.parent.cockpit.queueAction({type:'pipeline-set', key:'...', ...})`
-     - Immediate submit (no confirmation): `window.parent.cockpit.submitNow([{type:'tool-call', ...}])`
-     - postMessage alternative (for sandboxed iframes): `window.parent.postMessage({type:'cockpit-queue', action:{...}}, '*')` or `{type:'cockpit-submit', actions:[...]}`
-   - Only skip if a connector has zero pipelines and no NOTES.md.
+   - `policy-status --pretty` output is already in hand from step 2; also read `~/.emerge/connectors/<connector>/NOTES.md` and any `scenarios/*.yaml` or `cockpit/*.html` files for each connector.
+   - **Always inject a panel for every connector that has pipelines** — do not skip even if no explicit `cockpit/*.html` exists.
+   - For each connector, POST to `http://localhost:<PORT>/api/inject-component`:
+     ```json
+     {"connector": "<name>", "id": "<name>-main", "replace": true, "html": "<full HTML doc>"}
+     ```
+     (`replace:true` + named `id` = clear stale injections from prior session; re-injecting with same id updates in-place)
+
+   **Every pipeline button MUST have a working `onclick`.** The injected iframe is same-origin; use `window.parent.cockpit` API:
+   - **queueAction** (adds to pending queue, user clicks Submit): `window.parent.cockpit.queueAction({...})`
+   - **submitNow** (fires immediately, no confirm): `window.parent.cockpit.submitNow([{...}])`
+
+   **Action payload reference** — use these exact shapes:
+
+   | Button purpose | onclick payload |
+   |---|---|
+   | Promote pipeline to canary | `window.parent.cockpit.queueAction({type:'pipeline-set',key:'<conn>.<mode>.<name>',set:{status:'canary'}})` |
+   | Promote to stable | `window.parent.cockpit.queueAction({type:'pipeline-set',key:'<conn>.<mode>.<name>',set:{status:'stable'}})` |
+   | Rollback to explore | `window.parent.cockpit.queueAction({type:'pipeline-set',key:'<conn>.<mode>.<name>',set:{status:'explore'}})` |
+   | Run pipeline (icc_exec) | `window.parent.cockpit.submitNow([{type:'tool-call',call:{tool:'mcp__plugin_emerge_emerge__icc_exec',arguments:{intent_signature:'<sig>',script:''}}}])` |
+   | Delete pipeline | `window.parent.cockpit.queueAction({type:'pipeline-delete',key:'<conn>.<mode>.<name>'})` |
+
+   **Minimum panel structure:**
+   - One button per pipeline, styled by current status (`explore`=gray, `canary`=yellow, `stable`=green). Each button must have onclick.
+   - Clicking a pipeline button should `queueAction` a promotion to the next tier (explore→canary, canary→stable), or show a small inline dropdown with options.
+   - Notes snippet (first 10 lines of NOTES.md) if present.
+   - Scenario cards (from `scenarios/*.yaml`) if present.
+
+   Only skip injection if a connector has zero pipelines AND no NOTES.md.
 
 4. **Enter the dispatch loop** (core, background-driven):
 
