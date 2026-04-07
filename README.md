@@ -282,6 +282,33 @@ flowchart LR
 | `/export`        | Export a connector asset package zip (connector files + registry entries)                        |
 
 
+## Cockpit Preview
+
+<p align="center">
+  <a href="docs/images/cockpit/cockpit-overview.jpg">
+    <img src="docs/images/cockpit/cockpit-overview.jpg" alt="Cockpit Overview" width="31%" />
+  </a>
+  <a href="docs/images/cockpit/cockpit-state.jpg">
+    <img src="docs/images/cockpit/cockpit-state.jpg" alt="Cockpit State" width="31%" />
+  </a>
+  <a href="docs/images/cockpit/cockpit-session.jpg">
+    <img src="docs/images/cockpit/cockpit-session.jpg" alt="Cockpit Session" width="31%" />
+  </a>
+</p>
+
+<p align="center">
+  <sub>
+    <b>Overview</b> · policy posture & rollout
+    &nbsp;&nbsp;|&nbsp;&nbsp;
+    <b>State</b> · L3 diagnostics and intent-linked timeline
+    &nbsp;&nbsp;|&nbsp;&nbsp;
+    <b>Session</b> · WAL/checkpoint/recovery controls
+  </sub>
+</p>
+
+<p align="center"><sub>Tip: click any image to open full size.</sub></p>
+
+
 ## Requirements
 
 - **Python** 3.11+
