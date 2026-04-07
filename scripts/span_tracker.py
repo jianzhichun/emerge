@@ -21,11 +21,17 @@ from scripts.policy_config import (
 # icc_exec is intentionally absent — it is excluded from span recording entirely.
 
 _READ_ONLY_TOOL_NAMES = frozenset({
+    # Claude Code built-in read-only tools
     "Read", "Glob", "Grep", "WebFetch", "WebSearch", "ToolSearch",
+    "TaskGet", "TaskList", "TaskOutput",
+    "ListMcpResourcesTool", "ReadMcpResourceTool",
+    "mcp__computer-use__screenshot", "mcp__computer-use__cursor_position",
+    "mcp__computer-use__read_clipboard", "mcp__computer-use__list_granted_applications",
 })
 _READ_ONLY_TOOL_PREFIXES = ("mcp__context7__",)
 _READ_ONLY_TOOL_SUFFIXES = (
     "__get", "__list", "__search", "__query", "__read", "__resolve",
+    "__screenshot", "__cursor_position",
 )
 
 

@@ -38,6 +38,8 @@ def main() -> None:
             rationale="SessionStart hook payload goal",
             confidence=0.5,
         )
+    # Always save on SessionStart: this clears stale active_span_id/active_span_intent
+    # from the previous session (fields not managed by StateTracker are dropped).
     save_tracker(state_path, tracker)
     snap = goal_cp.read_snapshot()
     context_text = tracker.format_additional_context(

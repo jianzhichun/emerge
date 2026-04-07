@@ -30,6 +30,7 @@ def main() -> None:
         legacy_goal=str(tracker.to_dict().get("goal", "")),
         legacy_source=str(tracker.to_dict().get("goal_source", "legacy")),
     )
+    _mutated = False
     if "goal" in payload:
         goal_cp.ingest(
             event_type=EVENT_HOOK_PAYLOAD,
@@ -39,6 +40,7 @@ def main() -> None:
             rationale="UserPromptSubmit hook payload goal",
             confidence=0.5,
         )
+        _mutated = True
 
     raw_budget = payload.get("budget_chars", 0)
     try:
@@ -53,7 +55,8 @@ def main() -> None:
         goal_override=str(snap.get("text", "")),
         goal_source_override=str(snap.get("source", "unset")),
     )
-    save_tracker(state_path, tracker)
+    if _mutated:
+        save_tracker(state_path, tracker)
 
     out = {
         "hookSpecificOutput": {
