@@ -2617,6 +2617,52 @@ async function submitQueue() {
   }
 }
 
+// ── Cockpit API — callable by injected iframe components ─────────────────────
+// Same-origin iframes: window.parent.cockpit.queueAction(action)
+// Cross-origin / sandboxed: window.parent.postMessage({type:'cockpit-queue', action:{...}}, '*')
+//                       or: window.parent.postMessage({type:'cockpit-submit', actions:[...]}, '*')
+window.cockpit = {
+  /**
+   * Add one action to the pending queue (user still needs to click Submit,
+   * or call submitNow).
+   * action shape: {type:'pipeline-set'|'pipeline-delete'|'notes-comment'|'tool-call'|..., ...}
+   */
+  queueAction(action) {
+    if (!action || typeof action !== 'object') return;
+    enqueue({ id: ++queueIdSeq, data: action });
+  },
+
+  /**
+   * Immediately submit one or more actions to CC without going through the
+   * queue UI.  Returns the fetch Promise.
+   */
+  async submitNow(actions) {
+    if (!Array.isArray(actions)) actions = [actions];
+    const r = await fetch('/api/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actions }),
+    });
+    const result = await r.json();
+    if (result.ok) {
+      document.getElementById('status-msg').textContent =
+        `✓ Component submitted ${result.action_count} action(s) to CC`;
+    }
+    return result;
+  },
+};
+
+// postMessage bridge — lets sandboxed or cross-origin iframes communicate
+window.addEventListener('message', (ev) => {
+  if (!ev.data || typeof ev.data !== 'object') return;
+  const { type, action, actions } = ev.data;
+  if (type === 'cockpit-queue' && action) {
+    window.cockpit.queueAction(action);
+  } else if (type === 'cockpit-submit' && actions) {
+    window.cockpit.submitNow(Array.isArray(actions) ? actions : [actions]);
+  }
+});
+
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function escHtml(s) {
   return String(s)

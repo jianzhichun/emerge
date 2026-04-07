@@ -1021,7 +1021,9 @@ def render_runner_status_pretty(data: dict) -> str:
 
 # Session-only HTML from POST /api/inject-component. Merged into /api/assets and
 # served at /api/components/<connector>/injected-runtime-<n>.html (disk wins if that path exists).
-_COCKPIT_INJECTED_HTML: dict[str, list[str]] = {}
+# Each slot is a dict: {"id": str|None, "html": str}. Named slots (id != None) support
+# in-place replacement; anonymous slots (id=None) always append.
+_COCKPIT_INJECTED_HTML: dict[str, list[dict]] = {}
 _COCKPIT_INJECT_LOCK = threading.Lock()
 
 
@@ -1032,18 +1034,31 @@ def _injected_runtime_basename(i: int) -> str:
 _MAX_INJECTED_PER_CONNECTOR = 50  # guard against runaway accumulation
 
 
-def _cockpit_append_injected_html(connector: str, html: str) -> None:
+def _cockpit_inject_html(connector: str, html: str, slot_id: str | None = None) -> None:
+    """Inject or update an HTML component slot.
+
+    - Named slot (slot_id given): replace existing slot with same id in-place,
+      or append a new slot if id not found.
+    - Anonymous slot (slot_id=None): always append (legacy behaviour).
+    """
     with _COCKPIT_INJECT_LOCK:
-        items = _COCKPIT_INJECTED_HTML.setdefault(connector, [])
-        items.append(html)
-        if len(items) > _MAX_INJECTED_PER_CONNECTOR:
-            # Drop oldest entries, keep the most recent ones
-            _COCKPIT_INJECTED_HTML[connector] = items[-_MAX_INJECTED_PER_CONNECTOR:]
+        slots = _COCKPIT_INJECTED_HTML.setdefault(connector, [])
+        if slot_id is not None:
+            for i, s in enumerate(slots):
+                if s.get("id") == slot_id:
+                    slots[i] = {"id": slot_id, "html": html}
+                    return
+            # id not found — append new named slot
+            slots.append({"id": slot_id, "html": html})
+        else:
+            slots.append({"id": None, "html": html})
+        if len(slots) > _MAX_INJECTED_PER_CONNECTOR:
+            _COCKPIT_INJECTED_HTML[connector] = slots[-_MAX_INJECTED_PER_CONNECTOR:]
 
 
 def _cockpit_list_injected_html(connector: str) -> list[str]:
     with _COCKPIT_INJECT_LOCK:
-        return list(_COCKPIT_INJECTED_HTML.get(connector, []))
+        return [s["html"] for s in _COCKPIT_INJECTED_HTML.get(connector, [])]
 
 
 def cmd_assets() -> dict:
@@ -1706,12 +1721,15 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             connector = str(body.get("connector", "")).strip()
             html = str(body.get("html", ""))
             replace = bool(body.get("replace", False))
+            slot_id: str | None = body.get("id") or None
+            if slot_id is not None:
+                slot_id = str(slot_id).strip() or None
             if connector and html:
                 if replace:
                     with _COCKPIT_INJECT_LOCK:
-                        _COCKPIT_INJECTED_HTML[connector] = [html]
+                        _COCKPIT_INJECTED_HTML[connector] = [{"id": slot_id, "html": html}]
                 else:
-                    _cockpit_append_injected_html(connector, html)
+                    _cockpit_inject_html(connector, html, slot_id)
             self._json({"ok": True})
         elif path == "/api/control-plane/delta/reconcile":
             self._json(cmd_control_plane_delta_reconcile(
