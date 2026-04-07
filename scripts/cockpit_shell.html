@@ -230,6 +230,34 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .component-slot { border: 1px dashed #30363d; border-radius: 4px; padding: 6px; margin-bottom: 8px; }
 .component-slot iframe { width: 100%; border: none; min-height: 200px; }
 .component-label { font-size: 10px; color: #484f58; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+.cp-panel-content { padding: 8px 0; }
+.cp-delta-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid #21262d; font-size: 12px; }
+.cp-delta-level { flex-shrink: 0; }
+.cp-delta-msg { flex: 1; color: #e6edf3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-delta-meta { font-size: 10px; color: #8b949e; white-space: nowrap; }
+.cp-delta-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.delta-prov { font-size: 9px; background: #2d2000; color: #d29922; padding: 1px 4px; border-radius: 3px; }
+.delta-reconcile { font-size: 9px; padding: 1px 4px; border-radius: 3px; }
+.delta-reconcile.confirm { background: #0d2000; color: #3fb950; }
+.delta-reconcile.correct { background: #2d2000; color: #d29922; }
+.delta-reconcile.retract { background: #2d0000; color: #f85149; }
+.cp-btn-sm { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; font-size: 10px; padding: 2px 6px; border-radius: 3px; cursor: pointer; font-family: inherit; }
+.cp-btn-sm:hover { background: #30363d; }
+.cp-btn-sm.warn { color: #d29922; border-color: #d29922; }
+.cp-btn-sm.warn:hover { background: #2d2000; }
+.cp-btn-sm.danger { color: #f85149; border-color: #f85149; }
+.cp-btn-sm.danger:hover { background: #2d0000; }
+.cp-risk-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid #21262d; font-size: 12px; }
+.cp-risk-icon { color: #d29922; }
+.cp-risk-text { flex: 1; color: #e6edf3; }
+.cp-risk-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.risk-status { font-size: 9px; padding: 1px 5px; border-radius: 3px; }
+.risk-status.open { color: #d29922; background: #2d2000; }
+.risk-status.handled { color: #3fb950; background: #0d2000; }
+.risk-status.snoozed { color: #8b949e; background: #21262d; }
+.cp-span-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid #21262d; font-size: 12px; }
+.cp-span-meta { font-size: 10px; color: #8b949e; }
+.cp-span-ts { font-size: 10px; color: #484f58; margin-left: auto; }
 /* Status bar */
 .status-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 22px; background: #161b22; border-top: 1px solid #21262d; display: flex; align-items: center; padding: 0 12px; font-size: 10px; color: #8b949e; gap: 16px; z-index: 10; }
 #refresh-timer { margin-left: auto; display: flex; align-items: center; gap: 5px; color: #484f58; }
@@ -331,6 +359,9 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .status-badge.canary { color: #d29922; background: #2d2000; }
 .status-badge.stable { color: #3fb950; background: #0d2000; }
 .status-badge.rollback { color: #f85149; background: #2d0000; }
+.status-badge.critical { color: #f85149; background: #2d0000; }
+.cp-intent-table span.critical { color: #f85149; font-weight: 600; }
+.cp-intent-table span.stable { color: #3fb950; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -763,6 +794,10 @@ function refreshPolicyDisplay() {
   const connPipelines = allPipelines.filter(p => (p.key || '').startsWith(currentTab + '.'));
   const pipTabCount = document.getElementById('conn-panel-pipelines-count');
   if (pipTabCount) pipTabCount.textContent = connPipelines.length;
+  const deltaCount = document.querySelector('[aria-controls="conn-panel-deltas"] .connector-panel-tab-count');
+  if (deltaCount) deltaCount.textContent = _countConnDeltas(currentTab);
+  const riskCount = document.querySelector('[aria-controls="conn-panel-risks"] .connector-panel-tab-count');
+  if (riskCount) riskCount.textContent = _countConnRisks(currentTab);
   if (panel !== 'pipelines') return;
 
   const pipDiv = document.getElementById('conn-pipelines');
@@ -811,6 +846,7 @@ function getAvailableConnectorPanels(connectorName) {
   const panels = ['pipelines', 'notes'];
   const hasControls = connector && (connector.components && connector.components.length);
   if (hasControls) panels.push('controls');
+  panels.push('deltas', 'risks', 'spans', 'exec-events');
   return panels;
 }
 
@@ -1279,6 +1315,24 @@ function renderOverviewTab() {
   });
 }
 
+function _countConnDeltas(connectorName) {
+  if (!stateData || !stateData.deltas) return 0;
+  return stateData.deltas.filter(d => {
+    const sig = d.intent_signature || '';
+    return sig.startsWith(connectorName + '.');
+  }).length;
+}
+
+function _countConnRisks(connectorName) {
+  if (!stateData || !stateData.risks) return 0;
+  return stateData.risks.filter(r => {
+    if (r.status !== 'open') return false;
+    const sig = r.intent_signature || '';
+    const text = r.text || '';
+    return sig.startsWith(connectorName + '.') || text.toLowerCase().includes(connectorName.toLowerCase());
+  }).length;
+}
+
 // ── Single connector tab ──────────────────────────────────────────────────────
 function renderConnectorTab(name) {
   if (!assetsData) {
@@ -1300,6 +1354,10 @@ function renderConnectorTab(name) {
     { id: 'pipelines', label: 'Pipelines', count: connPipelines.length, visible: true },
     { id: 'notes', label: 'Notes', count: c.notes ? 1 : 0, visible: true },
     { id: 'controls', label: 'Controls', count: hasControls ? c.components.length : 0, visible: hasControls },
+    { id: 'deltas', label: 'Deltas', count: _countConnDeltas(name), visible: true },
+    { id: 'risks', label: 'Risks', count: _countConnRisks(name), visible: true },
+    { id: 'spans', label: 'Spans', count: 0, visible: true },
+    { id: 'exec-events', label: 'Events', count: 0, visible: true },
   ].filter(p => p.visible);
 
   let html = `<div class="connector-panel-tabs" role="tablist" aria-label="Connector sections">`;
@@ -1350,9 +1408,175 @@ function renderConnectorTab(name) {
       </div>`;
     });
     html += `</div>`;
+  } else if (panel === 'deltas') {
+    html += _renderDeltasPanel(name);
+  } else if (panel === 'risks') {
+    html += _renderRisksPanel(name);
+  } else if (panel === 'spans') {
+    html += _renderSpansPanel(name);
+  } else if (panel === 'exec-events') {
+    html += _renderExecEventsPanel(name);
   }
 
   document.getElementById('main-panel').innerHTML = html;
+}
+
+function _renderDeltasPanel(connectorName) {
+  const deltas = (stateData && stateData.deltas || []).filter(d => {
+    const sig = d.intent_signature || '';
+    return sig.startsWith(connectorName + '.') || (!sig && d.tool_name && d.tool_name.includes(connectorName));
+  });
+  if (!deltas.length) {
+    return `<div role="tabpanel" id="conn-panel-deltas" aria-labelledby="conn-tab-deltas" style="padding:12px;color:#8b949e;font-size:12px">No deltas for this connector.</div>`;
+  }
+  let html = `<div role="tabpanel" id="conn-panel-deltas" aria-labelledby="conn-tab-deltas" class="cp-panel-content">`;
+  deltas.forEach(d => {
+    const levelDot = d.level === 'core_critical' ? '🔴' : d.level === 'core_secondary' ? '🟡' : '⚪';
+    const prov = d.provisional ? '<span class="delta-prov">provisional</span>' : '';
+    const reconciled = d.reconcile_outcome ? `<span class="delta-reconcile ${d.reconcile_outcome}">${d.reconcile_outcome}</span>` : '';
+    const ts = d.ts_ms ? new Date(d.ts_ms).toLocaleTimeString() : '';
+    html += `<div class="cp-delta-row">
+      <span class="cp-delta-level">${levelDot}</span>
+      <span class="cp-delta-msg">${escHtml(d.message || '')}</span>
+      ${prov}${reconciled}
+      <span class="cp-delta-meta">${escHtml(d.intent_signature || '')} · ${ts}</span>
+      ${!d.reconcile_outcome ? `<span class="cp-delta-actions">
+        <button class="cp-btn-sm" onclick="cpDeltaReconcile('${escHtml(d.id)}','confirm')">✓</button>
+        <button class="cp-btn-sm warn" onclick="cpDeltaReconcile('${escHtml(d.id)}','correct')">↺</button>
+        <button class="cp-btn-sm danger" onclick="cpDeltaReconcile('${escHtml(d.id)}','retract')">✗</button>
+      </span>` : ''}
+    </div>`;
+  });
+  html += `</div>`;
+  return html;
+}
+
+function _renderRisksPanel(connectorName) {
+  const risks = (stateData && stateData.risks || []).filter(r => {
+    const sig = r.intent_signature || '';
+    const text = r.text || '';
+    return sig.startsWith(connectorName + '.') || text.toLowerCase().includes(connectorName.toLowerCase());
+  });
+  if (!risks.length) {
+    return `<div role="tabpanel" id="conn-panel-risks" aria-labelledby="conn-tab-risks" style="padding:12px;color:#8b949e;font-size:12px">No risks for this connector.</div>`;
+  }
+  let html = `<div role="tabpanel" id="conn-panel-risks" aria-labelledby="conn-tab-risks" class="cp-panel-content">`;
+  risks.forEach(r => {
+    const statusBadge = r.status === 'handled' ? '<span class="risk-status handled">handled</span>'
+      : r.status === 'snoozed' ? '<span class="risk-status snoozed">snoozed</span>'
+      : '<span class="risk-status open">open</span>';
+    html += `<div class="cp-risk-row">
+      <span class="cp-risk-icon">⚠</span>
+      <span class="cp-risk-text">${escHtml(r.text || '')}</span>
+      ${statusBadge}
+      ${r.status === 'open' ? `<span class="cp-risk-actions">
+        <button class="cp-btn-sm" onclick="cpRiskUpdate('${escHtml(r.risk_id)}','handle')">Handle</button>
+        <button class="cp-btn-sm" onclick="cpRiskUpdate('${escHtml(r.risk_id)}','snooze')">Snooze</button>
+      </span>` : ''}
+    </div>`;
+  });
+  html += `</div>`;
+  return html;
+}
+
+function _renderSpansPanel(connectorName) {
+  const innerId = 'cp-spans-' + connectorName.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const container = `<div role="tabpanel" id="conn-panel-spans" aria-labelledby="conn-tab-spans" class="cp-panel-content">
+    <div id="${innerId}" style="color:#8b949e;font-size:11px;padding:8px">Loading spans...</div>
+  </div>`;
+  setTimeout(async () => {
+    try {
+      const r = await fetch('/api/control-plane/spans?limit=30&intent=' + encodeURIComponent(connectorName));
+      const data = await r.json();
+      const el = document.getElementById(innerId);
+      if (!el) return;
+      const spans = (data.spans || []).filter(s => (s.intent_signature || '').startsWith(connectorName + '.'));
+      if (!spans.length) {
+        el.innerHTML = '<div style="color:#8b949e;font-size:11px;padding:8px">No spans for this connector.</div>';
+        return;
+      }
+      let html = '';
+      spans.forEach(s => {
+        const outcome = s.outcome || 'unknown';
+        const outClass = outcome === 'success' ? 'stable' : outcome === 'failure' ? 'critical' : '';
+        const dur = s.duration_ms ? (s.duration_ms / 1000).toFixed(1) + 's' : '—';
+        const ts = s.closed_at_ms ? new Date(s.closed_at_ms).toLocaleTimeString() : '';
+        html += `<div class="cp-span-row">
+          <span class="status-badge ${escHtml(outClass)}">${escHtml(outcome)}</span>
+          <span class="intent-key">${escHtml(s.intent_signature || '')}</span>
+          <span class="cp-span-meta">${s.action_count || 0} actions · ${s.side_effect_count || 0} side-effects · ${dur}</span>
+          <span class="cp-span-ts">${ts}</span>
+        </div>`;
+      });
+      el.innerHTML = html;
+    } catch(e) {
+      const el = document.getElementById(innerId);
+      if (el) el.innerHTML = '<div style="color:#f85149;font-size:11px;padding:8px">Failed to load spans</div>';
+    }
+  }, 0);
+  return container;
+}
+
+function _renderExecEventsPanel(connectorName) {
+  const innerId = 'cp-exec-' + connectorName.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const container = `<div role="tabpanel" id="conn-panel-exec-events" aria-labelledby="conn-tab-exec-events" class="cp-panel-content">
+    <div id="${innerId}" style="color:#8b949e;font-size:11px;padding:8px">Loading events...</div>
+  </div>`;
+  setTimeout(async () => {
+    try {
+      const r = await fetch('/api/control-plane/exec-events?limit=50&intent=' + encodeURIComponent(connectorName));
+      const data = await r.json();
+      const el = document.getElementById(innerId);
+      if (!el) return;
+      const events = (data.events || []).filter(e => (e.intent_signature || '').startsWith(connectorName + '.'));
+      if (!events.length) {
+        el.innerHTML = '<div style="color:#8b949e;font-size:11px;padding:8px">No exec events for this connector.</div>';
+        return;
+      }
+      let html = '<table class="cp-intent-table" style="font-size:11px"><thead><tr><th>Time</th><th>Intent</th><th>Mode</th><th>Result</th><th>Profile</th></tr></thead><tbody>';
+      events.forEach(ev => {
+        const ts = ev.ts_ms ? new Date(ev.ts_ms).toLocaleTimeString() : '';
+        const result = ev.is_error ? '<span class="critical">error</span>' : '<span class="stable">ok</span>';
+        html += `<tr>
+          <td>${ts}</td>
+          <td class="intent-key">${escHtml(ev.intent_signature || '')}</td>
+          <td>${escHtml(ev.mode || '')}</td>
+          <td>${result}</td>
+          <td>${escHtml(ev.target_profile || '')}</td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    } catch(e) {
+      const el = document.getElementById(innerId);
+      if (el) el.innerHTML = '<div style="color:#f85149;font-size:11px;padding:8px">Failed to load events</div>';
+    }
+  }, 0);
+  return container;
+}
+
+async function cpDeltaReconcile(deltaId, outcome) {
+  try {
+    await fetch('/api/control-plane/delta/reconcile', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ delta_id: deltaId, outcome: outcome }),
+    });
+    await refreshState();
+    renderCurrentTab();
+  } catch(e) {}
+}
+
+async function cpRiskUpdate(riskId, action) {
+  try {
+    await fetch('/api/control-plane/risk/update', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ risk_id: riskId, action: action }),
+    });
+    await refreshState();
+    renderCurrentTab();
+  } catch(e) {}
 }
 
 // ── Pipeline card ─────────────────────────────────────────────────────────────
