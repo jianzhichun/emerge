@@ -779,6 +779,11 @@ function updateCcIndicator() {
 // Called by the 5-second interval. renderCurrentTab() is used for full redraws (tab switch,
 // initial load, queue changes).
 function refreshPolicyDisplay() {
+  if (currentTab === 'audit' || currentTab === 'session' || currentTab === 'operator') {
+    if (currentTab === 'audit') _loadAuditTimeline();
+    else if (currentTab === 'session') _loadSessionData();
+    return;
+  }
   if (!policyData) return;
   if (currentTab === 'overview') {
     // Overview is all policy-driven — full redraw, but preserve scroll position
@@ -831,6 +836,13 @@ function renderTabs() {
     html += `<div class="tab ${currentTab === name ? 'active' : ''}" onclick="switchTab('${name.replace(/'/g, "\\'")}')">${escHtml(name)}${warn}</div>`;
   });
 
+  // Global control-plane tabs
+  html += `<div style="margin-left:auto;display:flex;gap:0">`;
+  html += `<div class="tab ${currentTab === 'audit' ? 'active' : ''}" onclick="switchTab('audit')" style="font-size:11px;opacity:0.7">Audit</div>`;
+  html += `<div class="tab ${currentTab === 'session' ? 'active' : ''}" onclick="switchTab('session')" style="font-size:11px;opacity:0.7">Session</div>`;
+  html += `<div class="tab ${currentTab === 'operator' ? 'active' : ''}" onclick="switchTab('operator')" style="font-size:11px;opacity:0.7">Operator</div>`;
+  html += `</div>`;
+
   document.getElementById('tabs-bar').innerHTML = html;
 }
 
@@ -870,11 +882,14 @@ function switchConnectorPanel(panelName) {
 }
 
 function renderCurrentTab() {
-  if (currentTab !== 'overview') {
+  if (currentTab !== 'overview' && currentTab !== 'audit' && currentTab !== 'session' && currentTab !== 'operator') {
     const connectors = assetsData ? Object.keys(assetsData.connectors || {}) : [];
     if (!connectors.includes(currentTab)) currentTab = 'overview';
   }
   if (currentTab === 'overview') renderOverviewTab();
+  else if (currentTab === 'audit') renderAuditTab();
+  else if (currentTab === 'session') renderSessionTab();
+  else if (currentTab === 'operator') renderOperatorTab();
   else renderConnectorTab(currentTab);
 }
 
@@ -882,15 +897,18 @@ function applyViewStateFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const requestedTab = params.get('tab');
   const connectors = assetsData ? Object.keys(assetsData.connectors || {}) : [];
+  const globalTabs = ['audit', 'session', 'operator'];
   if (requestedTab === 'overview' || !requestedTab) {
     currentTab = 'overview';
+  } else if (globalTabs.includes(requestedTab)) {
+    currentTab = requestedTab;
   } else if (connectors.includes(requestedTab)) {
     currentTab = requestedTab;
   } else {
     currentTab = 'overview';
   }
 
-  if (currentTab !== 'overview') {
+  if (currentTab !== 'overview' && !globalTabs.includes(currentTab)) {
     const requestedPanel = params.get('panel');
     if (requestedPanel) connectorPanelByTab[currentTab] = requestedPanel;
     // Normalize to available panels (e.g. shared URL points to missing panel)
@@ -902,13 +920,187 @@ function syncUrlWithViewState(opts) {
   const push = !!(opts && opts.push);
   const url = new URL(window.location.href);
   url.searchParams.set('tab', currentTab);
-  if (currentTab === 'overview') {
+  if (currentTab === 'overview' || currentTab === 'audit' || currentTab === 'session' || currentTab === 'operator') {
     url.searchParams.delete('panel');
   } else {
     url.searchParams.set('panel', getActiveConnectorPanel(currentTab));
   }
   if (push) window.history.pushState({}, '', url);
   else window.history.replaceState({}, '', url);
+}
+
+function renderAuditTab() {
+  const panel = document.getElementById('main-panel');
+  if (panel && panel.querySelector('#audit-timeline')) {
+    _loadAuditTimeline();
+    return;
+  }
+  panel.innerHTML = `<div style="padding:16px">
+    <h2 style="font-size:14px;color:#e6edf3;margin-bottom:12px">Audit Trail</h2>
+    <div id="audit-timeline" style="color:#8b949e;font-size:11px">Loading audit data...</div>
+  </div>`;
+
+  _loadAuditTimeline();
+}
+
+async function _loadAuditTimeline() {
+  const el = document.getElementById('audit-timeline');
+  if (!el) return;
+
+  try {
+    const [execR, pipeR, spansR, goalR] = await Promise.all([
+      fetch('/api/control-plane/exec-events?limit=50').then(r => r.json()),
+      fetch('/api/control-plane/pipeline-events?limit=50').then(r => r.json()),
+      fetch('/api/control-plane/spans?limit=30').then(r => r.json()),
+      fetch('/api/goal-history?limit=30').then(r => r.json()),
+    ]);
+
+    let items = [];
+    (execR.events || []).forEach(e => items.push({ ts: e.ts_ms, type: 'exec', data: e }));
+    (pipeR.events || []).forEach(e => items.push({ ts: e.ts_ms, type: 'pipeline', data: e }));
+    (spansR.spans || []).forEach(s => items.push({ ts: s.closed_at_ms || 0, type: 'span', data: s }));
+    (goalR.events || []).forEach(g => items.push({ ts: g.ts_ms || 0, type: 'goal', data: g }));
+
+    items.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    items = items.slice(0, 100);
+
+    if (!items.length) {
+      el.innerHTML = '<div style="color:#8b949e;padding:8px">No audit events yet.</div>';
+      return;
+    }
+
+    let html = '<table class="cp-intent-table" style="font-size:11px"><thead><tr><th>Time</th><th>Type</th><th>Intent / Detail</th><th>Outcome</th></tr></thead><tbody>';
+    items.forEach(item => {
+      const ts = item.ts ? new Date(item.ts).toLocaleTimeString() : '';
+      let type = '', detail = '', outcome = '';
+      if (item.type === 'exec') {
+        type = '<span class="source-badge exec">exec</span>';
+        detail = escHtml(item.data.intent_signature || '');
+        outcome = item.data.is_error ? '<span class="critical">error</span>' : '<span class="stable">ok</span>';
+      } else if (item.type === 'pipeline') {
+        type = '<span class="source-badge span">pipeline</span>';
+        detail = escHtml(item.data.pipeline_id || item.data.intent_signature || '');
+        outcome = item.data.is_error ? '<span class="critical">error</span>' : '<span class="stable">ok</span>';
+      } else if (item.type === 'span') {
+        type = '<span class="source-badge both">span</span>';
+        detail = escHtml(item.data.intent_signature || '');
+        outcome = item.data.outcome === 'success' ? '<span class="stable">success</span>' : `<span class="critical">${escHtml(item.data.outcome || 'unknown')}</span>`;
+      } else if (item.type === 'goal') {
+        type = '<span style="font-size:10px;color:#79c0ff">goal</span>';
+        detail = escHtml((item.data.text || item.data.goal || '').slice(0, 60));
+        outcome = escHtml(item.data.type || item.data.source || '');
+      }
+      html += `<tr><td>${ts}</td><td>${type}</td><td>${detail}</td><td>${outcome}</td></tr>`;
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div style="color:#f85149;padding:8px">Failed to load audit data</div>';
+  }
+}
+
+function renderSessionTab() {
+  const panel = document.getElementById('main-panel');
+  if (panel && panel.querySelector('#session-content')) {
+    _loadSessionData();
+    return;
+  }
+  panel.innerHTML = `<div style="padding:16px">
+    <h2 style="font-size:14px;color:#e6edf3;margin-bottom:12px">Session</h2>
+    <div id="session-content" style="color:#8b949e;font-size:11px">Loading session data...</div>
+  </div>`;
+
+  _loadSessionData();
+}
+
+async function _loadSessionData() {
+  const el = document.getElementById('session-content');
+  if (!el) return;
+
+  try {
+    const r = await fetch('/api/control-plane/session');
+    const data = await r.json();
+
+    let html = `<div class="cp-stat-strip" style="margin-bottom:16px">
+      <div class="cp-stat-card">
+        <div class="cp-stat-num">${escHtml(data.session_id || '—')}</div>
+        <div class="cp-stat-label">Session ID</div>
+      </div>
+      <div class="cp-stat-card">
+        <div class="cp-stat-num">${data.wal_entries || 0}</div>
+        <div class="cp-stat-label">WAL Entries</div>
+      </div>
+    </div>`;
+
+    if (data.checkpoint) {
+      html += `<div style="margin-bottom:12px">
+        <div style="font-size:12px;color:#e6edf3;margin-bottom:6px;font-weight:600">Checkpoint</div>
+        <pre style="background:#161b22;border:1px solid #21262d;border-radius:4px;padding:8px;font-size:11px;color:#c9d1d9;overflow-x:auto;max-height:200px">${escHtml(JSON.stringify(data.checkpoint, null, 2))}</pre>
+      </div>`;
+    }
+
+    if (data.recovery) {
+      html += `<div style="margin-bottom:12px">
+        <div style="font-size:12px;color:#d29922;margin-bottom:6px;font-weight:600">Recovery</div>
+        <pre style="background:#1a0f0f;border:1px solid #30363d;border-radius:4px;padding:8px;font-size:11px;color:#c9d1d9;overflow-x:auto;max-height:200px">${escHtml(JSON.stringify(data.recovery, null, 2))}</pre>
+      </div>`;
+    }
+
+    html += `<div style="display:flex;gap:8px;margin-top:16px">
+      <button class="cp-btn-sm" onclick="cpSessionExport()">Export Snapshot</button>
+      <button class="cp-btn-sm danger" onclick="cpSessionReset()">Reset Session</button>
+    </div>`;
+
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div style="color:#f85149;padding:8px">Failed to load session data</div>';
+  }
+}
+
+async function cpSessionExport() {
+  try {
+    const r = await fetch('/api/control-plane/session/export', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' });
+    const data = await r.json();
+    const blob = new Blob([JSON.stringify(data.snapshot, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'emerge-session-export.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) { alert('Export failed: ' + e.message); }
+}
+
+async function cpSessionReset() {
+  const confirmText = prompt('Type RESET to confirm session reset:');
+  if (confirmText !== 'RESET') return;
+  try {
+    await fetch('/api/control-plane/session/reset', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ confirm: 'RESET' }),
+    });
+    await refreshState();
+    renderSessionTab();
+  } catch(e) { alert('Reset failed: ' + e.message); }
+}
+
+function renderOperatorTab() {
+  const panel = document.getElementById('main-panel');
+  panel.innerHTML = `<div style="padding:16px">
+    <h2 style="font-size:14px;color:#e6edf3;margin-bottom:12px">Operator Intelligence Loop</h2>
+    <div style="background:#161b22;border:1px solid #21262d;border-radius:6px;padding:16px">
+      <p style="color:#8b949e;font-size:12px;margin-bottom:8px">
+        The Operator Intelligence Loop monitors application behavior in real-time.
+      </p>
+      <p style="color:#8b949e;font-size:12px;margin-bottom:8px">
+        Enable with: <code style="background:#0d1117;padding:2px 6px;border-radius:3px;color:#79c0ff">EMERGE_OPERATOR_MONITOR=1</code>
+      </p>
+      <p style="color:#484f58;font-size:11px">
+        When enabled, this tab will show observer events, pattern detections, and adapter activity.
+      </p>
+    </div>
+  </div>`;
 }
 
 // ── Thresholds bar ────────────────────────────────────────────────────────────
