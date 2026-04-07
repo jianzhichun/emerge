@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -71,9 +72,58 @@ class StateTracker:
             self.state["verification_state"] = "degraded"
         return delta_id
 
-    def add_risk(self, risk: str) -> None:
-        if risk not in self.state["open_risks"]:
-            self.state["open_risks"].append(risk)
+    def add_risk(
+        self,
+        risk: str,
+        intent_signature: str | None = None,
+        source_delta_id: str | None = None,
+    ) -> None:
+        text = str(risk).strip()
+        if not text:
+            return
+        for existing in self.state["open_risks"]:
+            if isinstance(existing, dict) and existing.get("text") == text:
+                return
+            if isinstance(existing, str) and existing == text:
+                return
+        risk_id = "r-" + hashlib.sha256(text.encode()).hexdigest()[:12]
+        self.state["open_risks"].append(
+            {
+                "risk_id": risk_id,
+                "text": text,
+                "status": "open",
+                "created_at_ms": int(time.time() * 1000),
+                "snoozed_until_ms": None,
+                "handled_reason": None,
+                "source_delta_id": source_delta_id,
+                "intent_signature": intent_signature,
+            }
+        )
+
+    def update_risk(
+        self,
+        risk_id: str,
+        action: str,
+        reason: str | None = None,
+        snooze_duration_ms: int | None = None,
+    ) -> None:
+        if action not in ("handle", "snooze", "reopen"):
+            raise ValueError(f"update_risk: action must be handle/snooze/reopen, got {action!r}")
+        for r in self.state["open_risks"]:
+            if not isinstance(r, dict):
+                continue
+            if r.get("risk_id") == risk_id:
+                if action == "handle":
+                    r["status"] = "handled"
+                    r["handled_reason"] = reason
+                elif action == "snooze":
+                    r["status"] = "snoozed"
+                    r["snoozed_until_ms"] = int(time.time() * 1000) + (snooze_duration_ms or 3600000)
+                elif action == "reopen":
+                    r["status"] = "open"
+                    r["snoozed_until_ms"] = None
+                    r["handled_reason"] = None
+                break
 
     def mark_degraded(self, reason: str) -> None:
         self.state["verification_state"] = "degraded"
@@ -120,7 +170,14 @@ class StateTracker:
                 delta_text = "\n".join([f"- {d['message']}" for d in critical]) or "- No changes."
 
         risks = self.state["open_risks"]
-        risks_text = "\n".join(f"- {r}" for r in risks) if risks else "- None."
+        risk_texts = []
+        for r in risks:
+            if isinstance(r, dict):
+                if r.get("status") == "open":
+                    risk_texts.append(f"- {r['text']}")
+            elif isinstance(r, str):
+                risk_texts.append(f"- {r}")
+        risks_text = "\n".join(risk_texts) if risk_texts else "- None."
 
         goal_text = (
             str(goal_override).strip()
@@ -210,7 +267,11 @@ class StateTracker:
             "goal_source": goal_source,
             "verification_state": self.state.get("verification_state", "verified"),
             "consistency_window_ms": int(self.state.get("consistency_window_ms", 0) or 0),
-            "open_risks": [str(r) for r in self.state.get("open_risks", [])],
+            "open_risks": [
+                (r["text"] if isinstance(r, dict) else str(r))
+                for r in self.state.get("open_risks", [])
+                if (isinstance(r, dict) and r.get("status") == "open") or isinstance(r, str)
+            ],
             "deltas": token_deltas,
         }
         if budget_chars:
@@ -291,7 +352,35 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
         consistency_window_ms = 0
 
     open_risks_raw = raw.get("open_risks", [])
-    open_risks = [str(item) for item in open_risks_raw] if isinstance(open_risks_raw, list) else []
+    open_risks: list[dict[str, Any]] = []
+    if isinstance(open_risks_raw, list):
+        for item in open_risks_raw:
+            if isinstance(item, str):
+                open_risks.append(
+                    {
+                        "risk_id": "r-" + hashlib.sha256(item.encode()).hexdigest()[:12],
+                        "text": item,
+                        "status": "open",
+                        "created_at_ms": 0,
+                        "snoozed_until_ms": None,
+                        "handled_reason": None,
+                        "source_delta_id": None,
+                        "intent_signature": None,
+                    }
+                )
+            elif isinstance(item, dict):
+                open_risks.append(
+                    {
+                        "risk_id": str(item.get("risk_id", "")),
+                        "text": str(item.get("text", "")),
+                        "status": str(item.get("status", "open")),
+                        "created_at_ms": int(item.get("created_at_ms", 0) or 0),
+                        "snoozed_until_ms": item.get("snoozed_until_ms"),
+                        "handled_reason": item.get("handled_reason"),
+                        "source_delta_id": item.get("source_delta_id"),
+                        "intent_signature": item.get("intent_signature"),
+                    }
+                )
 
     deltas_raw = raw.get("deltas", [])
     deltas: list[dict[str, Any]] = []
