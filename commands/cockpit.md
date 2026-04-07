@@ -8,7 +8,7 @@ Always invoke the admin CLI via the **Emerge plugin root** (not the user's open 
 
 Steps:
 
-1. **Start the server** (background, `run_in_background: true`):
+1. **Start the server** using the **Bash tool with `run_in_background: true` parameter**):
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" serve --open --port 0`
    - Idempotent: if an instance is already running, it returns the existing URL.
    - Wait ~1 second, then read output to extract the URL (`Cockpit running at http://localhost:PORT`).
@@ -29,8 +29,9 @@ Steps:
 
 4. **Enter the dispatch loop** (core, background-driven):
 
-   a. Launch `wait-for-submit` in the **background** (`run_in_background: true`, timeout 600000ms):
+   a. Launch `wait-for-submit` using the **Bash tool with `run_in_background: true` parameter** (timeout 600000ms):
       `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" wait-for-submit`
+      - **CRITICAL**: Set the Bash tool's `run_in_background` parameter to `true` — do NOT use shell `&`. Only the tool parameter triggers the automatic completion notification.
       - Tell the user the cockpit is ready and you'll handle submissions automatically; they are free to ask other questions in the meantime.
       - You will be **notified automatically** when the command completes — do NOT poll or sleep.
 
