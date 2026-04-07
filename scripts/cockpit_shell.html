@@ -483,10 +483,14 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .source-badge.exec { color: #79c0ff; background: #0d1f33; }
 .source-badge.span { color: #d2a8ff; background: #1f0d33; }
 .source-badge.both { color: #a5d6ff; background: #0d2233; }
-.status-badge { font-size: 10px; padding: 1px 5px; border-radius: 3px; font-weight: 600; }
+.status-badge { font-size: 10px; padding: 1px 5px; border-radius: 3px; font-weight: 600; color: #8b949e; background: #21262d; }
 .status-badge.explore { color: #8b949e; background: #21262d; }
+.status-badge.open { color: #58a6ff; background: #0d1f2d; }
+.status-badge.provisional { color: #d29922; background: #2d2000; }
 .status-badge.canary { color: #d29922; background: #2d2000; }
 .status-badge.stable { color: #3fb950; background: #0d2000; }
+.status-badge.handled { color: #3fb950; background: #0d2000; }
+.status-badge.snoozed { color: #8b949e; background: #21262d; }
 .status-badge.rollback { color: #f85149; background: #2d0000; }
 .status-badge.critical { color: #f85149; background: #2d0000; }
 .cp-intent-table span.critical { color: #f85149; font-weight: 600; }
@@ -1662,9 +1666,13 @@ function _renderVirtualStateList() {
     const selected = _stateTabSelectedKey && _stateTabSelectedKey === r.key;
     const selectedCls = selected ? 'background:#13243a;border-color:#388bfd' : '';
     const ts = r.ts ? new Date(r.ts).toLocaleTimeString() : '';
-    const statusCls = r.status === 'error' || r.status === 'failure' || r.status === 'retract'
+    const statusCls = (r.status === 'error' || r.status === 'failure' || r.status === 'retract')
       ? 'critical'
-      : (r.status === 'ok' || r.status === 'success' ? 'stable' : '');
+      : (r.status === 'ok' || r.status === 'success' || r.status === 'handled') ? 'stable'
+      : (r.status === 'open') ? 'open'
+      : (r.status === 'provisional') ? 'provisional'
+      : (r.status === 'snoozed') ? 'snoozed'
+      : '';
     const top = i * _STATE_ROW_H + 4;
     html += `<button onclick="stateSelect('${escHtml(r.key)}')" style="position:absolute;left:6px;right:6px;top:${top}px;height:${_STATE_ROW_H - 8}px;text-align:left;background:#11161d;border:1px solid #1f2630;border-left:3px solid #30363d;border-radius:4px;padding:8px;cursor:pointer;${selectedCls}">
       <div style="display:flex;gap:8px;align-items:center">
@@ -1772,10 +1780,11 @@ function _renderStateTabView() {
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
         <span style="color:#79c0ff">${_stateIcon(selected.kind)}</span>
         <span style="font-size:11px;color:#e6edf3;text-transform:uppercase;letter-spacing:0.6px">${_stateLabel(selected.kind)}</span>
-        <span class="status-badge">${escHtml(selected.status || '')}</span>
+        <span class="status-badge ${(()=>{const s=selected.status||'';return s==='error'||s==='failure'||s==='retract'?'critical':s==='ok'||s==='success'||s==='handled'?'stable':s==='open'?'open':s==='provisional'?'provisional':s==='snoozed'?'snoozed':'';})()} ">${escHtml(selected.status || '')}</span>
       </div>
       <div style="font-size:11px;color:#c9d1d9;margin-bottom:6px"><b>Intent:</b> ${escHtml(selected.intent || '(none)')}</div>
-      <div style="font-size:11px;color:#c9d1d9;margin-bottom:10px"><b>Title:</b> ${escHtml(selected.title || '')}</div>`;
+      <div style="font-size:11px;color:#c9d1d9;margin-bottom:4px"><b>Title:</b> ${escHtml(selected.title || '')}</div>
+      ${detail.args_summary ? `<div style="font-size:11px;color:#8b949e;margin-bottom:10px"><b>Args:</b> <code style="font-size:10px;color:#a5d6ff">${escHtml(detail.args_summary)}</code></div>` : '<div style="margin-bottom:10px"></div>'}`;
 
     if (selected.kind === 'delta' && !detail.reconcile_outcome) {
       html += `<div style="display:flex;gap:6px;margin-bottom:10px">

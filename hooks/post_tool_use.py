@@ -36,6 +36,41 @@ def _classify_level(tool_name: str) -> str:
     return LEVEL_PERIPHERAL
 
 
+def _short_tool_name(tool_name: str) -> str:
+    """Strip plugin prefix: mcp__plugin_emerge__icc_exec → icc_exec"""
+    return tool_name.rsplit("__", 1)[-1] if "__" in tool_name else tool_name
+
+
+def _build_delta_message(tool_name: str, tool_input: dict, payload: dict) -> str:
+    """Build a human-readable delta message that includes key context."""
+    if payload.get("delta_message"):
+        return str(payload["delta_message"])
+    short = _short_tool_name(tool_name)
+    intent = str(tool_input.get("intent_signature", "")).strip()
+    if intent:
+        return f"{short}: {intent}"
+    for key in ("pipeline_key", "delta_id", "description"):
+        val = str(tool_input.get(key, "")).strip()
+        if val:
+            return f"{short}: {val[:80]}"
+    return short
+
+
+def _build_args_summary(tool_input: dict) -> str:
+    """Compact key=value summary for Cockpit detail view (not injected into prompts)."""
+    if not tool_input:
+        return ""
+    parts = []
+    for key in ("intent_signature", "pipeline_key", "delta_id", "outcome",
+                "description", "script_ref", "base_pipeline_id"):
+        val = str(tool_input.get(key, "")).strip()
+        if val:
+            parts.append(f"{key}={val[:60]}")
+        if len(parts) >= 3:
+            break
+    return ", ".join(parts)
+
+
 def _record_span_action(
     tool_name: str, payload: dict, state_root: Path, state_path: Path
 ) -> tuple[str, str]:
@@ -94,14 +129,13 @@ def main() -> None:
         legacy_source=str(tracker.to_dict().get("goal_source", "legacy")),
     )
 
-    message = payload.get("delta_message") or f"Tool used: {tool_name or 'unknown'}"
-    level = _classify_level(tool_name)
-    provisional = bool(payload.get("provisional", False))
-
     tool_input = payload.get("tool_input", {}) or {}
     if not isinstance(tool_input, dict):
         tool_input = {}
     intent_signature = str(tool_input.get("intent_signature", "")).strip() or None
+    message = _build_delta_message(tool_name, tool_input, payload)
+    level = _classify_level(tool_name)
+    provisional = bool(payload.get("provisional", False))
 
     # verification_state lives inside content[0]["text"] (serialized JSON), not in the
     # outer MCP wrapper. Parse it out; fall back to "verified" if absent or unparseable.
@@ -122,6 +156,7 @@ def main() -> None:
         provisional=provisional,
         intent_signature=intent_signature,
         tool_name=tool_name,
+        args_summary=_build_args_summary(tool_input),
     )
 
     # Propagate degraded pipeline verification as an open risk

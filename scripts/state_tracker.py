@@ -52,23 +52,25 @@ class StateTracker:
         intent_signature: str | None = None,
         tool_name: str | None = None,
         ts_ms: int | None = None,
+        args_summary: str | None = None,
     ) -> str:
         message = str(message).strip() or "(no message)"
         if ts_ms is None:
             ts_ms = int(time.time() * 1000)
         delta_id = f"d-{int(time.time() * 1000)}-{len(self.state['deltas'])}"
-        self.state["deltas"].append(
-            {
-                "id": delta_id,
-                "message": message,
-                "level": level,
-                "verification_state": verification_state,
-                "provisional": provisional,
-                "intent_signature": intent_signature,
-                "tool_name": tool_name,
-                "ts_ms": ts_ms,
-            }
-        )
+        entry: dict[str, Any] = {
+            "id": delta_id,
+            "message": message,
+            "level": level,
+            "verification_state": verification_state,
+            "provisional": provisional,
+            "intent_signature": intent_signature,
+            "tool_name": tool_name,
+            "ts_ms": ts_ms,
+        }
+        if args_summary:
+            entry["args_summary"] = str(args_summary)[:200]
+        self.state["deltas"].append(entry)
         if verification_state == "degraded":
             self.state["verification_state"] = "degraded"
         # Hard cap: keep the most recent MAX_DELTAS entries to prevent unbounded growth.
@@ -433,6 +435,8 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
                 normalized["ts_ms"] = int(item.get("ts_ms", 0))
             except Exception:
                 normalized["ts_ms"] = 0
+            if item.get("args_summary"):
+                normalized["args_summary"] = str(item["args_summary"])[:200]
             deltas.append(normalized)
 
     return {
