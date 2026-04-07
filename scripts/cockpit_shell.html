@@ -453,6 +453,21 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 
 <div class="layout">
   <div class="main-panel" id="main-panel">loading...</div>
+<div id="cp-confirm-modal" class="modal-overlay" onclick="if(event.target===this)cpConfirmCancel()">
+  <div class="modal" style="width:420px">
+    <button class="close-btn" onclick="cpConfirmCancel()">&times;</button>
+    <h2 id="cp-confirm-title">Confirm Action</h2>
+    <p id="cp-confirm-desc" style="color:#8b949e;font-size:12px;margin-bottom:12px"></p>
+    <div id="cp-confirm-typed" style="display:none;margin-bottom:12px">
+      <label style="font-size:11px;color:#8b949e">Type <code id="cp-confirm-keyword" style="color:#f85149"></code> to confirm:</label>
+      <input id="cp-confirm-input" class="goal-input" style="margin-top:4px;width:100%;border:1px solid #30363d;padding:4px 8px;border-radius:4px" autocomplete="off">
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="cp-btn-sm" onclick="cpConfirmCancel()">Cancel</button>
+      <button id="cp-confirm-ok" class="cp-btn-sm danger" onclick="cpConfirmOk()">Confirm</button>
+    </div>
+  </div>
+</div>
   <div class="queue-panel">
     <div class="queue-header">📋 Pending Actions (<span id="queue-count">0</span>)</div>
     <div class="prompt-input-area">
@@ -536,6 +551,72 @@ let ccListening = false;  // whether wait-for-submit is active in CC
 let ccListeningSignalKnown = true; // false when connected to legacy /api/status
 let goalHistory = [];
 let selectedGoalEventId = '';
+
+let _cpConfirmCallback = null;
+let _cpConfirmKeyword = null;
+
+function cpConfirmShow({ title, desc, keyword, onConfirm }) {
+  document.getElementById('cp-confirm-title').textContent = title || 'Confirm Action';
+  document.getElementById('cp-confirm-desc').textContent = desc || '';
+  const typedWrap = document.getElementById('cp-confirm-typed');
+  const inp = document.getElementById('cp-confirm-input');
+  if (keyword) {
+    _cpConfirmKeyword = keyword;
+    document.getElementById('cp-confirm-keyword').textContent = keyword;
+    typedWrap.style.display = 'block';
+    inp.value = '';
+    inp.style.borderColor = '#30363d';
+  } else {
+    _cpConfirmKeyword = null;
+    typedWrap.style.display = 'none';
+  }
+  _cpConfirmCallback = onConfirm;
+  document.getElementById('cp-confirm-modal').classList.add('open');
+  if (keyword) inp.focus();
+}
+
+function cpConfirmCancel() {
+  document.getElementById('cp-confirm-modal').classList.remove('open');
+  _cpConfirmCallback = null;
+  _cpConfirmKeyword = null;
+}
+
+function cpConfirmOk() {
+  if (_cpConfirmKeyword) {
+    const val = document.getElementById('cp-confirm-input').value.trim();
+    if (val !== _cpConfirmKeyword) {
+      document.getElementById('cp-confirm-input').style.borderColor = '#f85149';
+      return;
+    }
+  }
+  const cb = _cpConfirmCallback;
+  cpConfirmCancel();
+  if (cb) cb();
+}
+
+function cpWarnAction(buttonEl, onConfirm) {
+  if (buttonEl.dataset.confirmed === 'true') {
+    buttonEl.dataset.confirmed = '';
+    onConfirm();
+    return;
+  }
+  buttonEl.dataset.confirmed = 'true';
+  const origText = buttonEl.textContent;
+  const origBg = buttonEl.style.background;
+  const origBorder = buttonEl.style.borderColor;
+  const origColor = buttonEl.style.color;
+  buttonEl.textContent = 'Sure?';
+  buttonEl.style.background = '#2d2000';
+  buttonEl.style.borderColor = '#d29922';
+  buttonEl.style.color = '#d29922';
+  setTimeout(() => {
+    buttonEl.textContent = origText;
+    buttonEl.style.background = origBg;
+    buttonEl.style.borderColor = origBorder;
+    buttonEl.style.color = origColor;
+    buttonEl.dataset.confirmed = '';
+  }, 3000);
+}
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
 const REFRESH_INTERVAL_S = 5;
@@ -739,23 +820,29 @@ async function rollbackGoalToSelected() {
     document.getElementById('status-msg').textContent = 'Select a goal event first';
     return;
   }
-  try {
-    const r = await fetch('/api/goal/rollback', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target_event_id: eventId }),
-    });
-    const d = await r.json();
-    if (d.ok) {
-      document.getElementById('status-msg').textContent = `Rolled back goal to v${d.goal_version}`;
-      await refreshGoal();
-      await refreshGoalHistory();
-      return;
-    }
-    document.getElementById('status-msg').textContent = 'Rollback failed: ' + (d.error || JSON.stringify(d));
-  } catch(e) {
-    document.getElementById('status-msg').textContent = 'Rollback network error: ' + e.message;
-  }
+  cpConfirmShow({
+    title: 'Rollback Goal',
+    desc: 'Revert the active goal to the selected history event. This updates goal control plane state.',
+    onConfirm: async () => {
+      try {
+        const r = await fetch('/api/goal/rollback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target_event_id: eventId }),
+        });
+        const d = await r.json();
+        if (d.ok) {
+          document.getElementById('status-msg').textContent = `Rolled back goal to v${d.goal_version}`;
+          await refreshGoal();
+          await refreshGoalHistory();
+          return;
+        }
+        document.getElementById('status-msg').textContent = 'Rollback failed: ' + (d.error || JSON.stringify(d));
+      } catch(e) {
+        document.getElementById('status-msg').textContent = 'Rollback network error: ' + e.message;
+      }
+    },
+  });
 }
 
 function updateCcIndicator() {
@@ -1072,17 +1159,22 @@ async function cpSessionExport() {
 }
 
 async function cpSessionReset() {
-  const confirmText = prompt('Type RESET to confirm session reset:');
-  if (confirmText !== 'RESET') return;
-  try {
-    await fetch('/api/control-plane/session/reset', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ confirm: 'RESET' }),
-    });
-    await refreshState();
-    renderSessionTab();
-  } catch(e) { alert('Reset failed: ' + e.message); }
+  cpConfirmShow({
+    title: 'Reset Session',
+    desc: 'This will reset all session state including deltas and risks. An export will be saved first.',
+    keyword: 'RESET',
+    onConfirm: async () => {
+      try {
+        await fetch('/api/control-plane/session/reset', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ confirm: 'RESET' }),
+        });
+        await refreshState();
+        renderSessionTab();
+      } catch(e) { alert('Reset failed: ' + e.message); }
+    },
+  });
 }
 
 function renderOperatorTab() {
@@ -1634,7 +1726,7 @@ function _renderDeltasPanel(connectorName) {
       <span class="cp-delta-meta">${escHtml(d.intent_signature || '')} · ${ts}</span>
       ${!d.reconcile_outcome ? `<span class="cp-delta-actions">
         <button class="cp-btn-sm" onclick="cpDeltaReconcile('${escHtml(d.id)}','confirm')">✓</button>
-        <button class="cp-btn-sm warn" onclick="cpDeltaReconcile('${escHtml(d.id)}','correct')">↺</button>
+        <button type="button" class="cp-btn-sm warn" onclick="cpWarnAction(this,function(){cpDeltaReconcile('${escHtml(d.id)}','correct')})">↺</button>
         <button class="cp-btn-sm danger" onclick="cpDeltaReconcile('${escHtml(d.id)}','retract')">✗</button>
       </span>` : ''}
     </div>`;
@@ -1748,15 +1840,26 @@ function _renderExecEventsPanel(connectorName) {
 }
 
 async function cpDeltaReconcile(deltaId, outcome) {
-  try {
-    await fetch('/api/control-plane/delta/reconcile', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ delta_id: deltaId, outcome: outcome }),
+  const doReconcile = async () => {
+    try {
+      await fetch('/api/control-plane/delta/reconcile', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ delta_id: deltaId, outcome: outcome }),
+      });
+      await refreshState();
+      renderCurrentTab();
+    } catch(e) {}
+  };
+  if (outcome === 'retract') {
+    cpConfirmShow({
+      title: 'Retract Delta',
+      desc: 'This will mark the delta as retracted and set verification state to degraded. This cannot be undone.',
+      onConfirm: doReconcile,
     });
-    await refreshState();
-    renderCurrentTab();
-  } catch(e) {}
+  } else {
+    doReconcile();
+  }
 }
 
 async function cpRiskUpdate(riskId, action) {
@@ -1798,7 +1901,7 @@ function renderPipelineCard(p, queuedKeys, opts) {
   };
   const safeKey = escHtml(key).replace(/'/g, "\\'");
   const btns = (actionDefs[status] || actionDefs.explore)
-    .map(d => `<button class="act-btn ${d.cls}" onclick="onActionSelect('${d.action}','${safeKey}','${status}')">${d.label}</button>`)
+    .map(d => `<button type="button" class="act-btn ${d.cls}" onclick="onActionSelect(event,'${d.action}','${safeKey}','${status}')">${d.label}</button>`)
     .join('');
   const cfClass = cf >= 2 ? 'warn' : '';
   const desc = p.description ? `<div class="pipeline-desc">${escHtml(p.description)}</div>` : '';
@@ -1838,7 +1941,8 @@ function renderPipelineGroup(pipelines, queuedKeys, opts) {
   return html;
 }
 
-function onActionSelect(action, key, currentStatus) {
+function onActionSelect(ev, action, key, currentStatus) {
+  const btn = ev && ev.currentTarget;
   const actionMap = {
     'promote-canary': { label: 'Promote → canary', type: 'pipeline-set', fields: { status: 'canary', rollout_pct: 20 } },
     'promote-stable': { label: 'Promote → stable', type: 'pipeline-set', fields: { status: 'stable', rollout_pct: 100 } },
@@ -1849,18 +1953,43 @@ function onActionSelect(action, key, currentStatus) {
   };
   const def = actionMap[action];
   if (!def) return;
-  enqueue({
-    id: ++queueIdSeq,
-    type: def.type,
-    label: def.label,
-    subLabel: key,
-    command: def.type === 'pipeline-delete'
-      ? `pipeline-delete ${key}`
-      : `pipeline-set ${key} ${JSON.stringify(def.fields)}`,
-    data: def.type === 'pipeline-delete'
-      ? { type: 'pipeline-delete', key }
-      : { type: 'pipeline-set', key, fields: def.fields },
-  });
+  const runEnqueue = () => {
+    enqueue({
+      id: ++queueIdSeq,
+      type: def.type,
+      label: def.label,
+      subLabel: key,
+      command: def.type === 'pipeline-delete'
+        ? `pipeline-delete ${key}`
+        : `pipeline-set ${key} ${JSON.stringify(def.fields)}`,
+      data: def.type === 'pipeline-delete'
+        ? { type: 'pipeline-delete', key }
+        : { type: 'pipeline-set', key, fields: def.fields },
+    });
+  };
+  if (action === 'delete') {
+    cpConfirmShow({
+      title: 'Delete Pipeline',
+      desc: `Delete pipeline "${key}"? This removes all tracking data.`,
+      keyword: 'DELETE',
+      onConfirm: runEnqueue,
+    });
+    return;
+  }
+  if (action === 'promote-stable') {
+    cpConfirmShow({
+      title: 'Promote to Stable',
+      desc: `Promote "${key}" to stable? At stable, the flywheel bridges execution with no LLM inference — verify this pipeline is thoroughly validated.`,
+      onConfirm: runEnqueue,
+    });
+    return;
+  }
+  const warnActions = ['promote-canary', 'demote-explore', 'demote-canary', 'reset-failures'];
+  if (btn && warnActions.indexOf(action) !== -1) {
+    cpWarnAction(btn, runEnqueue);
+    return;
+  }
+  runEnqueue();
 }
 
 // ── Notes comment ─────────────────────────────────────────────────────────────
