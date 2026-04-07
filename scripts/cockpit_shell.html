@@ -1207,11 +1207,12 @@ async function _loadAuditTimeline() {
   if (!el) return;
 
   try {
-    const [execR, pipeR, spansR, goalR] = await Promise.all([
+    const [execR, pipeR, spansR, goalR, toolR] = await Promise.all([
       fetch('/api/control-plane/exec-events?limit=50').then(r => r.json()),
       fetch('/api/control-plane/pipeline-events?limit=50').then(r => r.json()),
       fetch('/api/control-plane/spans?limit=30').then(r => r.json()),
       fetch('/api/goal-history?limit=30').then(r => r.json()),
+      fetch('/api/control-plane/tool-events?limit=200').then(r => r.json()).catch(() => ({events:[]})),
     ]);
 
     let items = [];
@@ -1219,6 +1220,7 @@ async function _loadAuditTimeline() {
     (pipeR.events || []).forEach(e => items.push({ ts: e.ts_ms, type: 'pipeline', data: e }));
     (spansR.spans || []).forEach(s => items.push({ ts: s.closed_at_ms || 0, type: 'span', data: s }));
     (goalR.events || []).forEach(g => items.push({ ts: g.ts_ms || 0, type: 'goal', data: g }));
+    (toolR.events || []).forEach(e => items.push({ ts: e.ts_ms, type: 'tool', data: e }));
 
     items.sort((a, b) => (b.ts || 0) - (a.ts || 0));
     items = items.slice(0, 100);
@@ -1248,6 +1250,14 @@ async function _loadAuditTimeline() {
         type = '<span style="font-size:10px;color:#79c0ff">goal</span>';
         detail = escHtml((item.data.text || item.data.goal || '').slice(0, 60));
         outcome = escHtml(item.data.type || item.data.source || '');
+      } else if (item.type === 'tool') {
+        const shortName = (item.data.tool_name || '').split('__').pop() || item.data.tool_name || '';
+        type = '<span style="font-size:10px;color:#d2a8ff">tool</span>';
+        detail = `<span style="color:#cdd9e5">${escHtml(shortName)}</span>` +
+          (item.data.args_summary ? ` <span style="color:#8b949e;font-size:10px">${escHtml(item.data.args_summary)}</span>` : '');
+        outcome = item.data.has_side_effects
+          ? '<span style="color:#ffa657;font-size:10px">write</span>'
+          : '<span style="color:#8b949e;font-size:10px">read</span>';
       }
       html += `<tr><td>${ts}</td><td>${type}</td><td>${detail}</td><td>${outcome}</td></tr>`;
     });

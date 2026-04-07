@@ -75,7 +75,10 @@ def _resolve_repl_root() -> Path:
 
 
 def _resolve_session_id() -> str:
-    return derive_session_id(os.environ.get("EMERGE_SESSION_ID"), ROOT)
+    # Use the current working directory (the user's project) so the cockpit
+    # session matches the daemon session, not the plugin installation directory.
+    # Falls back to EMERGE_SESSION_ID if set explicitly.
+    return derive_session_id(os.environ.get("EMERGE_SESSION_ID"), Path.cwd())
 
 
 def _session_paths() -> tuple[Path, Path, Path]:
@@ -1252,6 +1255,30 @@ def cmd_control_plane_exec_events(
     return {"ok": True, "events": events[:limit]}
 
 
+def cmd_control_plane_tool_events(
+    limit: int = 200,
+    since_ms: int = 0,
+) -> dict:
+    """Paginated general CC tool-call events from session (Bash, Read, Grep, etc.)."""
+    session_dir, _, _ = _session_paths()
+    events_path = session_dir / "tool-events.jsonl"
+    events: list[dict] = []
+    if events_path.exists():
+        for line in events_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except Exception:
+                continue
+            if since_ms and int(ev.get("ts_ms", 0)) < since_ms:
+                continue
+            events.append(ev)
+    events.sort(key=lambda e: int(e.get("ts_ms", 0)), reverse=True)
+    return {"ok": True, "events": events[:limit]}
+
+
 def cmd_control_plane_pipeline_events(
     limit: int = 100,
     since_ms: int = 0,
@@ -1638,6 +1665,12 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                 intent=qs.get("intent", [""])[0],
                 intent_prefix=qs.get("intent_prefix", [""])[0],
             ))
+        elif path.startswith("/api/control-plane/tool-events"):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            self._json(cmd_control_plane_tool_events(
+                limit=int(qs.get("limit", ["200"])[0]),
+                since_ms=int(qs.get("since_ms", ["0"])[0]),
+            ))
         elif path == "/api/control-plane/span-candidates":
             self._json(cmd_control_plane_span_candidates())
         elif path.startswith("/api/control-plane/spans"):
@@ -1805,22 +1838,35 @@ def _wait_for_submit_release() -> None:
 
 
 def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
-    """Start the cockpit HTTP server. Idempotent — returns existing instance if already running."""
+    """Start the cockpit HTTP server. Idempotent — returns existing instance if already
+    running FOR THE SAME PROJECT. If a server is running for a different project (cwd
+    mismatch), it is stopped and a new one is started.
+    """
+    import signal as _signal
     pid_path = _cockpit_pid_path()
+    current_cwd = str(Path.cwd())
 
-    # Reuse existing instance if alive
+    # Reuse existing instance if alive AND same project
     if pid_path.exists():
         try:
             info = json.loads(pid_path.read_text(encoding="utf-8"))
             existing_pid = int(info["pid"])
             existing_port = int(info["port"])
+            existing_cwd = info.get("cwd", "")
             os.kill(existing_pid, 0)  # raises OSError if process is gone
-            url = f"http://localhost:{existing_port}"
-            if open_browser:
-                webbrowser.open(url)
-            return {"ok": True, "port": existing_port, "url": url, "reused": True}
+            if existing_cwd == current_cwd:
+                url = f"http://localhost:{existing_port}"
+                if open_browser:
+                    webbrowser.open(url)
+                return {"ok": True, "port": existing_port, "url": url, "reused": True}
+            # Different project — stop the old server and start fresh
+            try:
+                os.kill(existing_pid, _signal.SIGTERM)
+            except OSError:
+                pass
         except (OSError, KeyError, ValueError, json.JSONDecodeError):
-            pid_path.unlink(missing_ok=True)
+            pass
+        pid_path.unlink(missing_ok=True)
 
     server = _ReuseAddrTCPServer(("127.0.0.1", port), _CockpitHandler)
     actual_port = server.server_address[1]
@@ -1829,7 +1875,7 @@ def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
     # Write pid file so CC (and serve-stop) can manage lifecycle
     pid_path.parent.mkdir(parents=True, exist_ok=True)
     pid_path.write_text(
-        json.dumps({"pid": os.getpid(), "port": actual_port}), encoding="utf-8"
+        json.dumps({"pid": os.getpid(), "port": actual_port, "cwd": current_cwd}), encoding="utf-8"
     )
 
     t = threading.Thread(target=server.serve_forever, daemon=True)

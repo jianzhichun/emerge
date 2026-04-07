@@ -46,7 +46,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__plugin_.*emerge.*__icc_(read|write|exec|reconcile|crystallize)",
+        "matcher": ".*",
         "hooks": [
           {
             "type": "command",

@@ -28,8 +28,10 @@ def test_hooks_json_has_required_events_and_post_tool_matcher():
         assert event in hooks
         assert isinstance(hooks[event], list) and hooks[event]
 
+    # PostToolUse fires for all tools (".*") so general CC tool calls
+    # (Bash, Read, Grep, etc.) are recorded in tool-events.jsonl for audit.
     matcher = hooks["PostToolUse"][0]["matcher"]
-    assert "mcp__plugin_.*emerge.*__icc_(read|write|exec|reconcile|crystallize)" == matcher
+    assert matcher == ".*"
 
 
 def test_hooks_json_commands_use_claude_plugin_root():

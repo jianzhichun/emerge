@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import re
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -9,7 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.goal_control_plane import GoalControlPlane  # noqa: E402
-from scripts.policy_config import default_hook_state_root  # noqa: E402
+from scripts.policy_config import default_exec_root, default_hook_state_root, derive_session_id  # noqa: E402
 from scripts.span_tracker import is_read_only_tool  # noqa: E402
 from scripts.state_tracker import (  # noqa: E402
     LEVEL_CORE_CRITICAL,
@@ -18,6 +22,8 @@ from scripts.state_tracker import (  # noqa: E402
     load_tracker,
     save_tracker,
 )
+
+_EMERGE_TOOL_RE = re.compile(r"__icc_")
 
 
 def _classify_level(tool_name: str) -> str:
@@ -28,6 +34,80 @@ def _classify_level(tool_name: str) -> str:
     return LEVEL_PERIPHERAL
 
 
+def _args_summary(tool_input: dict) -> str:
+    """Return a short readable summary of tool arguments (max 120 chars)."""
+    if not tool_input:
+        return ""
+    for key in ("file_path", "pattern", "command", "query", "path", "old_string", "content"):
+        if key in tool_input:
+            val = str(tool_input[key])
+            return val[:120] if len(val) > 120 else val
+    for k, v in tool_input.items():
+        val = str(v)
+        return f"{k}: {val[:80]}"
+    return ""
+
+
+def _write_tool_event(tool_name: str, payload: dict) -> None:
+    """Append a lightweight tool-event record to the session-scoped tool-events.jsonl."""
+    tool_input = payload.get("tool_input", {}) or {}
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+    session_id = derive_session_id(os.environ.get("EMERGE_SESSION_ID"), Path.cwd())
+    session_dir = default_exec_root() / session_id
+    event = {
+        "tool_name": tool_name,
+        "ts_ms": int(time.time() * 1000),
+        "args_summary": _args_summary(tool_input),
+        "has_side_effects": not is_read_only_tool(tool_name),
+    }
+    try:
+        session_dir.mkdir(parents=True, exist_ok=True)
+        events_path = session_dir / "tool-events.jsonl"
+        with events_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+
+
+def _record_span_action(
+    tool_name: str, payload: dict, state_root: Path, state_path: Path
+) -> tuple[str, str]:
+    """Record tool invocation to the active span WAL.
+
+    Returns (active_span_id, active_span_intent) — both empty strings when no span is active.
+    Skips icc_exec: its code paths are captured in ExecSession WAL already.
+    """
+    if tool_name.endswith("__icc_exec") or not tool_name:
+        return "", ""
+    _active_span_id = ""
+    _active_span_intent = ""
+    try:
+        _raw_state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+        _active_span_id = str(_raw_state.get("active_span_id", "") or "")
+        _active_span_intent = str(_raw_state.get("active_span_intent", "") or "")
+    except Exception:
+        return "", ""
+    if not _active_span_id:
+        return "", ""
+    _has_se = not is_read_only_tool(tool_name)
+    _args_raw = json.dumps(payload.get("tool_input", {}), sort_keys=True, ensure_ascii=True)
+    _args_hash = hashlib.sha256(_args_raw.encode()).hexdigest()[:16]
+    _action = {
+        "tool_name": tool_name,
+        "args_hash": _args_hash,
+        "has_side_effects": _has_se,
+        "ts_ms": int(time.time() * 1000),
+    }
+    _buf = state_root / "active-span-actions.jsonl"
+    try:
+        with _buf.open("a", encoding="utf-8") as _f:
+            _f.write(json.dumps(_action, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+    return _active_span_id, _active_span_intent
+
+
 def main() -> None:
     payload_text = sys.stdin.read().strip()
     try:
@@ -36,10 +116,20 @@ def main() -> None:
         payload = {}
 
     tool_name = payload.get("tool_name", "")
-    raw_result = payload.get("tool_result", {})
-    result = raw_result if isinstance(raw_result, dict) else {}
     state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
+
+    # Non-emerge tools: lightweight path — write tool-event + span action, skip
+    # heavy delta/GoalControlPlane machinery and additionalContext injection.
+    if not _EMERGE_TOOL_RE.search(tool_name):
+        _write_tool_event(tool_name, payload)
+        _record_span_action(tool_name, payload, state_root, state_path)
+        print(json.dumps({}))
+        return
+
+    # ── Emerge tool full path ────────────────────────────────────────────────
+    raw_result = payload.get("tool_result", {})
+    result = raw_result if isinstance(raw_result, dict) else {}
     tracker = load_tracker(state_path)
     goal_cp = GoalControlPlane(state_root)
     goal_cp.ensure_initialized()
@@ -69,7 +159,7 @@ def main() -> None:
     except Exception:
         pass
 
-    delta_id = tracker.add_delta(
+    tracker.add_delta(
         message=message,
         level=level,
         verification_state=verification_state,
@@ -102,38 +192,10 @@ def main() -> None:
         goal_override=str(snap.get("text", "")),
         goal_source_override=str(snap.get("source", "unset")),
     )
-    # ── span action recording ──────────────────────────────────────────────
-    # Skip icc_exec entirely: its Python code paths are captured in ExecSession WAL.
-    # A span skeleton built from icc_exec tool names would be useless.
-    _is_icc_exec = tool_name.endswith("__icc_exec")
-    _active_span_id = ""
-    _active_span_intent = ""
-    if not _is_icc_exec and tool_name:
-        try:
-            _raw_state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
-            _active_span_id = str(_raw_state.get("active_span_id", "") or "")
-            _active_span_intent = str(_raw_state.get("active_span_intent", "") or "")
-        except Exception:
-            _active_span_id = ""
-        if _active_span_id:
-            import hashlib as _hashlib
-            import time as _time
-            _has_se = not is_read_only_tool(tool_name)
-            _args_raw = json.dumps(payload.get("tool_input", {}), sort_keys=True, ensure_ascii=True)
-            _args_hash = _hashlib.sha256(_args_raw.encode()).hexdigest()[:16]
-            _action = {
-                "tool_name": tool_name,
-                "args_hash": _args_hash,
-                "has_side_effects": _has_se,
-                "ts_ms": int(_time.time() * 1000),
-            }
-            _buf = state_root / "active-span-actions.jsonl"
-            try:
-                with _buf.open("a", encoding="utf-8") as _f:
-                    _f.write(json.dumps(_action, ensure_ascii=True) + "\n")
-            except Exception:
-                pass
-    # ── end span action recording ──────────────────────────────────────────
+
+    _active_span_id, _active_span_intent = _record_span_action(
+        tool_name, payload, state_root, state_path
+    )
 
     save_tracker(state_path, tracker)
 
@@ -141,14 +203,13 @@ def main() -> None:
     # fields and drops active_span_id. Re-merge so subsequent PostToolUse calls
     # can still see the active span.
     if _active_span_id:
-        import os as _os
         try:
             _state_now = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
             _state_now["active_span_id"] = _active_span_id
             _state_now["active_span_intent"] = _active_span_intent
             _tmp_state = state_path.with_suffix(".tmp")
             _tmp_state.write_text(json.dumps(_state_now, ensure_ascii=False), encoding="utf-8")
-            _os.replace(_tmp_state, state_path)
+            os.replace(_tmp_state, state_path)
         except Exception:
             pass
 
