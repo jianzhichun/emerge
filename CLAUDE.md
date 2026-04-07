@@ -53,6 +53,14 @@ python3 scripts/repl_admin.py runner-status --pretty
 
 **Human-fix targeting**: `icc_reconcile` with `outcome=correct` increments `human_fix_rate` only on the candidate with the highest `last_ts_ms` matching the `intent_signature` — the most-recently-used one. Never all matching candidates.
 
+**Delta enrichment**: Each delta in `StateTracker` carries `intent_signature`, `tool_name`, and `ts_ms` alongside the original `id`, `message`, `level`, `verification_state`, `provisional` fields. `_normalize_state` fills missing fields with `None`/`None`/`0` for backward compatibility.
+
+**Risk object model**: `open_risks` are now dicts with `risk_id`, `text`, `status` (open/handled/snoozed), `created_at_ms`, `snoozed_until_ms`, `handled_reason`, `source_delta_id`, `intent_signature`. `_normalize_state` migrates bare string risks to objects. `update_risk(risk_id, action)` handles lifecycle transitions.
+
+**Frozen flag**: Both `pipelines-registry.json` entries and `span-candidates.json` entries support a `frozen: bool` field. When frozen, `_update_pipeline_registry` skips all auto-transitions (stats still update) and `get_policy_status` returns `"explore"`. Set/unset via cockpit `/api/control-plane/policy/freeze` and `/unfreeze`.
+
+**Cockpit control plane**: `repl_admin.py` exposes `/api/control-plane/*` read endpoints (state, intents, session, exec-events, pipeline-events, spans, span-candidates) and write endpoints (delta/reconcile, risk/update, risk/add, policy/freeze, policy/unfreeze, session/export, session/reset). The cockpit HTML has an Overview intent table, connector sub-panels (Deltas/Risks/Spans/Exec Events), and global Audit/Session/Operator tabs.
+
 ## Test Infrastructure
 
 `conftest.py` sets two `autouse` fixtures:
