@@ -236,6 +236,7 @@ def _save_registry(registry_path: Path, data: dict) -> None:
         registry_path,
         data,
         prefix=".registry-",
+        suffix=".json",
         ensure_ascii=False,
         indent=2,
     )

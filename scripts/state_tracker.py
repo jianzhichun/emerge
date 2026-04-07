@@ -325,10 +325,20 @@ class StateTracker:
         goal_text = context["Goal"]
         delta_text = context["Delta"]
         risks_text = context["Open Risks"]
+        # Check idleness directly from state (not formatted strings) to avoid format-drift bugs.
+        # goal_override takes precedence — if caller passed a goal, session is not idle.
+        effective_goal = (
+            str(goal_override).strip() if goal_override is not None
+            else str(self.state.get("goal", "") or "").strip()
+        )
+        open_risks = [
+            r for r in self.state.get("open_risks", [])
+            if (isinstance(r, dict) and r.get("status") == "open") or isinstance(r, str)
+        ]
         is_idle = (
-            goal_text in ("Not set.", "")
-            and delta_text in ("- No changes.", "")
-            and risks_text in ("- None.", "")
+            not effective_goal
+            and not self.state.get("deltas")
+            and not open_risks
         )
         if is_idle:
             return f"FLYWHEEL_TOKEN\n{token_json}"

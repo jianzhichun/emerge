@@ -268,7 +268,7 @@ class SpanTracker:
             evict_count = len(candidates["spans"]) - _MAX_CANDIDATES
             sorted_keys = sorted(
                 candidates["spans"],
-                key=lambda k: candidates["spans"][k].get("last_ts_ms", 0),
+                key=lambda k: (candidates["spans"][k].get("last_ts_ms", 0), k),
             )
             for evict_key in sorted_keys[:evict_count]:
                 del candidates["spans"][evict_key]

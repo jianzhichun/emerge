@@ -197,7 +197,12 @@ class EmergeDaemon:
                 result = self.pipeline.run_write(pipeline_args)
             else:
                 result = self.pipeline.run_read(pipeline_args)
-        except Exception:
+        except Exception as _bridge_exc:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "flywheel bridge failed for %s (%s), falling back to LLM: %s",
+                base_pipeline_id, mode, _bridge_exc,
+            )
             return None
         result["bridge_promoted"] = True
         try:
