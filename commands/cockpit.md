@@ -18,35 +18,25 @@ Steps:
    Report to the user: URL, total pipeline count (explore/canary/stable), any pipelines with consecutive_failures.
 
 3. **Sense vertical assets and inject controls** (CC-driven, framework-agnostic) — **do this before step 4**:
-   - `policy-status --pretty` output is already in hand from step 2; also read `~/.emerge/connectors/<connector>/NOTES.md` and any `scenarios/*.yaml` or `cockpit/*.html` files for each connector.
-   - **Always inject a panel for every connector that has pipelines** — do not skip even if no explicit `cockpit/*.html` exists.
-   - For each connector, POST to `http://localhost:<PORT>/api/inject-component`:
+   - Read `~/.emerge/connectors/<connector>/NOTES.md` and any `scenarios/*.yaml` files for each connector.
+   - The **Pipelines tab already shows** pipeline cards with promote/rollback/delete actions — **do NOT duplicate that in Controls**.
+   - **Controls tab is for vertical-specific capabilities NOT covered by the Pipelines tab:**
+     - Scenario cards from `scenarios/*.yaml` (with a "Run" button per scenario)
+     - Diagnostic quick-actions: ping, connection health check, reset COM session, port check, etc.
+     - Domain-specific tools: open a specific file, clear mesh, restart a service, etc.
+     - Key notes snippet (first 5–10 lines of NOTES.md) as context for the operator
+   - **Skip injection entirely** if the connector has no `scenarios/*.yaml`, no NOTES.md, and no domain-specific quick-actions worth surfacing. Do not inject a panel just to list pipelines.
+   - For each panel worth injecting, POST to `http://localhost:<PORT>/api/inject-component`:
      ```json
      {"connector": "<name>", "id": "<name>-main", "replace": true, "html": "<full HTML doc>"}
      ```
-     (`replace:true` + named `id` = clear stale injections from prior session; re-injecting with same id updates in-place)
 
-   **Every pipeline button MUST have a working `onclick`.** The injected iframe is same-origin; use `window.parent.cockpit` API:
-   - **queueAction** (adds to pending queue, user clicks Submit): `window.parent.cockpit.queueAction({...})`
-   - **submitNow** (fires immediately, no confirm): `window.parent.cockpit.submitNow([{...}])`
+   **Interactive buttons** — the injected iframe is same-origin; use `window.parent.cockpit` API:
+   - **queueAction** (adds to queue, user confirms): `window.parent.cockpit.queueAction({type:'tool-call', call:{tool:'mcp__plugin_emerge_emerge__icc_exec', arguments:{intent_signature:'<sig>', script:''}}})`
+   - **submitNow** (fires immediately): `window.parent.cockpit.submitNow([{type:'tool-call', call:{...}}])`
+   - Pipeline status changes belong in the **Pipelines tab**, not here. Only use `pipeline-set` actions in Controls if the button represents a meaningful high-level workflow (e.g., "Promote all stable-ready pipelines").
 
-   **Action payload reference** — use these exact shapes:
-
-   | Button purpose | onclick payload |
-   |---|---|
-   | Promote pipeline to canary | `window.parent.cockpit.queueAction({type:'pipeline-set',key:'<conn>.<mode>.<name>',set:{status:'canary'}})` |
-   | Promote to stable | `window.parent.cockpit.queueAction({type:'pipeline-set',key:'<conn>.<mode>.<name>',set:{status:'stable'}})` |
-   | Rollback to explore | `window.parent.cockpit.queueAction({type:'pipeline-set',key:'<conn>.<mode>.<name>',set:{status:'explore'}})` |
-   | Run pipeline (icc_exec) | `window.parent.cockpit.submitNow([{type:'tool-call',call:{tool:'mcp__plugin_emerge_emerge__icc_exec',arguments:{intent_signature:'<sig>',script:''}}}])` |
-   | Delete pipeline | `window.parent.cockpit.queueAction({type:'pipeline-delete',key:'<conn>.<mode>.<name>'})` |
-
-   **Minimum panel structure:**
-   - One button per pipeline, styled by current status (`explore`=gray, `canary`=yellow, `stable`=green). Each button must have onclick.
-   - Clicking a pipeline button should `queueAction` a promotion to the next tier (explore→canary, canary→stable), or show a small inline dropdown with options.
-   - Notes snippet (first 10 lines of NOTES.md) if present.
-   - Scenario cards (from `scenarios/*.yaml`) if present.
-
-   Only skip injection if a connector has zero pipelines AND no NOTES.md.
+   Only inject if there is genuinely useful content beyond what Pipelines/Notes tabs already show.
 
 4. **Enter the dispatch loop** (core, background-driven):
 

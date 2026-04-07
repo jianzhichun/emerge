@@ -843,16 +843,22 @@ function _softUpdateConnectorAssets(name) {
   const hasControls = c.components && c.components.length;
   const ctrlTab = document.querySelector('[aria-controls="conn-panel-controls"] .connector-panel-tab-count');
   if (ctrlTab) ctrlTab.textContent = hasControls ? c.components.length : 0;
-  // If controls panel is active, re-render it using the same structure as renderConnectorTab
+  // If controls panel is active, only rebuild iframes when the component list has changed.
+  // Unconditional innerHTML= destroys live iframes on every poll, breaking button interactions.
   if (getActiveConnectorPanel(name) === 'controls') {
     const ctrlPanel = document.getElementById('conn-panel-controls');
     if (ctrlPanel) {
-      ctrlPanel.innerHTML = hasControls
-        ? c.components.map(comp => `<div class="component-slot">
-            <div class="component-label">${escHtml(comp.filename)} <span>${escHtml((comp.context || '').slice(0, 80))}</span></div>
-            <iframe src="/api/components/${encodeURIComponent(name)}/${encodeURIComponent(comp.filename)}" onload="resizeIframe(this)"></iframe>
-          </div>`).join('')
-        : '<div style="color:#484f58;font-size:11px;padding:6px 0">No injected controls yet.</div>';
+      const newFilenames = hasControls ? c.components.map(comp => comp.filename) : [];
+      const existing = Array.from(ctrlPanel.querySelectorAll('iframe')).map(f => decodeURIComponent(f.src.split('/').pop()));
+      const unchanged = newFilenames.length === existing.length && newFilenames.every((fn, i) => fn === existing[i]);
+      if (!unchanged) {
+        ctrlPanel.innerHTML = hasControls
+          ? c.components.map(comp => `<div class="component-slot">
+              <div class="component-label">${escHtml(comp.filename)} <span>${escHtml((comp.context || '').slice(0, 80))}</span></div>
+              <iframe src="/api/components/${encodeURIComponent(name)}/${encodeURIComponent(comp.filename)}" onload="resizeIframe(this)"></iframe>
+            </div>`).join('')
+          : '<div style="color:#484f58;font-size:11px;padding:6px 0">No injected controls yet.</div>';
+      }
     }
   }
 }
@@ -2629,7 +2635,26 @@ window.cockpit = {
    */
   queueAction(action) {
     if (!action || typeof action !== 'object') return;
-    enqueue({ id: ++queueIdSeq, data: action });
+    // Derive display fields expected by renderQueue from the action payload.
+    const type = action.type || 'action';
+    const key = action.key || '';
+    const set = action.set || {};
+    let label, subLabel, command;
+    if (type === 'pipeline-set') {
+      const setStr = Object.entries(set).map(([k,v]) => `${k}=${v}`).join(', ');
+      label = `pipeline-set: ${key}`;
+      subLabel = setStr;
+      command = `pipeline-set --pipeline-key ${key}` + Object.entries(set).map(([k,v]) => ` --set ${k}=${v}`).join('');
+    } else if (type === 'pipeline-delete') {
+      label = `pipeline-delete: ${key}`;
+      subLabel = '';
+      command = `pipeline-delete --pipeline-key ${key}`;
+    } else {
+      label = type + (key ? ': ' + key : '');
+      subLabel = '';
+      command = type;
+    }
+    enqueue({ id: ++queueIdSeq, type, label, subLabel, command, data: action });
   },
 
   /**
