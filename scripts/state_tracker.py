@@ -47,8 +47,13 @@ class StateTracker:
         level: str = LEVEL_CORE_CRITICAL,
         verification_state: str = "verified",
         provisional: bool = False,
+        intent_signature: str | None = None,
+        tool_name: str | None = None,
+        ts_ms: int | None = None,
     ) -> str:
         message = str(message).strip() or "(no message)"
+        if ts_ms is None:
+            ts_ms = int(time.time() * 1000)
         delta_id = f"d-{int(time.time() * 1000)}-{len(self.state['deltas'])}"
         self.state["deltas"].append(
             {
@@ -57,6 +62,9 @@ class StateTracker:
                 "level": level,
                 "verification_state": verification_state,
                 "provisional": provisional,
+                "intent_signature": intent_signature,
+                "tool_name": tool_name,
+                "ts_ms": ts_ms,
             }
         )
         if verification_state == "degraded":
@@ -310,6 +318,12 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
             }
             if "reconcile_outcome" in item:
                 normalized["reconcile_outcome"] = str(item["reconcile_outcome"])
+            normalized["intent_signature"] = item.get("intent_signature") or None
+            normalized["tool_name"] = item.get("tool_name") or None
+            try:
+                normalized["ts_ms"] = int(item.get("ts_ms", 0))
+            except Exception:
+                normalized["ts_ms"] = 0
             deltas.append(normalized)
 
     return {
