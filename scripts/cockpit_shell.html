@@ -98,6 +98,135 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .tab .warn { color: #f85149; margin-left: 4px; }
 .layout { display: flex; height: calc(100vh - 130px); }
 .main-panel { flex: 1; overflow-y: auto; padding: 0 16px 28px; }
+.main-panel.no-scroll { overflow: hidden; }
+.state-root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-top: 16px;
+  overflow: hidden;
+}
+.state-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.state-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.state-col {
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.state-col-head {
+  padding: 8px 10px;
+  border-bottom: 1px solid #21262d;
+  color: #8b949e;
+  font-size: 11px;
+}
+.state-col-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overflow-x: hidden;
+}
+.state-diag-body {
+  overflow: hidden;
+}
+.state-diag-wrap {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  gap: 6px;
+  overflow: hidden;
+}
+.state-diag-meta {
+  border: 1px solid #21262d;
+  border-radius: 4px;
+  background: #11161d;
+  padding: 8px;
+  max-height: clamp(90px, 15vh, 160px);
+  flex: 0 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.state-related-wrap {
+  border: 1px solid #21262d;
+  border-radius: 4px;
+  background: #11161d;
+  padding: 8px;
+  max-height: clamp(96px, 18vh, 180px);
+  min-height: 84px;
+  flex: 0 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.state-json {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 0;
+  min-height: clamp(160px, 28vh, 320px);
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 10px;
+  color: #c9d1d9;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+.state-json-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.json-tree {
+  font-size: 10px;
+  line-height: 1.5;
+}
+.json-tree-node {
+  margin-left: 0;
+}
+.json-tree-node + .json-tree-node {
+  margin-top: 2px;
+}
+.json-tree-node summary {
+  cursor: pointer;
+  color: #c9d1d9;
+  user-select: none;
+}
+.json-tree-children {
+  margin-left: 14px;
+  border-left: 1px dashed #30363d;
+  padding-left: 8px;
+  margin-top: 2px;
+}
+.json-tree-key { color: #79c0ff; }
+.json-tree-type { color: #8b949e; }
+.json-tree-count { color: #6e7681; margin-left: 4px; }
+.json-tree-leaf { margin-left: 14px; color: #c9d1d9; }
+.json-tree-value.str { color: #a5d6ff; }
+.json-tree-value.num { color: #d2a8ff; }
+.json-tree-value.bool { color: #ffa657; }
+.json-tree-value.null { color: #8b949e; font-style: italic; }
 .queue-panel { width: 300px; border-left: 1px solid #21262d; display: flex; flex-direction: column; }
 .queue-header { padding: 10px 14px; font-size: 11px; color: #58a6ff; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #21262d; flex-shrink: 0; }
 .queue-items { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 4px; }
@@ -641,6 +770,9 @@ async function init() {
     renderTabs();
     renderCurrentTab();
   });
+  window.addEventListener('resize', () => {
+    if (currentTab === 'state') _renderVirtualStateList();
+  });
   _resetRefreshTimer();
   setInterval(async () => {
     await Promise.all([refreshPolicy(), refreshAssets(), refreshState(), refreshIntents()]);
@@ -866,9 +998,10 @@ function updateCcIndicator() {
 // Called by the 5-second interval. renderCurrentTab() is used for full redraws (tab switch,
 // initial load, queue changes).
 function refreshPolicyDisplay() {
-  if (currentTab === 'audit' || currentTab === 'session' || currentTab === 'operator') {
+  if (currentTab === 'audit' || currentTab === 'session' || currentTab === 'state' || currentTab === 'operator') {
     if (currentTab === 'audit') _loadAuditTimeline();
     else if (currentTab === 'session') _loadSessionData();
+    else if (currentTab === 'state') _loadStateTabData();
     return;
   }
   if (!policyData) return;
@@ -927,6 +1060,7 @@ function renderTabs() {
   html += `<div style="margin-left:auto;display:flex;gap:0">`;
   html += `<div class="tab ${currentTab === 'audit' ? 'active' : ''}" onclick="switchTab('audit')" style="font-size:11px;opacity:0.7">Audit</div>`;
   html += `<div class="tab ${currentTab === 'session' ? 'active' : ''}" onclick="switchTab('session')" style="font-size:11px;opacity:0.7">Session</div>`;
+  html += `<div class="tab ${currentTab === 'state' ? 'active' : ''}" onclick="switchTab('state')" style="font-size:11px;opacity:0.7">State</div>`;
   html += `<div class="tab ${currentTab === 'operator' ? 'active' : ''}" onclick="switchTab('operator')" style="font-size:11px;opacity:0.7">Operator</div>`;
   html += `</div>`;
 
@@ -945,7 +1079,6 @@ function getAvailableConnectorPanels(connectorName) {
   const panels = ['pipelines', 'notes'];
   const hasControls = connector && (connector.components && connector.components.length);
   if (hasControls) panels.push('controls');
-  panels.push('deltas', 'risks', 'spans', 'exec-events');
   return panels;
 }
 
@@ -969,13 +1102,16 @@ function switchConnectorPanel(panelName) {
 }
 
 function renderCurrentTab() {
-  if (currentTab !== 'overview' && currentTab !== 'audit' && currentTab !== 'session' && currentTab !== 'operator') {
+  const panelEl = document.getElementById('main-panel');
+  if (panelEl) panelEl.classList.toggle('no-scroll', currentTab === 'state');
+  if (currentTab !== 'overview' && currentTab !== 'audit' && currentTab !== 'session' && currentTab !== 'state' && currentTab !== 'operator') {
     const connectors = assetsData ? Object.keys(assetsData.connectors || {}) : [];
     if (!connectors.includes(currentTab)) currentTab = 'overview';
   }
   if (currentTab === 'overview') renderOverviewTab();
   else if (currentTab === 'audit') renderAuditTab();
   else if (currentTab === 'session') renderSessionTab();
+  else if (currentTab === 'state') renderStateTab();
   else if (currentTab === 'operator') renderOperatorTab();
   else renderConnectorTab(currentTab);
 }
@@ -984,7 +1120,7 @@ function applyViewStateFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const requestedTab = params.get('tab');
   const connectors = assetsData ? Object.keys(assetsData.connectors || {}) : [];
-  const globalTabs = ['audit', 'session', 'operator'];
+  const globalTabs = ['audit', 'session', 'state', 'operator'];
   if (requestedTab === 'overview' || !requestedTab) {
     currentTab = 'overview';
   } else if (globalTabs.includes(requestedTab)) {
@@ -1007,7 +1143,7 @@ function syncUrlWithViewState(opts) {
   const push = !!(opts && opts.push);
   const url = new URL(window.location.href);
   url.searchParams.set('tab', currentTab);
-  if (currentTab === 'overview' || currentTab === 'audit' || currentTab === 'session' || currentTab === 'operator') {
+  if (currentTab === 'overview' || currentTab === 'audit' || currentTab === 'session' || currentTab === 'state' || currentTab === 'operator') {
     url.searchParams.delete('panel');
   } else {
     url.searchParams.set('panel', getActiveConnectorPanel(currentTab));
@@ -1103,6 +1239,8 @@ function renderSessionTab() {
 async function _loadSessionData() {
   const el = document.getElementById('session-content');
   if (!el) return;
+  _captureJsonTreeOpen('session-checkpoint');
+  _captureJsonTreeOpen('session-recovery');
 
   try {
     const r = await fetch('/api/control-plane/session');
@@ -1122,14 +1260,14 @@ async function _loadSessionData() {
     if (data.checkpoint) {
       html += `<div style="margin-bottom:12px">
         <div style="font-size:12px;color:#e6edf3;margin-bottom:6px;font-weight:600">Checkpoint</div>
-        <pre style="background:#161b22;border:1px solid #21262d;border-radius:4px;padding:8px;font-size:11px;color:#c9d1d9;overflow-x:auto;max-height:200px">${escHtml(JSON.stringify(data.checkpoint, null, 2))}</pre>
+        ${_renderJsonBlock('session-checkpoint', data.checkpoint)}
       </div>`;
     }
 
     if (data.recovery) {
       html += `<div style="margin-bottom:12px">
         <div style="font-size:12px;color:#d29922;margin-bottom:6px;font-weight:600">Recovery</div>
-        <pre style="background:#1a0f0f;border:1px solid #30363d;border-radius:4px;padding:8px;font-size:11px;color:#c9d1d9;overflow-x:auto;max-height:200px">${escHtml(JSON.stringify(data.recovery, null, 2))}</pre>
+        ${_renderJsonBlock('session-recovery', data.recovery)}
       </div>`;
     }
 
@@ -1139,6 +1277,8 @@ async function _loadSessionData() {
     </div>`;
 
     el.innerHTML = html;
+    if (data.checkpoint && _getJsonView('session-checkpoint') === 'tree') _restoreJsonTreeOpen('session-checkpoint');
+    if (data.recovery && _getJsonView('session-recovery') === 'tree') _restoreJsonTreeOpen('session-recovery');
   } catch(e) {
     el.innerHTML = '<div style="color:#f85149;padding:8px">Failed to load session data</div>';
   }
@@ -1161,20 +1301,545 @@ async function cpSessionExport() {
 async function cpSessionReset() {
   cpConfirmShow({
     title: 'Reset Session',
-    desc: 'This will reset all session state including deltas and risks. An export will be saved first.',
+    desc: 'This will reset tracker state and clear session artifacts (WAL/checkpoint/recovery/events). An export will be saved first.',
     keyword: 'RESET',
     onConfirm: async () => {
       try {
         await fetch('/api/control-plane/session/reset', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ confirm: 'RESET' }),
+          body: JSON.stringify({ confirm: 'RESET', full: true }),
         });
         await refreshState();
         renderSessionTab();
       } catch(e) { alert('Reset failed: ' + e.message); }
     },
   });
+}
+
+function renderStateTab() {
+  const panel = document.getElementById('main-panel');
+  if (panel && panel.querySelector('#state-content')) {
+    _loadStateTabData();
+    return;
+  }
+  panel.innerHTML = `<div class="state-root">
+    <h2 style="font-size:14px;color:#e6edf3;margin-bottom:12px">State Objects</h2>
+    <div id="state-content" class="state-content" style="color:#8b949e;font-size:11px">Loading state data...</div>
+  </div>`;
+  _loadStateTabData();
+}
+
+let _stateTabFilter = 'all';
+let _stateTabQuery = '';
+let _stateTabSelectedKey = '';
+let _stateTabRows = [];
+let _stateTabIndex = {};
+let _stateSelectedDetail = null;
+let _stateScrollPos = { list: 0, meta: 0, related: 0, json: 0 };
+let _stateRowsFingerprint = '';
+let _stateFilteredRows = [];
+const _STATE_ROW_H = 72;
+let _jsonViewById = {};
+let _jsonOpenPathsById = {};
+let _jsonDataById = {};
+
+function stateSetFilter(filterName) {
+  _stateTabFilter = filterName || 'all';
+  _renderStateTabView();
+}
+
+function stateSetQuery(text) {
+  _stateTabQuery = String(text || '');
+  _renderStateTabView();
+}
+
+function stateSelect(key) {
+  _stateTabSelectedKey = key || '';
+  _renderStateTabView();
+}
+
+function stateSetJsonView(mode) {
+  jsonViewerSetView('state-detail', mode);
+}
+
+async function stateCopySelectedJson() {
+  await jsonViewerCopy('state-detail');
+}
+
+function _stateIcon(kind) {
+  if (kind === 'delta') return 'Δ';
+  if (kind === 'risk') return '⚠';
+  if (kind === 'span') return '◉';
+  if (kind === 'exec-event') return 'E';
+  if (kind === 'pipeline-event') return 'P';
+  return '•';
+}
+
+function _stateLabel(kind) {
+  if (kind === 'delta') return 'delta';
+  if (kind === 'risk') return 'risk';
+  if (kind === 'span') return 'span';
+  if (kind === 'exec-event') return 'exec';
+  if (kind === 'pipeline-event') return 'pipeline';
+  return kind;
+}
+
+function _buildStateRows({ deltas, risks, spans, execEvents, pipelineEvents }) {
+  const rows = [];
+  (deltas || []).forEach(d => {
+    const key = 'delta:' + String(d.id || '');
+    rows.push({
+      key,
+      kind: 'delta',
+      ts: Number(d.ts_ms || 0),
+      intent: String(d.intent_signature || ''),
+      title: String(d.message || '(no message)'),
+      status: String(d.reconcile_outcome || (d.provisional ? 'provisional' : 'open')),
+      data: d,
+    });
+  });
+  (risks || []).forEach(r => {
+    const key = 'risk:' + String(r.risk_id || '');
+    rows.push({
+      key,
+      kind: 'risk',
+      ts: Number(r.created_at_ms || 0),
+      intent: String(r.intent_signature || ''),
+      title: String(r.text || '(no risk text)'),
+      status: String(r.status || 'open'),
+      data: r,
+    });
+  });
+  (spans || []).forEach(s => {
+    const key = 'span:' + String(s.span_id || (s.closed_at_ms || 0) + ':' + (s.intent_signature || ''));
+    rows.push({
+      key,
+      kind: 'span',
+      ts: Number(s.closed_at_ms || s.opened_at_ms || 0),
+      intent: String(s.intent_signature || ''),
+      title: String(s.description || 'span'),
+      status: String(s.outcome || 'unknown'),
+      data: s,
+    });
+  });
+  (execEvents || []).forEach(e => {
+    const key = 'exec-event:' + String(e.ts_ms || 0) + ':' + String(e.intent_signature || '');
+    rows.push({
+      key,
+      kind: 'exec-event',
+      ts: Number(e.ts_ms || 0),
+      intent: String(e.intent_signature || ''),
+      title: String(e.mode || 'exec'),
+      status: e.is_error ? 'error' : 'ok',
+      data: e,
+    });
+  });
+  (pipelineEvents || []).forEach(e => {
+    const pipeId = e.pipeline_id || e.intent_signature || '';
+    const key = 'pipeline-event:' + String(e.ts_ms || 0) + ':' + String(pipeId);
+    rows.push({
+      key,
+      kind: 'pipeline-event',
+      ts: Number(e.ts_ms || 0),
+      intent: String(e.intent_signature || pipeId),
+      title: String(e.pipeline_id || 'pipeline-event'),
+      status: e.is_error ? 'error' : 'ok',
+      data: e,
+    });
+  });
+  rows.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return rows;
+}
+
+function _stateRelatedRows(allRows, selected) {
+  if (!selected) return [];
+  const intent = String(selected.intent || '').trim();
+  if (intent) {
+    return allRows.filter(r => String(r.intent || '') === intent);
+  }
+  // Fallback: for objects without intent, cluster by same kind + title prefix.
+  const titlePrefix = String(selected.title || '').trim().slice(0, 32).toLowerCase();
+  if (!titlePrefix) return [selected];
+  return allRows.filter(r => r.kind === selected.kind && String(r.title || '').toLowerCase().includes(titlePrefix));
+}
+
+function _captureStateScroll() {
+  const list = document.getElementById('state-list-body');
+  const meta = document.getElementById('state-diag-meta');
+  const related = document.getElementById('state-related-wrap');
+  const json = document.getElementById('state-json-view');
+  _stateScrollPos = {
+    list: list ? list.scrollTop : 0,
+    meta: meta ? meta.scrollTop : 0,
+    related: related ? related.scrollTop : 0,
+    json: json ? json.scrollTop : 0,
+  };
+}
+
+function _restoreStateScroll() {
+  const list = document.getElementById('state-list-body');
+  const meta = document.getElementById('state-diag-meta');
+  const related = document.getElementById('state-related-wrap');
+  const json = document.getElementById('state-json-view');
+  if (list) list.scrollTop = _stateScrollPos.list || 0;
+  if (meta) meta.scrollTop = _stateScrollPos.meta || 0;
+  if (related) related.scrollTop = _stateScrollPos.related || 0;
+  if (json) json.scrollTop = _stateScrollPos.json || 0;
+}
+
+function _captureStateTreeOpen() {
+  _captureJsonTreeOpen('state-detail');
+}
+
+function _restoreStateTreeOpen() {
+  _restoreJsonTreeOpen('state-detail');
+}
+
+function _getJsonView(viewerId) {
+  return _jsonViewById[viewerId] === 'raw' ? 'raw' : 'tree';
+}
+
+function _captureJsonTreeOpen(viewerId) {
+  const root = document.getElementById(`state-json-view-${viewerId}`);
+  if (!root) {
+    _jsonOpenPathsById[viewerId] = [];
+    return;
+  }
+  _jsonOpenPathsById[viewerId] = Array.from(root.querySelectorAll('details[data-node-path][open]'))
+    .map(el => String(el.dataset.nodePath || ''))
+    .filter(Boolean);
+}
+
+function _restoreJsonTreeOpen(viewerId) {
+  const root = document.getElementById(`state-json-view-${viewerId}`);
+  const paths = _jsonOpenPathsById[viewerId] || [];
+  if (!root || !paths.length) return;
+  const wanted = new Set(paths);
+  root.querySelectorAll('details[data-node-path]').forEach(el => {
+    const p = String(el.dataset.nodePath || '');
+    el.open = wanted.has(p);
+  });
+}
+
+function jsonViewerSetView(viewerId, mode) {
+  _captureJsonTreeOpen(viewerId);
+  _jsonViewById[viewerId] = mode === 'raw' ? 'raw' : 'tree';
+  if (currentTab === 'state') _renderStateTabView();
+  else if (currentTab === 'session') _loadSessionData();
+  else renderCurrentTab();
+}
+
+async function jsonViewerCopy(viewerId) {
+  const text = JSON.stringify(_jsonDataById[viewerId] || {}, null, 2);
+  try {
+    await navigator.clipboard.writeText(text);
+    const status = document.getElementById('status-msg');
+    if (status) status.textContent = 'JSON copied to clipboard';
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
+}
+
+function _jsonValueHtml(v) {
+  if (v === null) return '<span class="json-tree-value null">null</span>';
+  if (typeof v === 'string') return `<span class="json-tree-value str">"${escHtml(v)}"</span>`;
+  if (typeof v === 'number') return `<span class="json-tree-value num">${escHtml(String(v))}</span>`;
+  if (typeof v === 'boolean') return `<span class="json-tree-value bool">${v ? 'true' : 'false'}</span>`;
+  return `<span class="json-tree-value">${escHtml(String(v))}</span>`;
+}
+
+function _jsonTreeNodeHtml(key, value, depth, path) {
+  const nodePath = path || 'root';
+  const keyHtml = key === null ? '' : `<span class="json-tree-key">${escHtml(String(key))}</span>: `;
+  if (value === null || typeof value !== 'object') {
+    return `<div class="json-tree-leaf">${keyHtml}${_jsonValueHtml(value)}</div>`;
+  }
+  const isArr = Array.isArray(value);
+  const entries = isArr ? value.map((v, i) => [i, v]) : Object.entries(value);
+  const open = depth < 2 ? ' open' : '';
+  let children = '';
+  entries.forEach(([k, v]) => {
+    const childPath = `${nodePath}.${String(k)}`;
+    children += _jsonTreeNodeHtml(k, v, depth + 1, childPath);
+  });
+  if (!children) children = `<div class="json-tree-leaf"><span class="json-tree-type">(empty)</span></div>`;
+  return `<details class="json-tree-node" data-node-path="${escHtml(nodePath)}"${open}>
+    <summary>${keyHtml}<span class="json-tree-type">${isArr ? 'Array' : 'Object'}</span><span class="json-tree-count">(${entries.length})</span></summary>
+    <div class="json-tree-children">${children}</div>
+  </details>`;
+}
+
+function _renderStateJsonBlock(detail) {
+  return _renderJsonBlock('state-detail', detail);
+}
+
+function _renderJsonBlock(viewerId, detail) {
+  _jsonDataById[viewerId] = detail || {};
+  const rawActive = _getJsonView(viewerId) === 'raw';
+  const treeActive = !rawActive;
+  const treeHtml = _jsonTreeNodeHtml(null, detail, 0, 'root');
+  return `<div class="state-json-toolbar">
+    <button class="cp-btn-sm" onclick="jsonViewerCopy('${viewerId}')">Copy JSON</button>
+    <button class="cp-btn-sm ${treeActive ? 'warn' : ''}" onclick="jsonViewerSetView('${viewerId}','tree')">Tree</button>
+    <button class="cp-btn-sm ${rawActive ? 'warn' : ''}" onclick="jsonViewerSetView('${viewerId}','raw')">Raw</button>
+  </div>` + (
+    rawActive
+      ? `<pre class="state-json" id="state-json-view-${viewerId}">${escHtml(JSON.stringify(detail, null, 2))}</pre>`
+      : `<div class="state-json json-tree" id="state-json-view-${viewerId}">${treeHtml}</div>`
+  );
+}
+
+function _renderVirtualStateList() {
+  const body = document.getElementById('state-list-body');
+  if (!body) return;
+  const rows = _stateFilteredRows || [];
+  const host = document.getElementById('state-list-virtual-host');
+  if (!host) return;
+
+  const total = rows.length;
+  const viewportH = Math.max(body.clientHeight || 0, _STATE_ROW_H * 4);
+  const scrollTop = body.scrollTop || 0;
+  const overscan = 6;
+  const visibleCount = Math.ceil(viewportH / _STATE_ROW_H) + overscan * 2;
+  const start = Math.max(0, Math.floor(scrollTop / _STATE_ROW_H) - overscan);
+  const end = Math.min(total, start + visibleCount);
+
+  let html = `<div style="height:${total * _STATE_ROW_H}px;position:relative">`;
+  for (let i = start; i < end; i++) {
+    const r = rows[i];
+    const selected = _stateTabSelectedKey && _stateTabSelectedKey === r.key;
+    const selectedCls = selected ? 'background:#13243a;border-color:#388bfd' : '';
+    const ts = r.ts ? new Date(r.ts).toLocaleTimeString() : '';
+    const statusCls = r.status === 'error' || r.status === 'failure' || r.status === 'retract'
+      ? 'critical'
+      : (r.status === 'ok' || r.status === 'success' ? 'stable' : '');
+    const top = i * _STATE_ROW_H + 4;
+    html += `<button onclick="stateSelect('${escHtml(r.key)}')" style="position:absolute;left:6px;right:6px;top:${top}px;height:${_STATE_ROW_H - 8}px;text-align:left;background:#11161d;border:1px solid #1f2630;border-left:3px solid #30363d;border-radius:4px;padding:8px;cursor:pointer;${selectedCls}">
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="color:#79c0ff;font-size:11px;min-width:16px">${_stateIcon(r.kind)}</span>
+        <span style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:0.6px;min-width:56px">${_stateLabel(r.kind)}</span>
+        <span class="status-badge ${statusCls}" style="font-size:10px">${escHtml(r.status || '')}</span>
+        <span style="margin-left:auto;font-size:10px;color:#6e7681">${ts}</span>
+      </div>
+      <div style="margin-top:4px;color:#c9d1d9;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(r.title || '')}</div>
+      <div style="margin-top:2px;color:#8b949e;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(r.intent || '(no intent)')}</div>
+    </button>`;
+  }
+  html += `</div>`;
+  host.innerHTML = html;
+}
+
+function stateListOnScroll() {
+  const body = document.getElementById('state-list-body');
+  if (body) _stateScrollPos.list = body.scrollTop || 0;
+  _renderVirtualStateList();
+}
+
+function _renderStateTabView() {
+  const el = document.getElementById('state-content');
+  if (!el) return;
+  _captureStateScroll();
+  _captureStateTreeOpen();
+  const rows = _stateTabRows || [];
+  const q = _stateTabQuery.trim().toLowerCase();
+  const filter = _stateTabFilter;
+
+  const filtered = rows.filter(r => {
+    if (filter !== 'all' && r.kind !== filter) return false;
+    if (!q) return true;
+    return (
+      (r.title || '').toLowerCase().includes(q) ||
+      (r.intent || '').toLowerCase().includes(q) ||
+      (r.status || '').toLowerCase().includes(q) ||
+      (r.kind || '').toLowerCase().includes(q)
+    );
+  });
+  _stateFilteredRows = filtered;
+
+  const countBy = { delta: 0, risk: 0, span: 0, 'exec-event': 0, 'pipeline-event': 0 };
+  rows.forEach(r => { if (countBy[r.kind] != null) countBy[r.kind] += 1; });
+  const openRiskCount = rows.filter(r => r.kind === 'risk' && r.status === 'open').length;
+  const unreconciledDeltaCount = rows.filter(r => r.kind === 'delta' && !r.data.reconcile_outcome).length;
+  const errorEventCount = rows.filter(r => (r.kind === 'exec-event' || r.kind === 'pipeline-event') && r.status === 'error').length;
+
+  if (!_stateTabSelectedKey && filtered.length) _stateTabSelectedKey = filtered[0].key;
+  if (_stateTabSelectedKey && !_stateTabIndex[_stateTabSelectedKey] && filtered.length) {
+    _stateTabSelectedKey = filtered[0].key;
+  }
+  const selected = _stateTabSelectedKey ? _stateTabIndex[_stateTabSelectedKey] : null;
+
+  const filterBtn = (id, label, n) => {
+    const active = filter === id;
+    return `<button class="cp-btn-sm ${active ? 'warn' : ''}" style="margin-right:6px" onclick="stateSetFilter('${id}')">${label} <span style="opacity:0.8">${n}</span></button>`;
+  };
+
+  let html = `<div class="cp-stat-strip" style="margin-bottom:12px;flex-shrink:0">
+    <div class="cp-stat-card"><div class="cp-stat-num">${rows.length}</div><div class="cp-stat-label">Total Objects</div></div>
+    <div class="cp-stat-card${openRiskCount ? ' warning' : ''}"><div class="cp-stat-num ${openRiskCount ? 'canary' : ''}">${openRiskCount}</div><div class="cp-stat-label">Open Risks</div></div>
+    <div class="cp-stat-card${unreconciledDeltaCount ? ' warning' : ''}"><div class="cp-stat-num ${unreconciledDeltaCount ? 'canary' : ''}">${unreconciledDeltaCount}</div><div class="cp-stat-label">Unreconciled Deltas</div></div>
+    <div class="cp-stat-card${errorEventCount ? ' degraded' : ''}"><div class="cp-stat-num ${errorEventCount ? 'critical' : ''}">${errorEventCount}</div><div class="cp-stat-label">Error Events</div></div>
+  </div>
+
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;flex-shrink:0">
+    ${filterBtn('all', 'All', rows.length)}
+    ${filterBtn('delta', 'Deltas', countBy.delta)}
+    ${filterBtn('risk', 'Risks', countBy.risk)}
+    ${filterBtn('span', 'Spans', countBy.span)}
+    ${filterBtn('exec-event', 'Exec', countBy['exec-event'])}
+    ${filterBtn('pipeline-event', 'Pipeline', countBy['pipeline-event'])}
+    <input type="text" value="${escHtml(_stateTabQuery)}" oninput="stateSetQuery(this.value)" placeholder="Search intent/text/status..." style="margin-left:auto;flex:1;min-width:160px;max-width:360px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#e6edf3;padding:4px 8px;font-size:11px;font-family:inherit">
+  </div>
+
+  <div class="state-grid">`;
+
+  html += `<div class="state-col">
+    <div class="state-col-head">List · ${filtered.length} item(s)</div>`;
+  if (!filtered.length) {
+    html += `<div class="state-col-body" id="state-list-body"><div style="padding:10px;color:#8b949e;font-size:11px">No matching objects.</div></div>`;
+  } else {
+    html += `<div class="state-col-body" id="state-list-body" onscroll="stateListOnScroll()">
+      <div id="state-list-virtual-host"></div>`;
+    html += `</div>`;
+  }
+  html += `</div>`;
+
+  html += `<div class="state-col">
+    <div class="state-col-head">Diagnostics</div>
+    <div class="state-col-body state-diag-body">`;
+  if (!selected) {
+    _stateSelectedDetail = null;
+    html += `<div style="padding:10px;color:#8b949e;font-size:11px">Select an object from the list.</div>`;
+  } else {
+    const detail = selected.data || {};
+    _stateSelectedDetail = detail;
+    const related = _stateRelatedRows(rows, selected).slice(0, 80);
+    const relatedCounts = { delta: 0, risk: 0, span: 0, 'exec-event': 0, 'pipeline-event': 0 };
+    related.forEach(r => { if (relatedCounts[r.kind] != null) relatedCounts[r.kind] += 1; });
+    html += `<div class="state-diag-wrap">
+      <div class="state-diag-meta" id="state-diag-meta">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+        <span style="color:#79c0ff">${_stateIcon(selected.kind)}</span>
+        <span style="font-size:11px;color:#e6edf3;text-transform:uppercase;letter-spacing:0.6px">${_stateLabel(selected.kind)}</span>
+        <span class="status-badge">${escHtml(selected.status || '')}</span>
+      </div>
+      <div style="font-size:11px;color:#c9d1d9;margin-bottom:6px"><b>Intent:</b> ${escHtml(selected.intent || '(none)')}</div>
+      <div style="font-size:11px;color:#c9d1d9;margin-bottom:10px"><b>Title:</b> ${escHtml(selected.title || '')}</div>`;
+
+    if (selected.kind === 'delta' && !detail.reconcile_outcome) {
+      html += `<div style="display:flex;gap:6px;margin-bottom:10px">
+        <button class="cp-btn-sm" onclick="cpDeltaReconcile('${escHtml(detail.id || '')}','confirm')">Confirm</button>
+        <button class="cp-btn-sm warn" onclick="cpWarnAction(this,function(){cpDeltaReconcile('${escHtml(detail.id || '')}','correct')})">Correct</button>
+        <button class="cp-btn-sm danger" onclick="cpDeltaReconcile('${escHtml(detail.id || '')}','retract')">Retract</button>
+      </div>`;
+    }
+    if (selected.kind === 'risk' && detail.status === 'open') {
+      html += `<div style="display:flex;gap:6px;margin-bottom:10px">
+        <button class="cp-btn-sm" onclick="cpRiskUpdate('${escHtml(detail.risk_id || '')}','handle')">Handle</button>
+        <button class="cp-btn-sm" onclick="cpRiskUpdate('${escHtml(detail.risk_id || '')}','snooze')">Snooze</button>
+      </div>`;
+    }
+    if (selected.intent) {
+      const intentSafe = String(selected.intent || '').replace(/'/g, "\\'");
+      html += `<div style="display:flex;gap:6px;margin-bottom:10px">
+        <button class="cp-btn-sm" onclick="stateSetQuery('${intentSafe}')">Filter by intent</button>
+      </div>`;
+    }
+    html += `</div>`;
+
+    html += `<div class="state-related-wrap" id="state-related-wrap">
+      <div style="font-size:11px;color:#8b949e;margin-bottom:6px">Related Timeline (same intent/object cluster)</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+        <span class="status-badge" style="font-size:10px">total ${related.length}</span>
+        <span class="status-badge" style="font-size:10px">Δ ${relatedCounts.delta}</span>
+        <span class="status-badge" style="font-size:10px">⚠ ${relatedCounts.risk}</span>
+        <span class="status-badge" style="font-size:10px">◉ ${relatedCounts.span}</span>
+        <span class="status-badge" style="font-size:10px">E ${relatedCounts['exec-event']}</span>
+        <span class="status-badge" style="font-size:10px">P ${relatedCounts['pipeline-event']}</span>
+      </div>`;
+    if (!related.length) {
+      html += `<div style="font-size:10px;color:#6e7681;padding:6px 0">No related records found.</div>`;
+    } else {
+      html += `<div style="border:1px solid #21262d;border-radius:4px;background:#11161d">`;
+      related.forEach(r => {
+        const ts = r.ts ? new Date(r.ts).toLocaleTimeString() : '';
+        const statusCls = r.status === 'error' || r.status === 'failure' || r.status === 'retract'
+          ? 'critical'
+          : (r.status === 'ok' || r.status === 'success' ? 'stable' : '');
+        const rowKeySafe = String(r.key || '').replace(/'/g, "\\'");
+        html += `<button onclick="stateSelect('${rowKeySafe}')" style="display:flex;width:100%;gap:8px;align-items:center;border:none;border-bottom:1px solid #1f2630;background:transparent;color:#c9d1d9;padding:6px 8px;font-family:inherit;font-size:10px;cursor:pointer;text-align:left">
+          <span style="min-width:14px;color:#79c0ff">${_stateIcon(r.kind)}</span>
+          <span style="min-width:52px;color:#8b949e;text-transform:uppercase">${_stateLabel(r.kind)}</span>
+          <span class="status-badge ${statusCls}" style="font-size:9px">${escHtml(r.status || '')}</span>
+          <span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(r.title || '')}</span>
+          <span style="color:#6e7681">${ts}</span>
+        </button>`;
+      });
+      html += `</div>`;
+    }
+    html += `</div>`;
+    html += _renderStateJsonBlock(detail);
+    html += `</div>`;
+  }
+  html += `</div></div></div>`;
+
+  el.innerHTML = html;
+  _restoreStateScroll();
+  _renderVirtualStateList();
+  if (_getJsonView('state-detail') === 'tree') _restoreStateTreeOpen();
+}
+
+async function _loadStateTabData() {
+  const el = document.getElementById('state-content');
+  if (!el) return;
+  try {
+    const [stateR, spansR, execR, pipeR] = await Promise.all([
+      fetch('/api/control-plane/state').then(r => r.json()),
+      fetch('/api/control-plane/spans?limit=40').then(r => r.json()),
+      fetch('/api/control-plane/exec-events?limit=60').then(r => r.json()),
+      fetch('/api/control-plane/pipeline-events?limit=60').then(r => r.json()),
+    ]);
+
+    const deltas = stateR.deltas || [];
+    const risks = stateR.risks || [];
+    const spans = spansR.spans || [];
+    const execEvents = execR.events || [];
+    const pipelineEvents = pipeR.events || [];
+    const nextRows = _buildStateRows({ deltas, risks, spans, execEvents, pipelineEvents });
+    const nextFingerprint = nextRows.map(r =>
+      `${r.key}|${r.kind}|${r.ts}|${r.status}|${r.intent}|${r.title}`
+    ).join('~');
+    const hasRenderedStateGrid = !!el.querySelector('.state-grid');
+
+    // Incremental mode: skip rerender when underlying rows are unchanged.
+    // This preserves scroll, tree expansion, and interaction context during auto-refresh.
+    if (nextFingerprint === _stateRowsFingerprint) {
+      // On tab re-entry, DOM is "Loading..." while data may be unchanged.
+      // Ensure at least one render so State tab is not stuck.
+      if (!hasRenderedStateGrid) {
+        _stateTabRows = nextRows;
+        _stateTabIndex = {};
+        _stateTabRows.forEach(r => { _stateTabIndex[r.key] = r; });
+        if (_stateTabSelectedKey && !_stateTabIndex[_stateTabSelectedKey]) _stateTabSelectedKey = '';
+        _renderStateTabView();
+      }
+      return;
+    }
+
+    _stateRowsFingerprint = nextFingerprint;
+    _stateTabRows = nextRows;
+    _stateTabIndex = {};
+    _stateTabRows.forEach(r => { _stateTabIndex[r.key] = r; });
+    if (_stateTabSelectedKey && !_stateTabIndex[_stateTabSelectedKey]) _stateTabSelectedKey = '';
+    _renderStateTabView();
+  } catch (e) {
+    el.innerHTML = '<div style="color:#f85149;padding:8px">Failed to load state objects</div>';
+  }
 }
 
 function renderOperatorTab() {
@@ -1329,69 +1994,7 @@ function renderOverviewTab() {
   const statCanaryClass = groups.canary.length ? ' canary' : '';
   const statStableClass = groups.stable.length ? ' stable' : '';
 
-  // ── Intent summary section (from control-plane APIs) ──
-  const risks = stateData && stateData.risks ? stateData.risks.filter(r => r.status === 'open') : [];
-  const deltas = stateData && stateData.deltas ? stateData.deltas : [];
-  const unreconciledDeltas = deltas.filter(d => d.provisional && !d.reconcile_outcome);
-  const degraded = stateData && stateData.verification_state === 'degraded';
-  const intents = intentsData && intentsData.intents ? intentsData.intents : [];
-
-  let intentHtml = `<div class="cp-summary">
-    <div class="cp-stat-strip">
-      <div class="cp-stat-card">
-        <div class="cp-stat-num">${intents.length}</div>
-        <div class="cp-stat-label">Total Intents</div>
-      </div>
-      <div class="cp-stat-card${degraded ? ' degraded' : ''}">
-        <div class="cp-stat-num ${degraded ? 'critical' : ''}">${degraded ? 'DEGRADED' : 'VERIFIED'}</div>
-        <div class="cp-stat-label">Verification State</div>
-      </div>
-      <div class="cp-stat-card${risks.length ? ' warning' : ''}">
-        <div class="cp-stat-num ${risks.length ? 'canary' : ''}">${risks.length}</div>
-        <div class="cp-stat-label">Open Risks</div>
-      </div>
-      <div class="cp-stat-card${unreconciledDeltas.length ? ' warning' : ''}">
-        <div class="cp-stat-num ${unreconciledDeltas.length ? 'canary' : ''}">${unreconciledDeltas.length}</div>
-        <div class="cp-stat-label">Unreconciled</div>
-      </div>
-    </div>`;
-
-  if (intents.length) {
-    intentHtml += `<div class="cp-intent-table-wrap">
-      <table class="cp-intent-table">
-        <thead>
-          <tr>
-            <th>Intent Signature</th>
-            <th>Source</th>
-            <th>Status</th>
-            <th>Success</th>
-            <th>Human Fix</th>
-            <th>Failures</th>
-            <th>Frozen</th>
-          </tr>
-        </thead>
-        <tbody>`;
-    intents.forEach(i => {
-      const statusClass = i.policy_status || 'explore';
-      const sr = i.success_rate != null ? (i.success_rate * 100).toFixed(0) + '%' : '—';
-      const hfr = i.human_fix_rate != null ? (i.human_fix_rate * 100).toFixed(0) + '%' : '—';
-      const connector = (i.intent_signature || '').split('.')[0];
-      const connJs = String(connector || '').replace(/'/g, "\\'");
-      intentHtml += `<tr onclick="switchTab('${connJs}')" style="cursor:pointer">
-        <td class="intent-key">${escHtml(i.intent_signature || '')}</td>
-        <td><span class="source-badge ${escHtml(i.source || 'exec')}">${escHtml(i.source || 'exec')}</span></td>
-        <td><span class="status-badge ${escHtml(statusClass)}">${escHtml(statusClass)}</span></td>
-        <td>${sr}</td>
-        <td>${hfr}</td>
-        <td class="${(i.consecutive_failures || 0) > 0 ? 'critical' : ''}">${i.consecutive_failures || 0}</td>
-        <td>${i.frozen ? '🔒' : ''}</td>
-      </tr>`;
-    });
-    intentHtml += `</tbody></table></div>`;
-  }
-  intentHtml += `</div>`;
-
-  let html = intentHtml + `<div class="overview-grid">
+  let html = `<div class="overview-grid">
     <div class="overview-donut-wrap">
       <canvas id="overview-donut" width="160" height="160"></canvas>
       <div class="donut-legend">
@@ -1638,10 +2241,6 @@ function renderConnectorTab(name) {
     { id: 'pipelines', label: 'Pipelines', count: connPipelines.length, visible: true },
     { id: 'notes', label: 'Notes', count: c.notes ? 1 : 0, visible: true },
     { id: 'controls', label: 'Controls', count: hasControls ? c.components.length : 0, visible: hasControls },
-    { id: 'deltas', label: 'Deltas', count: _countConnDeltas(name), visible: true },
-    { id: 'risks', label: 'Risks', count: _countConnRisks(name), visible: true },
-    { id: 'spans', label: 'Spans', count: 0, visible: true },
-    { id: 'exec-events', label: 'Events', count: 0, visible: true },
   ].filter(p => p.visible);
 
   let html = `<div class="connector-panel-tabs" role="tablist" aria-label="Connector sections">`;
@@ -1692,14 +2291,6 @@ function renderConnectorTab(name) {
       </div>`;
     });
     html += `</div>`;
-  } else if (panel === 'deltas') {
-    html += _renderDeltasPanel(name);
-  } else if (panel === 'risks') {
-    html += _renderRisksPanel(name);
-  } else if (panel === 'spans') {
-    html += _renderSpansPanel(name);
-  } else if (panel === 'exec-events') {
-    html += _renderExecEventsPanel(name);
   }
 
   document.getElementById('main-panel').innerHTML = html;

@@ -68,3 +68,25 @@ def test_cmd_control_plane_session_reset_requires_confirm(tmp_path):
     result = cmd_control_plane_session_reset(confirm="nope")
     assert not result["ok"]
     assert "RESET" in result["error"]
+
+
+def test_cmd_control_plane_session_reset_full_clears_session_artifacts(tmp_path):
+    from scripts.repl_admin import cmd_control_plane_session_reset
+
+    hook_state = tmp_path / "hook"
+    hook_state.mkdir(parents=True, exist_ok=True)
+    (hook_state / "state.json").write_text("{}", encoding="utf-8")
+
+    session_dir = tmp_path / "sess"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    for name in ["wal.jsonl", "checkpoint.json", "recovery.json", "exec-events.jsonl", "pipeline-events.jsonl"]:
+        (session_dir / name).write_text("x", encoding="utf-8")
+
+    with patch("scripts.repl_admin.default_hook_state_root", return_value=str(hook_state)), \
+         patch("scripts.repl_admin._session_paths", return_value=(session_dir, session_dir / "wal.jsonl", session_dir / "checkpoint.json")):
+        result = cmd_control_plane_session_reset(confirm="RESET", full=True)
+
+    assert result["ok"] is True
+    assert result["full"] is True
+    for name in ["wal.jsonl", "checkpoint.json", "recovery.json", "exec-events.jsonl", "pipeline-events.jsonl"]:
+        assert not (session_dir / name).exists()

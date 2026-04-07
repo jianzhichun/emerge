@@ -1214,7 +1214,12 @@ def cmd_control_plane_session() -> dict:
     }
 
 
-def cmd_control_plane_exec_events(limit: int = 100, since_ms: int = 0, intent: str = "") -> dict:
+def cmd_control_plane_exec_events(
+    limit: int = 100,
+    since_ms: int = 0,
+    intent: str = "",
+    intent_prefix: str = "",
+) -> dict:
     """Paginated exec events from session."""
     session_dir, _, _ = _session_paths()
     events_path = session_dir / "exec-events.jsonl"
@@ -1230,14 +1235,22 @@ def cmd_control_plane_exec_events(limit: int = 100, since_ms: int = 0, intent: s
                 continue
             if since_ms and int(ev.get("ts_ms", 0)) < since_ms:
                 continue
-            if intent and ev.get("intent_signature") != intent:
+            sig = str(ev.get("intent_signature", "") or "")
+            if intent and sig != intent:
+                continue
+            if intent_prefix and not sig.startswith(intent_prefix):
                 continue
             events.append(ev)
     events.sort(key=lambda e: int(e.get("ts_ms", 0)), reverse=True)
     return {"ok": True, "events": events[:limit]}
 
 
-def cmd_control_plane_pipeline_events(limit: int = 100, since_ms: int = 0, intent: str = "") -> dict:
+def cmd_control_plane_pipeline_events(
+    limit: int = 100,
+    since_ms: int = 0,
+    intent: str = "",
+    intent_prefix: str = "",
+) -> dict:
     """Paginated pipeline events from session."""
     session_dir, _, _ = _session_paths()
     events_path = session_dir / "pipeline-events.jsonl"
@@ -1253,14 +1266,17 @@ def cmd_control_plane_pipeline_events(limit: int = 100, since_ms: int = 0, inten
                 continue
             if since_ms and int(ev.get("ts_ms", 0)) < since_ms:
                 continue
-            if intent and ev.get("intent_signature") != intent:
+            sig = str(ev.get("intent_signature", "") or "")
+            if intent and sig != intent:
+                continue
+            if intent_prefix and not sig.startswith(intent_prefix):
                 continue
             events.append(ev)
     events.sort(key=lambda e: int(e.get("ts_ms", 0)), reverse=True)
     return {"ok": True, "events": events[:limit]}
 
 
-def cmd_control_plane_spans(limit: int = 50, intent: str = "") -> dict:
+def cmd_control_plane_spans(limit: int = 50, intent: str = "", intent_prefix: str = "") -> dict:
     """Recent span WAL entries."""
     state_root = _resolve_state_root()
     wal_path = state_root / "span-wal" / "spans.jsonl"
@@ -1274,7 +1290,10 @@ def cmd_control_plane_spans(limit: int = 50, intent: str = "") -> dict:
                 sp = json.loads(line)
             except Exception:
                 continue
-            if intent and sp.get("intent_signature") != intent:
+            sig = str(sp.get("intent_signature", "") or "")
+            if intent and sig != intent:
+                continue
+            if intent_prefix and not sig.startswith(intent_prefix):
                 continue
             spans.append(sp)
     spans.sort(key=lambda s: int(s.get("closed_at_ms", 0) or 0), reverse=True)
@@ -1371,14 +1390,33 @@ def cmd_control_plane_session_export() -> dict:
     return {"ok": True, "snapshot": snapshot}
 
 
-def cmd_control_plane_session_reset(confirm: str) -> dict:
+def cmd_control_plane_session_reset(confirm: str, full: bool = False) -> dict:
     if confirm != "RESET":
         return {"ok": False, "error": "must pass confirm='RESET'"}
     export = cmd_control_plane_session_export()
     pin_plugin_data_path_if_present()
     state_path = Path(default_hook_state_root()) / "state.json"
     save_tracker(state_path, StateTracker())
-    return {"ok": True, "reset": True, "pre_reset_snapshot": export.get("snapshot")}
+    removed: list[str] = []
+    if full:
+        session_dir, wal_path, checkpoint_path = _session_paths()
+        recovery_path = session_dir / "recovery.json"
+        exec_events_path = session_dir / "exec-events.jsonl"
+        pipeline_events_path = session_dir / "pipeline-events.jsonl"
+        for p in (wal_path, checkpoint_path, recovery_path, exec_events_path, pipeline_events_path):
+            try:
+                if p.exists():
+                    p.unlink()
+                    removed.append(str(p))
+            except OSError:
+                pass
+    return {
+        "ok": True,
+        "reset": True,
+        "full": bool(full),
+        "removed_paths": removed,
+        "pre_reset_snapshot": export.get("snapshot"),
+    }
 
 
 def _cmd_set_goal(body: dict) -> dict:
@@ -1583,6 +1621,7 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                 limit=int(qs.get("limit", ["100"])[0]),
                 since_ms=int(qs.get("since_ms", ["0"])[0]),
                 intent=qs.get("intent", [""])[0],
+                intent_prefix=qs.get("intent_prefix", [""])[0],
             ))
         elif path.startswith("/api/control-plane/pipeline-events"):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -1590,6 +1629,7 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                 limit=int(qs.get("limit", ["100"])[0]),
                 since_ms=int(qs.get("since_ms", ["0"])[0]),
                 intent=qs.get("intent", [""])[0],
+                intent_prefix=qs.get("intent_prefix", [""])[0],
             ))
         elif path == "/api/control-plane/span-candidates":
             self._json(cmd_control_plane_span_candidates())
@@ -1598,6 +1638,7 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self._json(cmd_control_plane_spans(
                 limit=int(qs.get("limit", ["50"])[0]),
                 intent=qs.get("intent", [""])[0],
+                intent_prefix=qs.get("intent_prefix", [""])[0],
             ))
         else:
             self._err(404)
@@ -1645,7 +1686,9 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/control-plane/session/export":
             self._json(cmd_control_plane_session_export())
         elif path == "/api/control-plane/session/reset":
-            self._json(cmd_control_plane_session_reset(confirm=str(body.get("confirm", ""))))
+            full_v = body.get("full", False)
+            full = bool(full_v) if isinstance(full_v, bool) else str(full_v).strip().lower() in {"1", "true", "yes", "on"}
+            self._json(cmd_control_plane_session_reset(confirm=str(body.get("confirm", "")), full=full))
         else:
             self._err(404)
 
