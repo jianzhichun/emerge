@@ -1,0 +1,8 @@
+intent_signature: zwcad.write.add-wall
+rollback_or_stop_policy: stop
+write_steps:
+  - run_write
+verify_steps:
+  - verify_write
+synthesized: true
+synthesized_at: 1775516406
