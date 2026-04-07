@@ -3,9 +3,9 @@
 ![Version](https://img.shields.io/badge/version-v0.3.24-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-272%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-318%20passing-brightgreen?logo=pytest)
 
-**Emerge** is a Claude Code plugin that implements a **muscle-memory flywheel**: repeated work is tracked via `icc_exec`, promoted through a **policy registry** (explore → canary → stable), and can be **crystallized** into connector pipelines so the same tasks run as structured `icc_read` / `icc_write` instead of ad-hoc code.
+**Emerge** is a Claude Code plugin that implements a **muscle-memory flywheel**: repeated work is tracked via two paths — `icc_exec` (ad-hoc code) and `icc_span_open/close` (intent spans) — promoted through a **policy registry** (explore → canary → stable), and **crystallized** into connector pipelines that execute automatically when the bridge detects a stable intent.
 
 Design anchors:
 
@@ -293,7 +293,7 @@ flowchart LR
 python -m pytest tests -q
 ```
 
-Current baseline: **272** tests passing.
+Current baseline: **318** tests passing.
 
 ## Repository layout
 
