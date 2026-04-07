@@ -25,7 +25,7 @@ Steps:
      - Diagnostic quick-actions: ping, connection health check, reset COM session, port check, etc.
      - Domain-specific tools: open a specific file, clear mesh, restart a service, etc.
      - Key notes snippet (first 5–10 lines of NOTES.md) as context for the operator
-   - **Skip injection entirely** if the connector has no `scenarios/*.yaml`, no NOTES.md, and no domain-specific quick-actions worth surfacing. Do not inject a panel just to list pipelines.
+   - **Always inject** for every connector that has pipelines or NOTES.md. A minimal panel with just notes + one diagnostic button is fine — the goal is to surface vertical context, not to replicate what Pipelines tab shows.
    - For each panel worth injecting, POST to `http://localhost:<PORT>/api/inject-component`:
      ```json
      {"connector": "<name>", "id": "<name>-main", "replace": true, "html": "<full HTML doc>"}
@@ -36,7 +36,7 @@ Steps:
    - **submitNow** (fires immediately): `window.parent.cockpit.submitNow([{type:'tool-call', call:{...}}])`
    - Pipeline status changes belong in the **Pipelines tab**, not here. Only use `pipeline-set` actions in Controls if the button represents a meaningful high-level workflow (e.g., "Promote all stable-ready pipelines").
 
-   Only inject if there is genuinely useful content beyond what Pipelines/Notes tabs already show.
+   Only skip injection if a connector has zero pipelines AND no NOTES.md.
 
 4. **Enter the dispatch loop** (core, background-driven):
 
