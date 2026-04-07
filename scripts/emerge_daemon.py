@@ -1863,6 +1863,22 @@ class EmergeDaemon:
             sum(recent_outcomes) / window_attempts if window_attempts else 0.0
         )
 
+        if pipeline.get("frozen"):
+            pipeline["success_rate"] = round(success_rate, 4)
+            pipeline["verify_rate"] = round(verify_rate, 4)
+            pipeline["human_fix_rate"] = round(human_fix_rate, 4)
+            pipeline["consecutive_failures"] = consecutive_failures
+            pipeline["window_success_rate"] = round(window_success_rate, 4)
+            pipeline["policy_enforced_count"] = int(entry.get("policy_enforced_count", 0))
+            pipeline["stop_triggered_count"] = int(entry.get("stop_triggered_count", 0))
+            pipeline["rollback_executed_count"] = int(entry.get("rollback_executed_count", 0))
+            pipeline["last_policy_action"] = str(entry.get("last_policy_action", "none"))
+            pipeline["last_execution_path"] = str(entry.get("last_execution_path", "unknown"))
+            pipeline["updated_at_ms"] = int(time.time() * 1000)
+            registry["pipelines"][candidate_key] = pipeline
+            self._atomic_write_json(registry_path, registry)
+            return
+
         status = str(pipeline.get("status", "explore"))
         transitioned = False
         reason = "no_change"

@@ -239,6 +239,7 @@ class SpanTracker:
             "recent_outcomes": [],
             "last_ts_ms": 0,
             "skeleton_generated": False,
+            "frozen": False,
         })
         is_success = span.outcome == "success"
         entry["attempts"] += 1
@@ -263,6 +264,8 @@ class SpanTracker:
         """
         entry = self._load_candidates()["spans"].get(intent_signature, {})
         if not entry:
+            return "explore"
+        if entry.get("frozen"):
             return "explore"
         attempts = int(entry.get("attempts", 0))
         successes = int(entry.get("successes", 0))

@@ -2482,3 +2482,41 @@ def test_spans_resource_lists_connector_intents(tmp_path, monkeypatch):
     resources = daemon._list_resources()
     uris = [r["uri"] for r in resources]
     assert "connector://lark/spans" in uris
+
+
+def test_frozen_pipeline_skips_auto_promotion(tmp_path, monkeypatch):
+    """Frozen pipelines keep status; 19 successes stay explore, 20th would promote without frozen."""
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon(root=ROOT)
+    key = "mock.read.frozen-test"
+    for _ in range(19):
+        daemon._record_exec_event(
+            arguments={
+                "intent_signature": key,
+                "script_ref": "s",
+                "description": "",
+            },
+            result={"content": [{"type": "text", "text": "{}"}]},
+            target_profile="default",
+            mode="inline_code",
+            execution_path="local",
+            sampled_in_policy=True,
+            candidate_key=key,
+        )
+    reg_path = tmp_path / "pipelines-registry.json"
+    data = json.loads(reg_path.read_text())
+    data["pipelines"][key]["frozen"] = True
+    reg_path.write_text(json.dumps(data))
+    old_status = data["pipelines"][key]["status"]
+    assert old_status == "explore"
+    daemon._record_exec_event(
+        arguments={"intent_signature": key, "script_ref": "s", "description": ""},
+        result={"content": [{"type": "text", "text": "{}"}]},
+        target_profile="default",
+        mode="inline_code",
+        execution_path="local",
+        sampled_in_policy=True,
+        candidate_key=key,
+    )
+    data = json.loads(reg_path.read_text())
+    assert data["pipelines"][key]["status"] == old_status
