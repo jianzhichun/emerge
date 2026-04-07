@@ -1107,12 +1107,50 @@ def cmd_assets() -> dict:
     return {"connectors": connectors}
 
 
+_VALID_ACTION_TYPES = {
+    "pipeline-set", "pipeline-delete",
+    "notes-comment", "notes-edit",
+    "tool-call", "crystallize-component",
+    "global-prompt",
+}
+
+
+def _validate_action(action: dict) -> str | None:
+    """Return an error string if the action is invalid, else None."""
+    if not isinstance(action, dict):
+        return "action must be an object"
+    atype = action.get("type")
+    if not atype:
+        return "action missing 'type'"
+    if atype not in _VALID_ACTION_TYPES:
+        return f"unknown action type '{atype}'"
+    if atype == "tool-call":
+        call = action.get("call")
+        if not isinstance(call, dict):
+            return "tool-call action missing 'call' object"
+        if not call.get("tool"):
+            return "tool-call action missing 'call.tool'"
+        if not isinstance(call.get("arguments"), dict):
+            return "tool-call action missing 'call.arguments' dict"
+    if atype in ("pipeline-set", "pipeline-delete"):
+        if not action.get("key"):
+            return f"{atype} action missing 'key'"
+    return None
+
+
 def cmd_submit_actions(actions: list) -> dict:
     """Atomically write pending-actions.json to trigger CC dispatch loop.
 
     Refuses if a previous submission has not yet been consumed by CC, so that
     a slow CC response never silently drops an earlier batch of actions.
+    Validates action shapes at submission time so CC never receives malformed payloads.
     """
+    if not isinstance(actions, list) or not actions:
+        return {"ok": False, "error": "invalid_actions", "message": "actions must be a non-empty list"}
+    for i, action in enumerate(actions):
+        err = _validate_action(action)
+        if err:
+            return {"ok": False, "error": "invalid_action", "message": f"action[{i}]: {err}"}
     state_root = _resolve_repl_root()
     state_root.mkdir(parents=True, exist_ok=True)
     pending_path = state_root / "pending-actions.json"
