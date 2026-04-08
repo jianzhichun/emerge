@@ -98,3 +98,44 @@ def test_emit_creates_parent_dirs(tmp_path):
     sink = LocalJSONLSink(path=path)
     sink.emit("x", {})
     assert path.exists()
+
+
+def test_emit_flushes_to_disk(tmp_path):
+    """emit() must fsync — data must survive without closing the process."""
+    from scripts.metrics import LocalJSONLSink
+
+    path = tmp_path / "metrics.jsonl"
+    sink = LocalJSONLSink(path=path)
+    sink.emit("test.event", {"key": "value"})
+
+    raw = path.read_bytes()
+    lines = [l for l in raw.decode().splitlines() if l.strip()]
+    assert len(lines) == 1
+    event = json.loads(lines[0])
+    assert event["event_type"] == "test.event"
+    assert event["key"] == "value"
+    assert "ts_ms" in event
+
+
+def test_emit_appends_multiple_events(tmp_path):
+    """Each emit() call must append a new line, not overwrite."""
+    from scripts.metrics import LocalJSONLSink
+
+    path = tmp_path / "metrics.jsonl"
+    sink = LocalJSONLSink(path=path)
+    sink.emit("event.one", {"n": 1})
+    sink.emit("event.two", {"n": 2})
+    sink.emit("event.three", {"n": 3})
+
+    lines = [l for l in path.read_text().splitlines() if l.strip()]
+    assert len(lines) == 3
+    types = [json.loads(l)["event_type"] for l in lines]
+    assert types == ["event.one", "event.two", "event.three"]
+
+
+def test_null_sink_is_noop(tmp_path):
+    """NullSink must be a no-op (no file created)."""
+    from scripts.metrics import NullSink
+
+    sink = NullSink()
+    sink.emit("ignored", {"x": 1})  # must not raise

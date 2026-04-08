@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,8 @@ class LocalJSONLSink:
         line = json.dumps(event, ensure_ascii=True) + "\n"
         with open(self._path, "a", encoding="utf-8") as f:
             f.write(line)
+            f.flush()
+            os.fsync(f.fileno())
 
 
 def get_sink(
