@@ -11,7 +11,51 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.emerge_sync import export_vertical, import_vertical
+from scripts.emerge_sync import (
+    _file_to_intent_sig,
+    _load_candidate_timestamps,
+    _load_spans_timestamps,
+)
 from scripts.hub_config import save_hub_config
+
+
+def test_file_to_intent_sig_read():
+    assert _file_to_intent_sig("cloud-server", Path("read/get_instances.py")) == "cloud-server.read.get_instances"
+
+
+def test_file_to_intent_sig_write():
+    assert _file_to_intent_sig("cloud-server", Path("write/create_vm.py")) == "cloud-server.write.create_vm"
+
+
+def test_file_to_intent_sig_unknown_depth_returns_empty():
+    assert _file_to_intent_sig("cloud-server", Path("get_instances.py")) == ""
+
+
+def test_load_candidate_timestamps_returns_stable_only(tmp_path):
+    candidates = {
+        "candidates": {
+            "cs.read.a": {"status": "stable", "last_ts_ms": 500},
+            "cs.read.b": {"status": "explore", "last_ts_ms": 999},
+        }
+    }
+    (tmp_path / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+    ts = _load_candidate_timestamps(tmp_path)
+    assert ts == {"cs.read.a": 500}
+
+
+def test_load_candidate_timestamps_missing_file(tmp_path):
+    assert _load_candidate_timestamps(tmp_path) == {}
+
+
+def test_load_spans_timestamps_parses_spans_json(tmp_path):
+    spans = {"spans": {"cs.read.a": {"last_ts_ms": 1234}, "cs.read.b": {"last_ts_ms": 5678}}}
+    (tmp_path / "spans.json").write_text(json.dumps(spans), encoding="utf-8")
+    ts = _load_spans_timestamps(tmp_path)
+    assert ts == {"cs.read.a": 1234, "cs.read.b": 5678}
+
+
+def test_load_spans_timestamps_missing_file(tmp_path):
+    assert _load_spans_timestamps(tmp_path) == {}
 
 
 @pytest.fixture()

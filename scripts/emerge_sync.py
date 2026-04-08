@@ -38,6 +38,44 @@ def _connectors_root() -> Path:
     return Path.home() / ".emerge" / "connectors"
 
 
+def _file_to_intent_sig(connector: str, rel: Path) -> str:
+    """Convert pipelines/read/foo.py → connector.read.foo"""
+    parts = rel.parts
+    if len(parts) == 2:
+        mode = parts[0]
+        name = Path(parts[1]).stem
+        return f"{connector}.{mode}.{name}"
+    return ""
+
+
+def _load_candidate_timestamps(connector_dir: Path) -> dict[str, int]:
+    """Return {intent_sig: last_ts_ms} for stable entries in span-candidates.json."""
+    p = connector_dir / "span-candidates.json"
+    if not p.exists():
+        return {}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        return {
+            k: int(v.get("last_ts_ms", 0))
+            for k, v in raw.get("candidates", {}).items()
+            if isinstance(v, dict) and v.get("status") == "stable"
+        }
+    except Exception:
+        return {}
+
+
+def _load_spans_timestamps(worktree_connector_dir: Path) -> dict[str, int]:
+    """Return {intent_sig: last_ts_ms} from spans.json in the hub worktree connector dir."""
+    p = worktree_connector_dir / "spans.json"
+    if not p.exists():
+        return {}
+    try:
+        spans = json.loads(p.read_text(encoding="utf-8")).get("spans", {})
+        return {k: int(v.get("last_ts_ms", 0)) for k, v in spans.items() if isinstance(v, dict)}
+    except Exception:
+        return {}
+
+
 # ── Export ──────────────────────────────────────────────────────────────────
 
 def export_vertical(
