@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,7 +18,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.hub_config import (
-    append_sync_event,
     consume_sync_events,
     hub_worktree_path,
     is_configured,
@@ -271,8 +271,7 @@ def git_setup_worktree(worktree: Path, remote: str, branch: str, author: str) ->
     worktree.mkdir(parents=True, exist_ok=True)
     _git(["init"], cwd=worktree)
     # Configure git identity in worktree so merge commits have correct author
-    import re as _re
-    _m = _re.match(r'^(.+?)\s*<(.+?)>', author)
+    _m = re.match(r'^(.+?)\s*<(.+?)>', author)
     if _m:
         _git(["config", "user.name", _m.group(1).strip()], cwd=worktree)
         _git(["config", "user.email", _m.group(2).strip()], cwd=worktree)
@@ -326,17 +325,11 @@ def _build_conflict_entries(
 
 
 def record_conflicts(connector: str, conflict_files: list[str]) -> None:
-    """Write conflict entries to pending-conflicts.json and enqueue notification event."""
+    """Write conflict entries to pending-conflicts.json."""
     data = load_pending_conflicts()
     new_entries = _build_conflict_entries(conflict_files, connector)
     data["conflicts"].extend(new_entries)
     save_pending_conflicts(data)
-    append_sync_event({
-        "event": "conflicts_pending",
-        "connector": connector,
-        "count": len(new_entries),
-        "ts_ms": int(time.time() * 1000),
-    })
     logger.warning(
         "Hub sync: %d conflict(s) for connector '%s' — resolve via icc_hub(action='status')",
         len(new_entries), connector,
@@ -428,14 +421,7 @@ def push_flow(
 
     export_vertical(connector, connectors_root=conns_root, hub_worktree=worktree)
 
-    result = git_push(worktree, branch, connector=connector, author=author)
-    if result.get("ok"):
-        append_sync_event({
-            "event": "consumed",
-            "connector": connector,
-            "ts_ms": int(time.time() * 1000),
-        })
-    return result
+    return git_push(worktree, branch, connector=connector, author=author)
 
 
 def pull_flow(
@@ -462,12 +448,6 @@ def pull_flow(
         return {"ok": False, "error": merge_result.get("error", "merge failed")}
 
     import_vertical(connector, connectors_root=conns_root, hub_worktree=worktree)
-
-    append_sync_event({
-        "event": "reload",
-        "connector": connector,
-        "ts_ms": int(time.time() * 1000),
-    })
     return {"ok": True, "action": "imported"}
 
 
