@@ -2911,6 +2911,71 @@ def test_icc_hub_configure_saves_config_and_inits_worktree(tmp_path, monkeypatch
     assert (worktree / ".git").exists()
 
 
+def test_icc_hub_configure_imports_existing_hub_on_clone(tmp_path, monkeypatch):
+    """When configure clones an existing hub branch, remote pipelines must be
+    imported into the local connectors directory immediately."""
+    import subprocess
+    from scripts.emerge_daemon import EmergeDaemon
+
+    monkeypatch.setenv("EMERGE_HUB_HOME", str(tmp_path))
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir(parents=True)
+
+    # Create a bare remote
+    bare = tmp_path / "remote.git"
+    bare.mkdir()
+    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+
+    # Machine A bootstraps the branch and pushes a pipeline
+    worktree_a = tmp_path / "worktree_a"
+    worktree_a.mkdir()
+    env = {**os.environ, "GIT_AUTHOR_NAME": "a", "GIT_AUTHOR_EMAIL": "a@a.com",
+           "GIT_COMMITTER_NAME": "a", "GIT_COMMITTER_EMAIL": "a@a.com"}
+
+    def _git(*args):
+        subprocess.run(list(args), cwd=str(worktree_a), check=True, capture_output=True, env=env)
+
+    _git("git", "init")
+    _git("git", "config", "user.name", "a")
+    _git("git", "config", "user.email", "a@a.com")
+    _git("git", "remote", "add", "origin", str(bare))
+    _git("git", "checkout", "--orphan", "emerge-hub")
+    _git("git", "commit", "--allow-empty", "-m", "chore: init emerge-hub")
+    _git("git", "push", "-u", "origin", "emerge-hub")
+
+    # A pushes a pipeline file
+    pipeline_dir = worktree_a / "connectors" / "cloud-server" / "pipelines" / "read"
+    pipeline_dir.mkdir(parents=True)
+    (pipeline_dir / "list_vms.py").write_text("# list_vms from A", encoding="utf-8")
+    spans_dir = worktree_a / "connectors" / "cloud-server"
+    (spans_dir / "spans.json").write_text(
+        json.dumps({"spans": {"cloud-server.read.list_vms": {"intent_signature": "cloud-server.read.list_vms", "status": "stable", "last_ts_ms": 1000}}}),
+        encoding="utf-8",
+    )
+    _git("git", "add", "-A")
+    _git("git", "commit", "-m", "hub: sync cloud-server")
+    _git("git", "push", "origin", "emerge-hub")
+
+    # Machine B configures — should clone and import
+    daemon = EmergeDaemon(root=ROOT)
+    result = daemon.call_tool("icc_hub", {
+        "action": "configure",
+        "remote": str(bare),
+        "author": "b <b@b.com>",
+        "selected_verticals": ["cloud-server"],
+        "branch": "emerge-hub",
+    })
+    assert not result["isError"], result["content"][0]["text"]
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["action"] == "cloned"
+
+    # B's local connectors must have A's pipeline
+    local_pipeline = tmp_path / "connectors" / "cloud-server" / "pipelines" / "read" / "list_vms.py"
+    assert local_pipeline.exists(), "A's pipeline must be imported to B's local connectors on configure"
+    assert "list_vms from A" in local_pipeline.read_text(encoding="utf-8")
+
+
 def test_icc_hub_configure_requires_remote_and_author(tmp_path, monkeypatch):
     """configure must reject calls missing required fields."""
     from scripts.emerge_daemon import EmergeDaemon
