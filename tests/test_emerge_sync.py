@@ -193,3 +193,87 @@ def test_pull_flow_imports_remote_changes(git_setup, connector_home):
     result = pull_flow("gmail", connectors_root=connectors_b, hub_worktree=worktree_b)
     assert result["ok"] is True
     assert (connectors_b / "gmail" / "pipelines" / "read" / "fetch.py").exists()
+
+
+def test_apply_pending_resolutions_theirs_writes_remote_version(git_setup, connector_home):
+    """'theirs' resolution must actually overwrite the local file with the remote version."""
+    from scripts.emerge_sync import _apply_pending_resolutions, push_flow
+    from scripts.hub_config import load_pending_conflicts, save_pending_conflicts, new_conflict_id
+
+    bare_remote, worktree, hub_home = git_setup
+    connectors, _ = connector_home
+
+    # Seed the remote with a known file via Machine A
+    _init_hub_worktree(worktree, str(bare_remote))
+    _make_connector(connectors, "gmail")
+    push_flow("gmail", connectors_root=connectors, hub_worktree=worktree)
+
+    # Simulate a conflict record where the user chose "theirs"
+    conflict_file = "connectors/gmail/NOTES.md"
+    data = {
+        "conflicts": [
+            {
+                "conflict_id": new_conflict_id(),
+                "connector": "gmail",
+                "file": conflict_file,
+                "status": "resolved",
+                "resolution": "theirs",
+            }
+        ]
+    }
+    save_pending_conflicts(data)
+
+    # Overwrite the local file so we can confirm it gets replaced
+    (worktree / "connectors" / "gmail" / "NOTES.md").write_text("STALE LOCAL", encoding="utf-8")
+    import subprocess
+    subprocess.run(["git", "add", "-A"], cwd=str(worktree), capture_output=True)
+    subprocess.run(["git", "commit", "-m", "stale"], cwd=str(worktree), capture_output=True,
+                   env={**__import__("os").environ,
+                        "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t",
+                        "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t"})
+
+    applied = _apply_pending_resolutions(worktree)
+    assert applied is True
+    # The file must now contain the remote (pushed) content, not the stale local version
+    content = (worktree / "connectors" / "gmail" / "NOTES.md").read_text(encoding="utf-8")
+    assert content != "STALE LOCAL"
+    assert "Notes" in content  # _make_connector writes "# Notes"
+
+    # Conflict status must be updated to "applied"
+    updated = load_pending_conflicts()
+    assert updated["conflicts"][0]["status"] == "applied"
+
+
+def test_apply_pending_resolutions_ours_marks_applied_without_git_change(git_setup, connector_home):
+    """'ours' resolution is a no-op (file stays at HEAD) but must be marked applied."""
+    from scripts.emerge_sync import _apply_pending_resolutions, push_flow
+    from scripts.hub_config import load_pending_conflicts, save_pending_conflicts, new_conflict_id
+
+    bare_remote, worktree, hub_home = git_setup
+    connectors, _ = connector_home
+
+    _init_hub_worktree(worktree, str(bare_remote))
+    _make_connector(connectors, "gmail")
+    push_flow("gmail", connectors_root=connectors, hub_worktree=worktree)
+
+    original_content = (worktree / "connectors" / "gmail" / "NOTES.md").read_text(encoding="utf-8")
+
+    data = {
+        "conflicts": [
+            {
+                "conflict_id": new_conflict_id(),
+                "connector": "gmail",
+                "file": "connectors/gmail/NOTES.md",
+                "status": "resolved",
+                "resolution": "ours",
+            }
+        ]
+    }
+    save_pending_conflicts(data)
+
+    applied = _apply_pending_resolutions(worktree)
+    assert applied is True
+    # File content is unchanged — we kept our version
+    assert (worktree / "connectors" / "gmail" / "NOTES.md").read_text(encoding="utf-8") == original_content
+    updated = load_pending_conflicts()
+    assert updated["conflicts"][0]["status"] == "applied"

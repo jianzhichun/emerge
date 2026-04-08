@@ -1127,7 +1127,6 @@ class EmergeDaemon:
             return self._tool_ok_json({"ok": True, "triggered": verticals})
 
         if action == "setup":
-            append_sync_event({"event": "setup_requested", "ts_ms": int(_time.time() * 1000)})
             return self._tool_ok_json({
                 "ok": True,
                 "message": (

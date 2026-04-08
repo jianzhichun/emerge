@@ -26,13 +26,9 @@ from scripts.hub_config import (
     new_conflict_id,
     save_hub_config,
     save_pending_conflicts,
-    sync_queue_path,
 )
 
 logger = logging.getLogger(__name__)
-
-_PIPELINE_EXTENSIONS = (".py", ".yaml")
-_PRIVATE_DIRS = {"operator-events", "credentials"}
 
 
 def _connectors_root() -> Path:
@@ -222,10 +218,12 @@ def git_merge_remote(
     if merge.returncode == 0:
         return {"ok": True}
 
-    # Conflict: collect conflicting file paths
+    # Collect unresolved paths; if empty this is a non-conflict failure.
     status = _git(["diff", "--name-only", "--diff-filter=U"], cwd=worktree, check=False)
     conflict_files = [f.strip() for f in status.stdout.splitlines() if f.strip()]
     _git(["merge", "--abort"], cwd=worktree, check=False)
+    if not conflict_files:
+        return {"ok": False, "error": f"merge failed: {merge.stderr.strip()}"}
     return {"conflict": True, "files": conflict_files}
 
 
@@ -348,10 +346,18 @@ def record_conflicts(connector: str, conflict_files: list[str]) -> None:
 # ── Resolution application ──────────────────────────────────────────────────
 
 def _apply_pending_resolutions(worktree: Path) -> bool:
-    """Apply any resolved conflicts via git checkout --ours/--theirs.
+    """Apply any resolved conflicts.
+
+    The merge that produced the conflict was already aborted, so the worktree
+    is at HEAD (our version).  Resolution is applied as follows:
+      - "ours":   file is already at our HEAD version — mark applied, no git op.
+      - "theirs": read the remote version via `git show origin/<branch>:<file>`
+                  and write it to disk so it can be staged and committed.
 
     Returns True if any resolutions were applied.
     """
+    cfg = load_hub_config()
+    branch = cfg.get("branch", "emerge-hub")
     data = load_pending_conflicts()
     resolved = [
         c for c in data.get("conflicts", [])
@@ -360,22 +366,42 @@ def _apply_pending_resolutions(worktree: Path) -> bool:
     if not resolved:
         return False
 
+    any_applied = False
     for conflict in resolved:
         file_path = conflict["file"]
-        choice = "--ours" if conflict["resolution"] == "ours" else "--theirs"
-        result = _git(["checkout", choice, file_path], cwd=worktree, check=False)
-        if result.returncode == 0:
-            _git(["add", file_path], cwd=worktree, check=False)
+        resolution = conflict["resolution"]
+        if resolution == "ours":
+            # Merge was aborted — file is already at our HEAD version.
             conflict["status"] = "applied"
-        else:
-            logger.warning("Failed to apply resolution for %s: %s", file_path, result.stderr.strip())
+            any_applied = True
+        elif resolution == "theirs":
+            # Retrieve the remote version and write it to the worktree.
+            result = _git(
+                ["show", f"origin/{branch}:{file_path}"],
+                cwd=worktree,
+                check=False,
+            )
+            if result.returncode == 0:
+                target = worktree / file_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(result.stdout, encoding="utf-8")
+                _git(["add", file_path], cwd=worktree, check=False)
+                conflict["status"] = "applied"
+                any_applied = True
+            else:
+                logger.warning(
+                    "Failed to get remote version for %s: %s",
+                    file_path, result.stderr.strip(),
+                )
 
     save_pending_conflicts(data)
 
-    status = _git(["status", "--porcelain"], cwd=worktree, check=False)
-    if status.stdout.strip():
+    # Commit only if there are staged changes.
+    diff = _git(["diff", "--cached", "--quiet"], cwd=worktree, check=False)
+    if diff.returncode != 0:
         _git(["commit", "-m", "hub: apply conflict resolutions"], cwd=worktree, check=False)
-    return True
+
+    return any_applied
 
 
 # ── Push and pull flows ─────────────────────────────────────────────────────
