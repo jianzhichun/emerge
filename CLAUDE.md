@@ -59,6 +59,8 @@ python3 scripts/repl_admin.py runner-status --pretty
 
 **Frozen flag**: Both `pipelines-registry.json` entries and `span-candidates.json` entries support a `frozen: bool` field. When frozen, `_update_pipeline_registry` skips all auto-transitions (stats still update) and `get_policy_status` returns `"explore"`. Set/unset via cockpit `/api/control-plane/policy/freeze` and `/unfreeze`.
 
+**Memory Hub**: `emerge_sync.py` is a standalone sync agent that shares connector assets (pipelines, NOTES.md, spans.json) via a self-hosted git repo's orphan branch (`emerge-hub`). The daemon writes a `stable` event to `~/.emerge/sync-queue.jsonl` when a pipeline is promoted to stable; emerge_sync polls the queue and triggers a push flow. A background timer drives periodic pull. Conflicts are written to `~/.emerge/pending-conflicts.json` and resolved via `icc_hub(action="resolve", ...)`. Hub config lives in `~/.emerge/hub-config.json`. Never synced: credentials, operator-events, `pipelines-registry.json`.
+
 **Cockpit control plane**: `repl_admin.py` exposes `/api/control-plane/*` read endpoints (state, intents, session, exec-events, pipeline-events, spans, span-candidates) and write endpoints (delta/reconcile, risk/update, risk/add, policy/freeze, policy/unfreeze, session/export, session/reset). The cockpit HTML has an Overview intent table, connector sub-panels (Deltas/Risks/Spans/Exec Events), and global Audit/Session/Operator tabs.
 
 ## Test Infrastructure
@@ -101,3 +103,4 @@ When making code changes, keep these in sync:
 | Test count change | `README.md` badge + Quick verification baseline |
 | New observer or adapter interface change | `skills/writing-vertical-adapter/SKILL.md` |
 | OperatorMonitor env var change | README.md env var table + `skills/operator-monitor-debug/SKILL.md` |
+| Memory Hub config or sync flow change | `README.md` component table + `CLAUDE.md` Architecture section |
