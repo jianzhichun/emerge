@@ -1682,28 +1682,15 @@ class EmergeDaemon:
             if description:
                 entry["description"] = description
             entry["last_execution_path"] = execution_path
-            entry["total_calls"] = int(entry.get("total_calls", 0)) + 1
-            if is_error:
-                sampled_in_policy = True
-            if sampled_in_policy:
-                entry["attempts"] += 1
-                if not is_error:
-                    entry["successes"] += 1
-                if trusted_verify_passed:
-                    entry["verify_passes"] += 1
-                # human_fixes incremented via _increment_human_fix() on icc_reconcile(outcome=correct)
-            is_degraded = False
-            failed_attempt = (is_error or is_degraded) and sampled_in_policy
-            if sampled_in_policy and is_degraded:
-                entry["degraded_count"] += 1
-            if sampled_in_policy:
-                entry["consecutive_failures"] = (
-                    int(entry.get("consecutive_failures", 0)) + 1 if failed_attempt else 0
-                )
-                recent = list(entry.get("recent_outcomes", []))
-                recent.append(0 if failed_attempt else 1)
-                entry["recent_outcomes"] = recent[-WINDOW_SIZE:]
-            entry["last_ts_ms"] = event["ts_ms"]
+            # human_fixes incremented via _increment_human_fix() on icc_reconcile(outcome=correct)
+            self._update_candidate_entry(
+                entry=entry,
+                sampled_in_policy=sampled_in_policy,
+                is_error=is_error,
+                is_degraded=False,
+                verify_passed=trusted_verify_passed,
+                ts_ms=event["ts_ms"],
+            )
             registry["candidates"][key] = entry
             self._atomic_write_json(registry_path, registry)
             self._update_pipeline_registry(candidate_key=key, entry=entry)
@@ -1831,26 +1818,16 @@ class EmergeDaemon:
                 entry["last_policy_action"] = "stop"
             else:
                 entry["last_policy_action"] = "none"
-            entry["total_calls"] = int(entry.get("total_calls", 0)) + 1
-            if sampled_in_policy:
-                entry["attempts"] += 1
-                if not is_error:
-                    entry["successes"] += 1
-                if event["verify_passed"]:
-                    entry["verify_passes"] += 1
-                # human_fixes incremented via _increment_human_fix() on icc_reconcile(outcome=correct)
+            # human_fixes incremented via _increment_human_fix() on icc_reconcile(outcome=correct)
             is_degraded = str(result.get("verification_state", "")).lower() == "degraded"
-            failed_attempt = (is_error or is_degraded) and sampled_in_policy
-            if sampled_in_policy and is_degraded:
-                entry["degraded_count"] += 1
-            if sampled_in_policy:
-                entry["consecutive_failures"] = (
-                    int(entry.get("consecutive_failures", 0)) + 1 if failed_attempt else 0
-                )
-                recent = list(entry.get("recent_outcomes", []))
-                recent.append(0 if failed_attempt else 1)
-                entry["recent_outcomes"] = recent[-WINDOW_SIZE:]
-            entry["last_ts_ms"] = event["ts_ms"]
+            self._update_candidate_entry(
+                entry=entry,
+                sampled_in_policy=sampled_in_policy,
+                is_error=is_error,
+                is_degraded=is_degraded,
+                verify_passed=event["verify_passed"],
+                ts_ms=event["ts_ms"],
+            )
             registry["candidates"][key] = entry
             self._atomic_write_json(registry_path, registry)
             self._update_pipeline_registry(candidate_key=key, entry=entry)
@@ -2170,6 +2147,40 @@ class EmergeDaemon:
                 self._update_pipeline_registry(candidate_key=intent_signature, entry=entry)
             except Exception:
                 pass
+
+    def _update_candidate_entry(
+        self,
+        *,
+        entry: dict[str, Any],
+        sampled_in_policy: bool,
+        is_error: bool,
+        is_degraded: bool,
+        verify_passed: bool,
+        ts_ms: int,
+    ) -> None:
+        """Apply standard attempt/success/verify/failure bookkeeping to a candidate entry.
+
+        Mutates ``entry`` in-place. Must be called while ``_registry_lock`` is held.
+        """
+        entry["total_calls"] = int(entry.get("total_calls", 0)) + 1
+        if is_error:
+            sampled_in_policy = True  # errors always counted
+        failed_attempt = (is_error or is_degraded) and sampled_in_policy
+        if sampled_in_policy:
+            entry["attempts"] += 1
+            if not is_error:
+                entry["successes"] += 1
+            if verify_passed:
+                entry["verify_passes"] += 1
+            if is_degraded:
+                entry["degraded_count"] = int(entry.get("degraded_count", 0)) + 1
+            entry["consecutive_failures"] = (
+                int(entry.get("consecutive_failures", 0)) + 1 if failed_attempt else 0
+            )
+            recent = list(entry.get("recent_outcomes", []))
+            recent.append(0 if failed_attempt else 1)
+            entry["recent_outcomes"] = recent[-WINDOW_SIZE:]
+        entry["last_ts_ms"] = ts_ms
 
     def _resolve_script_roots(self) -> list[Path]:
         raw = os.environ.get("EMERGE_SCRIPT_ROOTS", "").strip()
