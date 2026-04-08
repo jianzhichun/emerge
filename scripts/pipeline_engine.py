@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,21 @@ class PipelineEngine:
         else:
             self._connector_roots = [_USER_CONNECTOR_ROOT, self.root / "connectors"]
 
+    @staticmethod
+    def _validate_path_segment(value: str, label: str) -> None:
+        """Reject connector/pipeline values that could escape the connector root.
+
+        Allowed pattern: lowercase letters, digits, hyphens, underscores, dots,
+        and forward-slashes (for sub-pipeline names like "sub/pipeline").
+        Rejected: path traversal sequences ('..'), leading slash, or uppercase letters.
+        """
+        _SAFE = re.compile(r"^[a-z][a-z0-9_./-]*$")
+        if not value or ".." in value or value.startswith("/") or not _SAFE.match(value):
+            raise ValueError(
+                f"invalid {label} {value!r}: must start with lowercase letter, "
+                "contain only [a-z0-9_.-/], no path traversal"
+            )
+
     def run_read(self, args: dict[str, Any]) -> dict[str, Any]:
         connector = args.get("connector", "").strip()
         pipeline = args.get("pipeline", "").strip()
@@ -45,6 +61,8 @@ class PipelineEngine:
             raise ValueError(
                 f"run_read: 'connector' and 'pipeline' are required (got connector={connector!r}, pipeline={pipeline!r})"
             )
+        self._validate_path_segment(connector, "connector")
+        self._validate_path_segment(pipeline, "pipeline")
         metadata, module = self._load_pipeline(connector, "read", pipeline)
         rows = module.run_read(metadata=metadata, args=args)
         verify_result = {"ok": True}
@@ -68,6 +86,8 @@ class PipelineEngine:
             raise ValueError(
                 f"run_write: 'connector' and 'pipeline' are required (got connector={connector!r}, pipeline={pipeline!r})"
             )
+        self._validate_path_segment(connector, "connector")
+        self._validate_path_segment(pipeline, "pipeline")
         metadata, module = self._load_pipeline(connector, "write", pipeline)
         action_result = module.run_write(metadata=metadata, args=args)
         verify_fn = getattr(module, "verify_write", None)

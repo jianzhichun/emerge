@@ -231,3 +231,35 @@ def test_load_metadata_rejects_json_style_content(tmp_path):
     )
     with pytest.raises(ValueError, match="JSON-style content is not allowed"):
         PipelineEngine._load_metadata(bad)
+
+
+def test_run_read_rejects_path_traversal_connector():
+    from scripts.pipeline_engine import PipelineEngine
+    pe = PipelineEngine()
+    with pytest.raises(ValueError, match="invalid connector"):
+        pe.run_read({"connector": "../../etc", "pipeline": "state"})
+
+
+def test_run_read_rejects_path_traversal_pipeline():
+    from scripts.pipeline_engine import PipelineEngine
+    pe = PipelineEngine()
+    with pytest.raises(ValueError, match="invalid pipeline"):
+        pe.run_read({"connector": "zwcad", "pipeline": "../../../etc/passwd"})
+
+
+def test_run_write_rejects_path_traversal():
+    from scripts.pipeline_engine import PipelineEngine
+    pe = PipelineEngine()
+    with pytest.raises(ValueError, match="invalid connector"):
+        pe.run_write({"connector": "../../etc", "pipeline": "state"})
+
+
+def test_valid_connector_pipeline_not_rejected():
+    """Valid names must not be rejected (they'll fail with PipelineMissingError, not ValueError)."""
+    from scripts.pipeline_engine import PipelineEngine, PipelineMissingError
+    pe = PipelineEngine()
+    # These are valid names — they should get past validation and fail on missing file
+    with pytest.raises(PipelineMissingError):
+        pe.run_read({"connector": "zwcad", "pipeline": "nonexistent-pipeline"})
+    with pytest.raises(PipelineMissingError):
+        pe.run_read({"connector": "my-connector", "pipeline": "sub.pipeline.name"})
