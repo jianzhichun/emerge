@@ -127,3 +127,29 @@ def test_daemon_goal_tools_and_resources(tmp_path: Path):
         assert parsed["text"] == "system goal from daemon"
     finally:
         os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+
+
+def test_file_lock_acquires_and_releases(tmp_path):
+    """Basic smoke test: _file_lock acquires without error and releases."""
+    from scripts.goal_control_plane import _file_lock
+    lock_path = tmp_path / ".test.lock"
+    acquired = False
+    with _file_lock(lock_path, timeout_ms=500):
+        acquired = True
+    assert acquired
+
+
+def test_file_lock_works_without_fcntl(tmp_path, monkeypatch):
+    """_file_lock must not hard-crash if fcntl is unavailable (simulates Windows)."""
+    import sys
+    # Setting sys.modules["fcntl"] = None causes 'import fcntl' to raise ImportError
+    # This simulates a Windows environment where fcntl doesn't exist.
+    monkeypatch.setitem(sys.modules, "fcntl", None)  # type: ignore[arg-type]
+
+    from scripts.goal_control_plane import _file_lock
+    lock_path = tmp_path / ".test2.lock"
+    acquired = False
+    with _file_lock(lock_path, timeout_ms=500):
+        acquired = True
+
+    assert acquired, "_file_lock must work even when fcntl is unavailable"

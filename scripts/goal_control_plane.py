@@ -51,23 +51,53 @@ def _goal_lock_path(root: Path) -> Path:
 
 @contextlib.contextmanager
 def _file_lock(lock_path: Path, timeout_ms: int = 3000):
+    """Cross-platform advisory file lock.
+
+    Uses ``fcntl.flock`` on POSIX (macOS, Linux). On Windows (or any platform
+    where ``fcntl`` is unavailable), falls back to a sentinel-file mutex.
+    The fallback is sufficient for single-machine single-daemon scenarios.
+    """
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     start_ms = _now_ms()
-    with lock_path.open("a+", encoding="utf-8") as handle:
-        while True:
-            try:
-                import fcntl
 
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        import fcntl as _fcntl
+        _has_fcntl = True
+    except ImportError:
+        _has_fcntl = False
+
+    if _has_fcntl:
+        with lock_path.open("a+", encoding="utf-8") as handle:
+            while True:
                 try:
-                    yield
-                    return
-                finally:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            except BlockingIOError:
-                if _now_ms() - start_ms >= timeout_ms:
-                    raise TimeoutError(f"goal control lock timeout: {lock_path}")
-                time.sleep(0.02)
+                    _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+                    try:
+                        yield
+                        return
+                    finally:
+                        _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
+                except BlockingIOError:
+                    if _now_ms() - start_ms >= timeout_ms:
+                        raise TimeoutError(f"goal control lock timeout: {lock_path}")
+                    time.sleep(0.02)
+    else:
+        # Windows fallback: use a separate sentinel file as a best-effort mutex.
+        # Not atomic, but sufficient for single-daemon single-machine use.
+        sentinel = lock_path.with_suffix(".wlock")
+        while sentinel.exists():
+            if _now_ms() - start_ms >= timeout_ms:
+                raise TimeoutError(
+                    f"goal control lock timeout (Windows fallback): {lock_path}"
+                )
+            time.sleep(0.02)
+        sentinel.touch()
+        try:
+            yield
+        finally:
+            try:
+                sentinel.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
