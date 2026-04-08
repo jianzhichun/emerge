@@ -2713,3 +2713,132 @@ def test_stable_transition_writes_to_sync_queue(tmp_path, monkeypatch):
     events = consume_sync_events(lambda e: e.get("event") == "stable")
     assert any(e.get("connector") == "gmail" for e in events), \
         f"Expected stable event for gmail, got: {events}"
+
+
+# ── Task 6: icc_hub MCP tool ────────────────────────────────────────────────
+
+def test_icc_hub_list_returns_config(tmp_path, monkeypatch):
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.hub_config import save_hub_config
+
+    monkeypatch.setenv("EMERGE_HUB_HOME", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir(parents=True)
+
+    save_hub_config({
+        "remote": "git@quasar:team/hub.git",
+        "branch": "emerge-hub",
+        "selected_verticals": ["gmail", "linear"],
+    })
+
+    daemon = EmergeDaemon(root=ROOT)
+    result = daemon.call_tool("icc_hub", {"action": "list"})
+    assert not result["isError"]
+    payload = json.loads(result["content"][0]["text"])
+    assert "gmail" in payload["selected_verticals"]
+    assert payload["remote"] == "git@quasar:team/hub.git"
+
+
+def test_icc_hub_add_connector(tmp_path, monkeypatch):
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.hub_config import load_hub_config, save_hub_config
+
+    monkeypatch.setenv("EMERGE_HUB_HOME", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir(parents=True)
+
+    save_hub_config({"remote": "git@x:y.git", "selected_verticals": ["gmail"]})
+
+    daemon = EmergeDaemon(root=ROOT)
+    result = daemon.call_tool("icc_hub", {"action": "add", "connector": "linear"})
+    assert not result["isError"]
+    cfg = load_hub_config()
+    assert "linear" in cfg["selected_verticals"]
+
+
+def test_icc_hub_remove_connector(tmp_path, monkeypatch):
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.hub_config import load_hub_config, save_hub_config
+
+    monkeypatch.setenv("EMERGE_HUB_HOME", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir(parents=True)
+
+    save_hub_config({"remote": "git@x:y.git", "selected_verticals": ["gmail", "slack"]})
+
+    daemon = EmergeDaemon(root=ROOT)
+    result = daemon.call_tool("icc_hub", {"action": "remove", "connector": "slack"})
+    assert not result["isError"]
+    cfg = load_hub_config()
+    assert "slack" not in cfg["selected_verticals"]
+    assert "gmail" in cfg["selected_verticals"]
+
+
+def test_icc_hub_status_shows_pending_conflicts(tmp_path, monkeypatch):
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.hub_config import save_hub_config, save_pending_conflicts
+
+    monkeypatch.setenv("EMERGE_HUB_HOME", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir(parents=True)
+
+    save_hub_config({"remote": "git@x:y.git", "selected_verticals": ["gmail"]})
+    save_pending_conflicts({"conflicts": [
+        {"conflict_id": "abc", "connector": "gmail", "file": "fetch.py",
+         "status": "pending", "resolution": None, "ours_ts_ms": 1, "theirs_ts_ms": 0}
+    ]})
+
+    daemon = EmergeDaemon(root=ROOT)
+    result = daemon.call_tool("icc_hub", {"action": "status"})
+    assert not result["isError"]
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["pending_conflicts"] == 1
+
+
+def test_icc_hub_sync_enqueues_push_and_pull(tmp_path, monkeypatch):
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.hub_config import consume_sync_events, save_hub_config
+
+    monkeypatch.setenv("EMERGE_HUB_HOME", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir(parents=True)
+
+    save_hub_config({"remote": "git@x:y.git", "selected_verticals": ["gmail"]})
+
+    daemon = EmergeDaemon(root=ROOT)
+    result = daemon.call_tool("icc_hub", {"action": "sync", "connector": "gmail"})
+    assert not result["isError"]
+    payload = json.loads(result["content"][0]["text"])
+    assert "gmail" in payload["triggered"]
+
+    stable_events = consume_sync_events(lambda e: e.get("event") == "stable")
+    pull_events = consume_sync_events(lambda e: e.get("event") == "pull_requested")
+    assert any(e["connector"] == "gmail" for e in stable_events)
+    assert any(e["connector"] == "gmail" for e in pull_events)
+
+
+def test_icc_hub_resolve_conflict(tmp_path, monkeypatch):
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.hub_config import load_pending_conflicts, save_hub_config, save_pending_conflicts
+
+    monkeypatch.setenv("EMERGE_HUB_HOME", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir(parents=True)
+
+    save_hub_config({"remote": "git@x:y.git", "selected_verticals": ["gmail"]})
+    save_pending_conflicts({"conflicts": [
+        {"conflict_id": "abc", "connector": "gmail", "file": "fetch.py",
+         "status": "pending", "resolution": None, "ours_ts_ms": 1, "theirs_ts_ms": 0}
+    ]})
+
+    daemon = EmergeDaemon(root=ROOT)
+    result = daemon.call_tool("icc_hub", {
+        "action": "resolve",
+        "conflict_id": "abc",
+        "resolution": "ours",
+    })
+    assert not result["isError"]
+    data = load_pending_conflicts()
+    conflict = data["conflicts"][0]
+    assert conflict["resolution"] == "ours"
+    assert conflict["status"] == "resolved"

@@ -1049,7 +1049,122 @@ class EmergeDaemon:
                 "goal_source": goal_snapshot.get("source", "unset"),
                 "goal_version": goal_snapshot.get("version", 0),
             })
+        if name == "icc_hub":
+            return self._handle_icc_hub(arguments)
         return self._tool_error(f"Unknown tool: {name}")
+
+    def _handle_icc_hub(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        from scripts.hub_config import (
+            append_sync_event,
+            is_configured,
+            load_hub_config,
+            load_pending_conflicts,
+            save_hub_config,
+            save_pending_conflicts,
+            sync_queue_path,
+        )
+        import time as _time
+
+        action = str(arguments.get("action", "")).strip()
+
+        if action == "list":
+            cfg = load_hub_config()
+            return self._tool_ok_json({
+                "remote": cfg.get("remote", ""),
+                "branch": cfg.get("branch", "emerge-hub"),
+                "selected_verticals": cfg.get("selected_verticals", []),
+                "poll_interval_seconds": cfg.get("poll_interval_seconds", 300),
+                "configured": is_configured(),
+            })
+
+        if action == "add":
+            connector = str(arguments.get("connector", "")).strip()
+            if not connector:
+                return self._tool_error("icc_hub add: 'connector' is required")
+            cfg = load_hub_config()
+            selected = list(cfg.get("selected_verticals", []))
+            if connector not in selected:
+                selected.append(connector)
+                cfg["selected_verticals"] = selected
+                save_hub_config(cfg)
+            return self._tool_ok_json({"ok": True, "selected_verticals": selected})
+
+        if action == "remove":
+            connector = str(arguments.get("connector", "")).strip()
+            if not connector:
+                return self._tool_error("icc_hub remove: 'connector' is required")
+            cfg = load_hub_config()
+            selected = [v for v in cfg.get("selected_verticals", []) if v != connector]
+            cfg["selected_verticals"] = selected
+            save_hub_config(cfg)
+            return self._tool_ok_json({"ok": True, "selected_verticals": selected})
+
+        if action == "status":
+            cfg = load_hub_config()
+            pending = load_pending_conflicts()
+            unresolved = [c for c in pending.get("conflicts", []) if c.get("status") == "pending"]
+            queue_depth = 0
+            qp = sync_queue_path()
+            if qp.exists():
+                queue_depth = sum(1 for line in qp.read_text(encoding="utf-8").splitlines() if line.strip())
+            return self._tool_ok_json({
+                "configured": is_configured(),
+                "remote": cfg.get("remote", ""),
+                "selected_verticals": cfg.get("selected_verticals", []),
+                "pending_conflicts": len(unresolved),
+                "conflicts": unresolved,
+                "queue_depth": queue_depth,
+            })
+
+        if action == "sync":
+            connector = str(arguments.get("connector", "")).strip() or None
+            cfg = load_hub_config()
+            verticals = [connector] if connector else cfg.get("selected_verticals", [])
+            ts = int(_time.time() * 1000)
+            for c in verticals:
+                append_sync_event({"event": "stable", "connector": c, "pipeline": "__manual__", "ts_ms": ts})
+                append_sync_event({"event": "pull_requested", "connector": c, "ts_ms": ts})
+            return self._tool_ok_json({"ok": True, "triggered": verticals})
+
+        if action == "setup":
+            append_sync_event({"event": "setup_requested", "ts_ms": int(_time.time() * 1000)})
+            return self._tool_ok_json({
+                "ok": True,
+                "message": (
+                    "Setup wizard runs in a terminal: python scripts/emerge_sync.py setup. "
+                    "Run it there, then call icc_hub(action='list') to verify configuration."
+                ),
+            })
+
+        if action == "resolve":
+            conflict_id = str(arguments.get("conflict_id", "")).strip()
+            resolution = str(arguments.get("resolution", "")).strip()
+            if not conflict_id:
+                return self._tool_error("icc_hub resolve: 'conflict_id' is required")
+            if resolution not in ("ours", "theirs", "skip"):
+                return self._tool_error("icc_hub resolve: 'resolution' must be ours|theirs|skip")
+            data = load_pending_conflicts()
+            matched = False
+            for conflict in data.get("conflicts", []):
+                if conflict.get("conflict_id") == conflict_id:
+                    conflict["resolution"] = resolution
+                    conflict["status"] = "resolved"
+                    matched = True
+                    break
+            if not matched:
+                return self._tool_error(f"icc_hub resolve: conflict_id '{conflict_id}' not found")
+            save_pending_conflicts(data)
+            append_sync_event({
+                "event": "resolution_applied",
+                "conflict_id": conflict_id,
+                "resolution": resolution,
+                "ts_ms": int(_time.time() * 1000),
+            })
+            return self._tool_ok_json({"ok": True, "conflict_id": conflict_id, "resolution": resolution})
+
+        return self._tool_error(
+            f"icc_hub: unknown action '{action}'. Valid: list|add|remove|sync|status|resolve|setup"
+        )
 
     def handle_jsonrpc(self, request: dict[str, Any]) -> dict[str, Any]:
         req_id = request.get("id")
@@ -1255,6 +1370,40 @@ class EmergeDaemon:
                                     "target_profile": {"type": "string", "description": "Which exec profile's WAL to read", "default": "default"},
                                 },
                                 "required": ["intent_signature", "connector", "pipeline_name", "mode"],
+                            },
+                        },
+                        {
+                            "name": "icc_hub",
+                            "description": (
+                                "Manage Memory Hub — bidirectional connector asset sync via a self-hosted git repo. "
+                                "Actions: list (show config), add/remove (manage verticals), "
+                                "sync (manual push+pull), status (show pending conflicts), "
+                                "resolve (resolve a conflict with ours|theirs|skip), "
+                                "setup (instructions to run the interactive setup wizard)."
+                            ),
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "action": {
+                                        "type": "string",
+                                        "enum": ["list", "add", "remove", "sync", "status", "resolve", "setup"],
+                                        "description": "Hub action to perform",
+                                    },
+                                    "connector": {
+                                        "type": "string",
+                                        "description": "Connector name (required for add/remove, optional for sync)",
+                                    },
+                                    "conflict_id": {
+                                        "type": "string",
+                                        "description": "Conflict ID from status output (required for resolve)",
+                                    },
+                                    "resolution": {
+                                        "type": "string",
+                                        "enum": ["ours", "theirs", "skip"],
+                                        "description": "Resolution choice (required for resolve)",
+                                    },
+                                },
+                                "required": ["action"],
                             },
                         },
                     ]
