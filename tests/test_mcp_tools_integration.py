@@ -2656,3 +2656,60 @@ def test_runner_router_cached_between_calls(tmp_path, monkeypatch):
         f"from_env called {additional_calls} extra times for 10 _get_runner_router() "
         "calls without config change — caching broken"
     )
+
+
+# ── Task 5: stable event → sync-queue ──────────────────────────────────────
+
+def test_stable_transition_writes_to_sync_queue(tmp_path, monkeypatch):
+    """When a pipeline reaches stable, daemon writes a 'stable' event to sync-queue."""
+    import json
+    import time
+
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.hub_config import consume_sync_events, save_hub_config
+    from scripts.policy_config import STABLE_MIN_ATTEMPTS
+
+    monkeypatch.setenv("EMERGE_HUB_HOME", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+
+    # Hub configured with gmail selected
+    save_hub_config({
+        "remote": "git@quasar:team/hub.git",
+        "selected_verticals": ["gmail"],
+    })
+
+    daemon = EmergeDaemon(root=ROOT)
+
+    # Inject pipelines-registry entry at canary
+    registry_path = daemon._state_root / "pipelines-registry.json"
+    registry = {
+        "pipelines": {
+            "gmail.read.fetch": {
+                "status": "canary",
+                "rollout_pct": 20,
+                "attempts_at_transition": 0,
+                "last_transition_reason": "init",
+            }
+        }
+    }
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+
+    # Build candidate entry with sufficient stats to trigger stable transition
+    entry = {
+        "intent_signature": "gmail.read.fetch",
+        "status": "canary",
+        "attempts": STABLE_MIN_ATTEMPTS,
+        "successes": STABLE_MIN_ATTEMPTS,
+        "verify_passes": STABLE_MIN_ATTEMPTS,
+        "human_fixes": 0,
+        "consecutive_failures": 0,
+        "recent_outcomes": [1] * STABLE_MIN_ATTEMPTS,
+        "last_ts_ms": int(time.time() * 1000),
+    }
+    daemon._update_pipeline_registry(candidate_key="gmail.read.fetch", entry=entry)
+
+    events = consume_sync_events(lambda e: e.get("event") == "stable")
+    assert any(e.get("connector") == "gmail" for e in events), \
+        f"Expected stable event for gmail, got: {events}"

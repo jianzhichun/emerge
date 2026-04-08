@@ -2010,6 +2010,24 @@ class EmergeDaemon:
                 )
             except Exception:
                 pass
+            if status == "stable":
+                try:
+                    from scripts.hub_config import append_sync_event, is_configured, load_hub_config
+                    if is_configured():
+                        parts = candidate_key.split(".", 2)
+                        connector = parts[0] if parts else candidate_key
+                        cfg = load_hub_config()
+                        if connector in cfg.get("selected_verticals", []):
+                            pipeline_name = parts[2] if len(parts) >= 3 else candidate_key
+                            import time as _time
+                            append_sync_event({
+                                "event": "stable",
+                                "connector": connector,
+                                "pipeline": pipeline_name,
+                                "ts_ms": int(_time.time() * 1000),
+                            })
+                except Exception:
+                    pass
 
         registry["pipelines"][candidate_key] = pipeline
         self._atomic_write_json(registry_path, registry)
