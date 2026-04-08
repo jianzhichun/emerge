@@ -134,6 +134,46 @@ def test_import_merges_spans_json_newer_wins(connector_home):
     assert "gmail.read.send" in merged["spans"]
 
 
+def test_export_spans_json_merges_remote_spans(connector_home):
+    """Exporting B's spans must not erase A's spans already in the worktree."""
+    connectors, worktree = connector_home
+
+    # A's spans already live in the worktree
+    hub_conn_dir = worktree / "connectors" / "cloud-server"
+    hub_conn_dir.mkdir(parents=True)
+    existing_spans = {
+        "spans": {
+            "cloud-server.read.list_vms": {
+                "intent_signature": "cloud-server.read.list_vms",
+                "status": "stable",
+                "last_ts_ms": 1000,
+            }
+        }
+    }
+    (hub_conn_dir / "spans.json").write_text(json.dumps(existing_spans), encoding="utf-8")
+
+    # B has a different stable pipeline
+    base = connectors / "cloud-server"
+    (base / "pipelines" / "read").mkdir(parents=True)
+    (base / "pipelines" / "read" / "get_quota.py").write_text("# quota", encoding="utf-8")
+    candidates = {
+        "candidates": {
+            "cloud-server.read.get_quota": {
+                "intent_signature": "cloud-server.read.get_quota",
+                "status": "stable",
+                "last_ts_ms": 2000,
+            }
+        }
+    }
+    (base / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+
+    export_vertical("cloud-server", connectors_root=connectors, hub_worktree=worktree)
+
+    spans = json.loads((hub_conn_dir / "spans.json").read_text())["spans"]
+    assert "cloud-server.read.list_vms" in spans, "A's span must be preserved"
+    assert "cloud-server.read.get_quota" in spans, "B's span must be added"
+
+
 # ── Git operation tests ─────────────────────────────────────────────────────
 
 @pytest.fixture()

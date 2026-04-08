@@ -104,7 +104,7 @@ def export_vertical(
 
 
 def _export_spans_json(src: Path, dst: Path) -> None:
-    """Generate spans.json from span-candidates.json (stable entries only, stripped)."""
+    """Merge local stable spans into the worktree spans.json. Remote-only spans are preserved."""
     candidates_path = src / "span-candidates.json"
     if not candidates_path.exists():
         return
@@ -113,20 +113,37 @@ def _export_spans_json(src: Path, dst: Path) -> None:
         candidates = raw.get("candidates", {})
     except Exception:
         return
-    spans: dict[str, Any] = {}
+
+    local_spans: dict[str, Any] = {}
     for key, entry in candidates.items():
         if not isinstance(entry, dict):
             continue
         if entry.get("status") != "stable":
             continue
-        spans[key] = {
+        local_spans[key] = {
             "intent_signature": entry.get("intent_signature", key),
             "status": "stable",
             "last_ts_ms": entry.get("last_ts_ms", 0),
         }
+
+    # Load existing worktree spans so we don't erase other members' entries
+    existing_path = dst / "spans.json"
+    existing_spans: dict[str, Any] = {}
+    if existing_path.exists():
+        try:
+            existing_spans = json.loads(existing_path.read_text(encoding="utf-8")).get("spans", {})
+        except Exception:
+            pass
+
+    merged = dict(existing_spans)
+    for key, entry in local_spans.items():
+        existing = merged.get(key)
+        if existing is None or entry.get("last_ts_ms", 0) >= existing.get("last_ts_ms", 0):
+            merged[key] = entry
+
     dst.mkdir(parents=True, exist_ok=True)
     (dst / "spans.json").write_text(
-        json.dumps({"spans": spans}, indent=2, ensure_ascii=False),
+        json.dumps({"spans": merged}, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
 
