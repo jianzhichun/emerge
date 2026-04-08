@@ -2623,3 +2623,36 @@ def test_bridge_failure_records_consecutive_failure(tmp_path, monkeypatch):
     updated = json.loads(registry_path.read_text())
     assert updated["pipelines"]["zwcad.read.state"]["consecutive_failures"] == 1, \
         f"Expected consecutive_failures=1, got {updated['pipelines']['zwcad.read.state']['consecutive_failures']}"
+
+
+def test_runner_router_cached_between_calls(tmp_path, monkeypatch):
+    """_get_runner_router() must cache and only rebuild when config changes."""
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    monkeypatch.delenv("EMERGE_RUNNER_URL", raising=False)
+
+    from scripts.runner_client import RunnerRouter
+    from scripts.emerge_daemon import EmergeDaemon
+
+    call_count = []
+    original_from_env = RunnerRouter.from_env.__func__
+
+    @classmethod
+    def counting_from_env(cls):
+        call_count.append(1)
+        return original_from_env(cls)
+
+    monkeypatch.setattr(RunnerRouter, "from_env", counting_from_env)
+
+    daemon = EmergeDaemon()
+    initial_calls = len(call_count)
+
+    # Call _get_runner_router 10 times without changing config
+    for _ in range(10):
+        daemon._get_runner_router()
+
+    # Should NOT have called from_env again (cached)
+    additional_calls = len(call_count) - initial_calls
+    assert additional_calls == 0, (
+        f"from_env called {additional_calls} extra times for 10 _get_runner_router() "
+        "calls without config change — caching broken"
+    )

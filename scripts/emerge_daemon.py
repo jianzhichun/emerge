@@ -115,6 +115,10 @@ class EmergeDaemon:
         # candidates.json and pipelines-registry.json. Always held for the
         # full load→mutate→save cycle to prevent lost updates.
         self._registry_lock = threading.Lock()
+        # Cache for RunnerRouter — rebuilt only when runner-map.json changes on disk.
+        # Preserves the original "pick up config added after start" guarantee via mtime check.
+        self._runner_router_cache: "RunnerRouter | None" = RunnerRouter.from_env()
+        self._runner_router_config_mtime: float = self._read_runner_config_mtime()
         from scripts.policy_config import load_settings, default_emerge_home
         from scripts.metrics import get_sink
         try:
@@ -163,9 +167,25 @@ class EmergeDaemon:
         except Exception:
             return
 
+    def _read_runner_config_mtime(self) -> float:
+        """Return mtime of runner-map.json, or 0.0 if file doesn't exist."""
+        try:
+            p = RunnerRouter.persisted_config_path()
+            return p.stat().st_mtime if p.exists() else 0.0
+        except Exception:
+            return 0.0
+
     def _get_runner_router(self) -> "RunnerRouter | None":
-        """Always reload from disk so runner config added after daemon start is picked up."""
-        return RunnerRouter.from_env()
+        """Return cached RunnerRouter, rebuilding only when runner-map.json changes.
+
+        Original contract preserved: config added after daemon start is picked up
+        via mtime-based invalidation — zero disk reads when config unchanged.
+        """
+        current_mtime = self._read_runner_config_mtime()
+        if current_mtime != self._runner_router_config_mtime:
+            self._runner_router_cache = RunnerRouter.from_env()
+            self._runner_router_config_mtime = current_mtime
+        return self._runner_router_cache
 
     def _try_flywheel_bridge(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
         base_pipeline_id = str(arguments.get("base_pipeline_id", "")).strip()
