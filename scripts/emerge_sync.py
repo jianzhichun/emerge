@@ -354,7 +354,7 @@ def _apply_pending_resolutions(worktree: Path) -> bool:
     data = load_pending_conflicts()
     resolved = [
         c for c in data.get("conflicts", [])
-        if c.get("status") == "resolved" and c.get("resolution") in ("ours", "theirs")
+        if c.get("status") == "resolved" and c.get("resolution") in ("ours", "theirs", "skip")
     ]
     if not resolved:
         return False
@@ -363,8 +363,9 @@ def _apply_pending_resolutions(worktree: Path) -> bool:
     for conflict in resolved:
         file_path = conflict["file"]
         resolution = conflict["resolution"]
-        if resolution == "ours":
-            # Merge was aborted — file is already at our HEAD version.
+        if resolution in ("ours", "skip"):
+            # "ours": merge was aborted — file is already at our HEAD version.
+            # "skip": user chose to ignore this conflict; leave the file as-is.
             conflict["status"] = "applied"
             any_applied = True
         elif resolution == "theirs":
@@ -584,6 +585,7 @@ def cmd_sync(connector: str | None = None) -> None:
             print(f"sync {c}: ok (push)")
         elif result.get("conflict"):
             print(f"sync {c}: conflict — resolve via icc_hub(action='status')")
+            continue  # skip pull: would re-merge against the same conflicting remote
         else:
             print(f"sync {c}: error — {result.get('error', 'unknown')}")
         pull_result = pull_flow(c)
