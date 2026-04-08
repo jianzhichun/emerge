@@ -84,20 +84,39 @@ def export_vertical(
     connectors_root: Path | None = None,
     hub_worktree: Path | None = None,
 ) -> None:
-    """Copy connector assets from local connectors dir into the hub worktree."""
+    """Copy connector assets from local connectors dir into the hub worktree.
+
+    Per-pipeline additive export: only overwrites a worktree pipeline when the
+    local candidate has a higher (or equal) last_ts_ms than the remote version.
+    Remote-only pipelines are left untouched — they remain in the worktree from
+    the preceding git_merge_remote call in push_flow.
+    """
     src = (connectors_root or _connectors_root()) / connector
     dst = (hub_worktree or hub_worktree_path()) / "connectors" / connector
+    dst.mkdir(parents=True, exist_ok=True)
 
     src_pipelines = src / "pipelines"
     dst_pipelines = dst / "pipelines"
+
     if src_pipelines.exists():
-        if dst_pipelines.exists():
-            shutil.rmtree(dst_pipelines)
-        shutil.copytree(src_pipelines, dst_pipelines)
+        local_ts = _load_candidate_timestamps(src)
+        remote_ts = _load_spans_timestamps(dst)
+
+        for py_file in src_pipelines.rglob("*.py"):
+            rel = py_file.relative_to(src_pipelines)
+            intent_sig = _file_to_intent_sig(connector, rel)
+            l_ts = local_ts.get(intent_sig, 0)
+            r_ts = remote_ts.get(intent_sig, 0)
+            if l_ts >= r_ts:
+                dst_file = dst_pipelines / rel
+                dst_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(py_file, dst_file)
+                yaml_src = py_file.with_suffix(".yaml")
+                if yaml_src.exists():
+                    shutil.copy2(yaml_src, dst_file.with_suffix(".yaml"))
 
     notes_src = src / "NOTES.md"
     if notes_src.exists():
-        dst.mkdir(parents=True, exist_ok=True)
         shutil.copy2(notes_src, dst / "NOTES.md")
 
     _export_spans_json(src, dst)
@@ -142,10 +161,7 @@ def _export_spans_json(src: Path, dst: Path) -> None:
             merged[key] = entry
 
     dst.mkdir(parents=True, exist_ok=True)
-    (dst / "spans.json").write_text(
-        json.dumps({"spans": merged}, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    _write_json(dst / "spans.json", {"spans": merged})
 
 
 # ── Import ──────────────────────────────────────────────────────────────────

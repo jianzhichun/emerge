@@ -174,6 +174,103 @@ def test_export_spans_json_merges_remote_spans(connector_home):
     assert "cloud-server.read.get_quota" in spans, "B's span must be added"
 
 
+def test_export_vertical_preserves_remote_only_pipeline(connector_home):
+    """A's pipeline already in worktree must survive B exporting a different pipeline."""
+    connectors, worktree = connector_home
+
+    # A's pipeline already in worktree (with spans.json to provide remote timestamp)
+    hub_conn = worktree / "connectors" / "cloud-server"
+    (hub_conn / "pipelines" / "read").mkdir(parents=True)
+    (hub_conn / "pipelines" / "read" / "list_vms.py").write_text("# A's list_vms", encoding="utf-8")
+    a_spans = {
+        "spans": {
+            "cloud-server.read.list_vms": {"intent_signature": "cloud-server.read.list_vms", "status": "stable", "last_ts_ms": 1000}
+        }
+    }
+    (hub_conn / "spans.json").write_text(json.dumps(a_spans), encoding="utf-8")
+
+    # B has a different pipeline locally
+    base = connectors / "cloud-server"
+    (base / "pipelines" / "read").mkdir(parents=True)
+    (base / "pipelines" / "read" / "get_quota.py").write_text("# B's get_quota", encoding="utf-8")
+    b_candidates = {
+        "candidates": {
+            "cloud-server.read.get_quota": {"status": "stable", "last_ts_ms": 2000}
+        }
+    }
+    (base / "span-candidates.json").write_text(json.dumps(b_candidates), encoding="utf-8")
+
+    export_vertical("cloud-server", connectors_root=connectors, hub_worktree=worktree)
+
+    # A's pipeline must survive
+    assert (hub_conn / "pipelines" / "read" / "list_vms.py").read_text() == "# A's list_vms"
+    # B's pipeline must be added
+    assert (hub_conn / "pipelines" / "read" / "get_quota.py").exists()
+
+
+def test_export_vertical_local_wins_when_newer(connector_home):
+    """When local last_ts_ms > remote last_ts_ms for the same pipeline, local version overwrites."""
+    connectors, worktree = connector_home
+
+    # Remote (worktree) has older version
+    hub_conn = worktree / "connectors" / "cloud-server"
+    (hub_conn / "pipelines" / "read").mkdir(parents=True)
+    (hub_conn / "pipelines" / "read" / "fetch.py").write_text("# old remote", encoding="utf-8")
+    old_spans = {
+        "spans": {
+            "cloud-server.read.fetch": {"status": "stable", "last_ts_ms": 100}
+        }
+    }
+    (hub_conn / "spans.json").write_text(json.dumps(old_spans), encoding="utf-8")
+
+    # Local has newer version
+    base = connectors / "cloud-server"
+    (base / "pipelines" / "read").mkdir(parents=True)
+    (base / "pipelines" / "read" / "fetch.py").write_text("# new local", encoding="utf-8")
+    candidates = {
+        "candidates": {
+            "cloud-server.read.fetch": {"status": "stable", "last_ts_ms": 999}
+        }
+    }
+    (base / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+
+    export_vertical("cloud-server", connectors_root=connectors, hub_worktree=worktree)
+
+    assert (hub_conn / "pipelines" / "read" / "fetch.py").read_text() == "# new local"
+
+
+def test_export_vertical_remote_wins_when_newer(connector_home):
+    """When remote last_ts_ms > local last_ts_ms, local must NOT overwrite the remote pipeline."""
+    connectors, worktree = connector_home
+
+    # Remote has a newer version
+    hub_conn = worktree / "connectors" / "cloud-server"
+    (hub_conn / "pipelines" / "read").mkdir(parents=True)
+    (hub_conn / "pipelines" / "read" / "fetch.py").write_text("# newer remote", encoding="utf-8")
+    new_spans = {
+        "spans": {
+            "cloud-server.read.fetch": {"status": "stable", "last_ts_ms": 9999}
+        }
+    }
+    (hub_conn / "spans.json").write_text(json.dumps(new_spans), encoding="utf-8")
+
+    # Local has older version
+    base = connectors / "cloud-server"
+    (base / "pipelines" / "read").mkdir(parents=True)
+    (base / "pipelines" / "read" / "fetch.py").write_text("# stale local", encoding="utf-8")
+    candidates = {
+        "candidates": {
+            "cloud-server.read.fetch": {"status": "stable", "last_ts_ms": 50}
+        }
+    }
+    (base / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+
+    export_vertical("cloud-server", connectors_root=connectors, hub_worktree=worktree)
+
+    # Remote version must be untouched
+    assert (hub_conn / "pipelines" / "read" / "fetch.py").read_text() == "# newer remote"
+
+
 # ── Git operation tests ─────────────────────────────────────────────────────
 
 @pytest.fixture()
