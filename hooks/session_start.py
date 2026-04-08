@@ -47,6 +47,27 @@ def main() -> None:
         goal_source_override=str(snap.get("source", "unset")),
     )
 
+    conflicts_path = Path.home() / ".emerge" / "pending-conflicts.json"
+    try:
+        conflicts_data = json.loads(conflicts_path.read_text(encoding="utf-8"))
+        pending = [c for c in conflicts_data.get("conflicts", []) if c.get("status") == "pending"]
+        if pending:
+            by_connector: dict[str, int] = {}
+            for c in pending:
+                connector = c.get("connector", "unknown")
+                by_connector[connector] = by_connector.get(connector, 0) + 1
+            connector_summary = ", ".join(
+                f"{name} ({count} file{'s' if count != 1 else ''})"
+                for name, count in sorted(by_connector.items())
+            )
+            context_text += (
+                f"\n\n⚠️ Memory Hub has {len(pending)} unresolved sync conflict(s)."
+                " Run /emerge:hub to resolve them.\n"
+                f"Connectors affected: {connector_summary}"
+            )
+    except (OSError, json.JSONDecodeError, AttributeError):
+        pass
+
     out = {
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
