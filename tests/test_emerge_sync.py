@@ -73,11 +73,12 @@ def _make_connector(connectors: Path, name: str) -> None:
     base = connectors / name
     (base / "pipelines" / "read").mkdir(parents=True)
     (base / "pipelines" / "read" / "fetch.py").write_text("# fetch", encoding="utf-8")
-    (base / "pipelines" / "read" / "fetch.yaml").write_text("connector: test", encoding="utf-8")
+    (base / "pipelines" / "read" / "fetch.yaml").write_text(f"connector: {name}", encoding="utf-8")
     (base / "NOTES.md").write_text("# Notes", encoding="utf-8")
+    intent_key = f"{name}.read.fetch"
     candidates = {
         "candidates": {
-            "test.read.fetch": {"intent_signature": "test.read.fetch", "status": "stable", "last_ts_ms": 1000}
+            intent_key: {"intent_signature": intent_key, "status": "stable", "last_ts_ms": 1000}
         }
     }
     (base / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
@@ -98,7 +99,7 @@ def test_export_generates_spans_json_from_stable_candidates(connector_home):
     spans_path = worktree / "connectors" / "gmail" / "spans.json"
     assert spans_path.exists()
     spans = json.loads(spans_path.read_text())
-    assert "test.read.fetch" in spans["spans"]
+    assert "gmail.read.fetch" in spans["spans"]
 
 
 def test_import_overwrites_local_pipelines(connector_home):
@@ -269,6 +270,81 @@ def test_export_vertical_remote_wins_when_newer(connector_home):
 
     # Remote version must be untouched
     assert (hub_conn / "pipelines" / "read" / "fetch.py").read_text() == "# newer remote"
+
+
+def test_export_vertical_skips_explore_state_pipeline(connector_home):
+    """Pipelines without a stable candidate must NOT be exported to the hub."""
+    connectors, worktree = connector_home
+
+    base = connectors / "cloud-server"
+    (base / "pipelines" / "read").mkdir(parents=True)
+    (base / "pipelines" / "read" / "draft.py").write_text("# explore draft", encoding="utf-8")
+    # Only explore candidate — not stable
+    candidates = {
+        "candidates": {
+            "cloud-server.read.draft": {"status": "explore", "last_ts_ms": 500}
+        }
+    }
+    (base / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+
+    export_vertical("cloud-server", connectors_root=connectors, hub_worktree=worktree)
+
+    hub_conn = worktree / "connectors" / "cloud-server"
+    assert not (hub_conn / "pipelines" / "read" / "draft.py").exists(), \
+        "explore-state pipelines must not be exported"
+
+
+def test_export_vertical_copies_yaml_companion(connector_home):
+    """When a .py is exported, the sibling .yaml must follow."""
+    connectors, worktree = connector_home
+
+    base = connectors / "cloud-server"
+    (base / "pipelines" / "read").mkdir(parents=True)
+    (base / "pipelines" / "read" / "fetch.py").write_text("# fetch", encoding="utf-8")
+    (base / "pipelines" / "read" / "fetch.yaml").write_text("connector: cs", encoding="utf-8")
+    candidates = {
+        "candidates": {
+            "cloud-server.read.fetch": {"status": "stable", "last_ts_ms": 100}
+        }
+    }
+    (base / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+
+    export_vertical("cloud-server", connectors_root=connectors, hub_worktree=worktree)
+
+    hub_conn = worktree / "connectors" / "cloud-server"
+    assert (hub_conn / "pipelines" / "read" / "fetch.yaml").read_text() == "connector: cs"
+
+
+def test_export_vertical_removes_stale_yaml_when_local_has_none(connector_home):
+    """If local .py overwrites remote but local has no .yaml, the old remote .yaml is cleaned up."""
+    connectors, worktree = connector_home
+
+    # Remote worktree has an old .yaml
+    hub_conn = worktree / "connectors" / "cloud-server"
+    (hub_conn / "pipelines" / "read").mkdir(parents=True)
+    (hub_conn / "pipelines" / "read" / "fetch.py").write_text("# old", encoding="utf-8")
+    (hub_conn / "pipelines" / "read" / "fetch.yaml").write_text("old: yaml", encoding="utf-8")
+    old_spans = {
+        "spans": {"cloud-server.read.fetch": {"status": "stable", "last_ts_ms": 10}}
+    }
+    (hub_conn / "spans.json").write_text(json.dumps(old_spans), encoding="utf-8")
+
+    # Local has newer .py but NO .yaml
+    base = connectors / "cloud-server"
+    (base / "pipelines" / "read").mkdir(parents=True)
+    (base / "pipelines" / "read" / "fetch.py").write_text("# new local", encoding="utf-8")
+    candidates = {
+        "candidates": {
+            "cloud-server.read.fetch": {"status": "stable", "last_ts_ms": 999}
+        }
+    }
+    (base / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+
+    export_vertical("cloud-server", connectors_root=connectors, hub_worktree=worktree)
+
+    assert (hub_conn / "pipelines" / "read" / "fetch.py").read_text() == "# new local"
+    assert not (hub_conn / "pipelines" / "read" / "fetch.yaml").exists(), \
+        "stale remote .yaml must be removed when local has no .yaml"
 
 
 # ── Git operation tests ─────────────────────────────────────────────────────

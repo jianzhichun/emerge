@@ -105,15 +105,20 @@ def export_vertical(
         for py_file in src_pipelines.rglob("*.py"):
             rel = py_file.relative_to(src_pipelines)
             intent_sig = _file_to_intent_sig(connector, rel)
-            l_ts = local_ts.get(intent_sig, 0)
+            if not intent_sig or intent_sig not in local_ts:
+                continue
+            l_ts = local_ts[intent_sig]
             r_ts = remote_ts.get(intent_sig, 0)
             if l_ts >= r_ts:
                 dst_file = dst_pipelines / rel
                 dst_file.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(py_file, dst_file)
                 yaml_src = py_file.with_suffix(".yaml")
+                dst_yaml = dst_file.with_suffix(".yaml")
                 if yaml_src.exists():
-                    shutil.copy2(yaml_src, dst_file.with_suffix(".yaml"))
+                    shutil.copy2(yaml_src, dst_yaml)
+                elif dst_yaml.exists():
+                    dst_yaml.unlink()
 
     notes_src = src / "NOTES.md"
     if notes_src.exists():
@@ -157,7 +162,7 @@ def _export_spans_json(src: Path, dst: Path) -> None:
     merged = dict(existing_spans)
     for key, entry in local_spans.items():
         existing = merged.get(key)
-        if existing is None or entry.get("last_ts_ms", 0) >= existing.get("last_ts_ms", 0):
+        if not isinstance(existing, dict) or entry.get("last_ts_ms", 0) >= existing.get("last_ts_ms", 0):
             merged[key] = entry
 
     dst.mkdir(parents=True, exist_ok=True)
