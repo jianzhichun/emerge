@@ -23,6 +23,16 @@ python3 scripts/repl_admin.py runner-deploy --target-profile mycader-1
 
 # Runner status
 python3 scripts/repl_admin.py runner-status --pretty
+
+# Memory Hub — first-time setup (interactive wizard, run once per machine)
+python3 scripts/emerge_sync.py setup
+
+# Memory Hub — start sync agent (background poll loop, restart after any scripts/ change)
+python3 scripts/emerge_sync.py run
+
+# Memory Hub — manual sync for all selected connectors (or one specific connector)
+python3 scripts/emerge_sync.py sync
+python3 scripts/emerge_sync.py sync gmail
 ```
 
 ## Architecture
@@ -85,6 +95,9 @@ Integration tests go in `test_mcp_tools_integration.py` and call `EmergeDaemon.c
 - `ObserverPlugin` (`scripts/observer_plugin.py`) is the ABC for all operator observation. `AdapterRegistry` loads built-in observers (`scripts/observers/`) and vertical adapters from `~/.emerge/adapters/<vertical>/adapter.py`. Vertical adapters are user-authored Python files that subclass `ObserverPlugin` (not shipped, authored per-user).
 - `EventBus`: `~/.emerge/operator-events/<machine_id>/events.jsonl` — append-only. Written via `POST /operator-event` on the remote runner. `session_role=monitor_sub` events are filtered by `PatternDetector` to prevent AI self-monitoring.
 - **Silence principle (operator interruption):** Show a popup (`show_notify`) only when the operator's input genuinely changes the outcome — intent is unclear, or the action is irreversible and high-risk. Never show a popup for: execution started/in-progress/completed, read-only operations (`icc_read`, state queries), status updates, or errors CC can resolve autonomously. Default is silence; interrupt only when necessary.
+- **Memory Hub sync queue contract**: `sync-queue.jsonl` carries exactly two event types — `stable` (written by daemon on policy promotion, consumed by `_run_stable_events`) and `pull_requested` (written by `icc_hub sync`, consumed by `_run_stable_events`). Never write other event types to the queue; unconsumed events accumulate without bound.
+- **Memory Hub conflict resolution states**: `pending` → user calls `icc_hub resolve` → `resolved` → emerge_sync applies it → `applied`. "ours" leaves the file at HEAD (no-op). "theirs" uses `git show origin/<branch>:<file>` to write the remote version. "skip" marks applied without any git op. Never re-attempt pull_flow for a connector that had a push conflict in the same cycle.
+- **Memory Hub never syncs**: `pipelines-registry.json`, `span-candidates.json`, `state.json`, operator-events, credentials. Only pipeline `.py`/`.yaml` files, `NOTES.md`, and a stripped `spans.json` (stable entries only) are shared.
 
 ## Documentation Update Rules
 
@@ -103,4 +116,5 @@ When making code changes, keep these in sync:
 | Test count change | `README.md` badge + Quick verification baseline |
 | New observer or adapter interface change | `skills/writing-vertical-adapter/SKILL.md` |
 | OperatorMonitor env var change | README.md env var table + `skills/operator-monitor-debug/SKILL.md` |
-| Memory Hub config or sync flow change | `README.md` component table + `CLAUDE.md` Architecture section |
+| Memory Hub config or sync flow change | `README.md` component table + `CLAUDE.md` Architecture section + `CLAUDE.md` Key Invariants |
+| New `icc_hub` action or queue event type | `README.md` MCP Tools table + `CLAUDE.md` Key Invariants (queue contract) |

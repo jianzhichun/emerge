@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/version-v0.3.44-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-353%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-377%20passing-brightgreen?logo=pytest)
 
 **Emerge** 解决的核心问题是：AI 操作员反复执行相同操作但无法学习——每次都要重新推理。它通过**双向飞轮**将重复工作结晶化为确定性管道：**前向飞轮**（`icc_exec`/`icc_span_open` 追踪执行 → policy 促进 explore→canary→stable → 自动结晶化为 `.py+.yaml` 管道 → 后续零 LLM 推理），**反向飞轮**（`OperatorMonitor` 观察人类操作员 → `PatternDetector` 检测重复模式 → 弹出询问 → 任务交付 AI 接管）。
 
@@ -240,6 +240,7 @@ flowchart LR
 | `icc_goal_ingest` | Submit goal events (`human_edit` / `hook_payload` / `system_*`) to Goal Control Plane. Returns acceptance decision + active snapshot metadata.                                               |
 | `icc_goal_read`   | Read active goal snapshot plus recent goal ledger events.                                                                                                                                    |
 | `icc_goal_rollback` | Roll back active goal to a previous goal event id and produce a new snapshot version.                                                                                                      |
+| `icc_hub`           | Memory Hub management: `list` config · `add`/`remove` connectors · `sync` (enqueue push+pull) · `status` (pending conflicts + awaiting-application count) · `resolve` conflicts (`ours`/`theirs`/`skip`) · `setup` (print wizard instructions). |
 
 > `icc_read` / `icc_write` are deprecated and removed from schema. Use `icc_span_open` instead — the span bridge executes the pipeline automatically when stable.
 
@@ -267,8 +268,9 @@ flowchart LR
 | Distiller                | `scripts/distiller.py`                                                                                                                         |
 | Operator monitor         | `scripts/operator_monitor.py`                                                                                                                  |
 | Ops / bootstrap          | `scripts/repl_admin.py`                                                                                                                        |
+| Memory Hub sync agent    | `scripts/emerge_sync.py`, `scripts/hub_config.py` — bidirectional connector asset sync via orphan-branch git repo; `icc_hub` MCP tool in daemon |
 | Test connector (mock)    | `tests/connectors/mock/pipelines/`                                                                                                             |
-| Slash commands           | `commands/` (`init`, `cockpit`, `runner-status`, `import`, `export`)                                                                            |
+| Slash commands           | `commands/` (`init`, `cockpit`, `runner-status`, `import`, `export`, `hub`)                                                                     |
 | Skills                   | `skills/` (`initializing-vertical-flywheel`, `remote-runner-dev`, `writing-vertical-adapter`, `operator-monitor-debug`, `policy-optimization`) |
 | Reference (submodule)    | `references/claude-code`                                                                                                                       |
 
@@ -283,6 +285,7 @@ flowchart LR
 | `/runner-status` | Show remote runner health status                                                                 |
 | `/import`        | Import a connector asset package zip into local connector/pipeline state                         |
 | `/export`        | Export a connector asset package zip (connector files + registry entries)                        |
+| `/hub`           | Memory Hub status — show pending conflicts, awaiting-application count, and resolution guidance  |
 
 
 ## Cockpit Preview
@@ -324,7 +327,7 @@ flowchart LR
 python -m pytest tests -q
 ```
 
-Current baseline: **332** tests passing.
+Current baseline: **377** tests passing.
 
 ## Repository layout
 
@@ -346,7 +349,7 @@ references/         External reference codebases (git submodule)
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 🟢 shipped  | **Solo Flywheel** Per-session learning on a single machine. `icc_exec` accumulates history → `icc_crystallize` generates a pipeline → explore → canary → stable. Stable pipelines short-circuit at the tool layer with zero LLM overhead. Remote runner dispatch included — daemon sends self-contained inline code, runner needs no connector files.                                                                                                                                                                                                                                                        |
 | 🟢 shipped  | **Operator Intelligence Loop** A reverse flywheel that observes the *human*, not just the AI. A background monitor audits operator behavior on a configurable time window (default 5 min) — surfacing a native GUI popup: *"you've done this 8 times today — why? want me to take it?"* Intent is captured, patterns are distilled into operator skill profiles, and repetitive sequences are handed off to the AI layer. The goal: progressively free operators from work that is mechanical, high-frequency, or already crystallized somewhere in the pipeline registry. Operator as author, not executor. |
-| 🟡 planned  | **Memory Hub** Stable pipelines are pure data. Publish by `intent_signature`, install with one command, aggregate community success / human-fix rates. Parameterized connectors strip local paths before publish. Diff-aware re-crystallize auto-demotes when the connector API changes.                                                                                                                                                                                                                                                                                                                     |
+| 🟢 shipped  | **Memory Hub** Bidirectional connector asset sync via self-hosted git orphan branch. Stable pipelines auto-push on policy promotion; periodic background pull keeps all machines in sync. Conflicts surfaced via `icc_hub status` and resolved with `ours`/`theirs`/`skip`. Assets shared: pipeline `.py`+`.yaml`, `NOTES.md`, stable `spans.json`. Never synced: policy registry, session state, credentials.                                                                                                                                                                                              |
 | 🟡 planned  | **Federated Execution Grid** Multiple runners with capability tags (`zwcad`, `cuda12`, `android-emu`). `RunnerRouter` picks by capability, not just URL. Failover to next capable host. Cross-session policy: a failure on one machine can demote the pipeline globally.                                                                                                                                                                                                                                                                                                                                     |
 | 🔮 research | **Split-Personality Flywheel** Today the flywheel crystallizes *actions* → deterministic pipelines (no LLM). Next: crystallize *reasoning patterns* → specialized subagent personas (compressed system prompt + tools + few-shot traces). Subagents dispatch to stable pipelines. Two tiers of crystallization — code where the task is deterministic, compressed mind where it isn't.                                                                                                                                                                                                                       |
 
