@@ -214,7 +214,9 @@ def truncate_jsonl_if_needed(path: "Path", max_lines: int, trigger_ratio: float 
 
     Reads the file once and rewrites only when the trigger threshold is crossed,
     so the amortised cost per append is O(1) for normal operation.
-    Silently ignores all errors (disk full, permissions, etc.).
+    Uses mkstemp + fsync + os.replace for crash-safe atomic rewrite (consistent
+    with all other write paths in the project).
+    Silently ignores all errors (disk full, permissions, etc.) — non-fatal.
     """
     try:
         if not path.exists():
@@ -224,9 +226,22 @@ def truncate_jsonl_if_needed(path: "Path", max_lines: int, trigger_ratio: float 
         if len(lines) <= int(max_lines * trigger_ratio):
             return
         trimmed = "\n".join(lines[-max_lines:]) + "\n"
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(trimmed, encoding="utf-8")
-        tmp.replace(path)
+        import tempfile as _tempfile
+        import os as _os
+        fd, tmp_path_str = _tempfile.mkstemp(
+            prefix=f"{path.stem}-", suffix=".jsonl.tmp", dir=str(path.parent)
+        )
+        _tmp = tmp_path_str
+        try:
+            with _os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(trimmed)
+                f.flush()
+                _os.fsync(f.fileno())
+            _os.replace(tmp_path_str, path)
+            _tmp = ""
+        finally:
+            if _tmp and _os.path.exists(_tmp):
+                _os.unlink(_tmp)
     except Exception:
-        pass
+        pass  # Non-fatal — truncation is a performance optimization only
 
