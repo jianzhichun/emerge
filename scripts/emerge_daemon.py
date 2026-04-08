@@ -111,6 +111,10 @@ class EmergeDaemon:
         self._root = resolved_root
         self._script_roots = self._resolve_script_roots()
         self._runner_router = RunnerRouter.from_env()  # cached; refreshed lazily via _get_runner_router()
+        # Coarse lock protecting concurrent read-modify-write operations on
+        # candidates.json and pipelines-registry.json. Always held for the
+        # full load→mutate→save cycle to prevent lost updates.
+        self._registry_lock = threading.Lock()
         from scripts.policy_config import load_settings, default_emerge_home
         from scripts.metrics import get_sink
         try:
@@ -1639,56 +1643,56 @@ class EmergeDaemon:
             return
         key = candidate_key
         registry_path = session_dir / "candidates.json"
-        registry = self._load_json_object(registry_path, root_key="candidates")
-        entry = registry["candidates"].get(
-            key,
-            {
-                "source": "exec",
-                "target_profile": target_profile,
-                "last_execution_path": execution_path,
-                "intent_signature": intent_signature,
-                "script_ref": script_ref or "<inline>",
-                "attempts": 0,
-                "successes": 0,
-                "verify_passes": 0,
-                "human_fixes": 0,
-                "degraded_count": 0,
-                "consecutive_failures": 0,
-                "recent_outcomes": [],
-                "total_calls": 0,
-                "last_ts_ms": 0,
-            },
-        )
-        # Store description if provided (first call wins; subsequent calls with description update it)
-        if description:
-            entry["description"] = description
-        entry["last_execution_path"] = execution_path
-        entry["total_calls"] = int(entry.get("total_calls", 0)) + 1
-        if is_error:
-            sampled_in_policy = True
-        if sampled_in_policy:
-            entry["attempts"] += 1
-            if not is_error:
-                entry["successes"] += 1
-            if trusted_verify_passed:
-                entry["verify_passes"] += 1
-            # human_fixes incremented via _increment_human_fix() on icc_reconcile(outcome=correct)
-        is_degraded = False
-        failed_attempt = (is_error or is_degraded) and sampled_in_policy
-        if sampled_in_policy and is_degraded:
-            entry["degraded_count"] += 1
-        if sampled_in_policy:
-            entry["consecutive_failures"] = (
-                int(entry.get("consecutive_failures", 0)) + 1 if failed_attempt else 0
+        with self._registry_lock:
+            registry = self._load_json_object(registry_path, root_key="candidates")
+            entry = registry["candidates"].get(
+                key,
+                {
+                    "source": "exec",
+                    "target_profile": target_profile,
+                    "last_execution_path": execution_path,
+                    "intent_signature": intent_signature,
+                    "script_ref": script_ref or "<inline>",
+                    "attempts": 0,
+                    "successes": 0,
+                    "verify_passes": 0,
+                    "human_fixes": 0,
+                    "degraded_count": 0,
+                    "consecutive_failures": 0,
+                    "recent_outcomes": [],
+                    "total_calls": 0,
+                    "last_ts_ms": 0,
+                },
             )
-            recent = list(entry.get("recent_outcomes", []))
-            recent.append(0 if failed_attempt else 1)
-            entry["recent_outcomes"] = recent[-WINDOW_SIZE:]
-        entry["last_ts_ms"] = event["ts_ms"]
-        registry["candidates"][key] = entry
-
-        self._atomic_write_json(registry_path, registry)
-        self._update_pipeline_registry(candidate_key=key, entry=entry)
+            # Store description if provided (first call wins; subsequent calls with description update it)
+            if description:
+                entry["description"] = description
+            entry["last_execution_path"] = execution_path
+            entry["total_calls"] = int(entry.get("total_calls", 0)) + 1
+            if is_error:
+                sampled_in_policy = True
+            if sampled_in_policy:
+                entry["attempts"] += 1
+                if not is_error:
+                    entry["successes"] += 1
+                if trusted_verify_passed:
+                    entry["verify_passes"] += 1
+                # human_fixes incremented via _increment_human_fix() on icc_reconcile(outcome=correct)
+            is_degraded = False
+            failed_attempt = (is_error or is_degraded) and sampled_in_policy
+            if sampled_in_policy and is_degraded:
+                entry["degraded_count"] += 1
+            if sampled_in_policy:
+                entry["consecutive_failures"] = (
+                    int(entry.get("consecutive_failures", 0)) + 1 if failed_attempt else 0
+                )
+                recent = list(entry.get("recent_outcomes", []))
+                recent.append(0 if failed_attempt else 1)
+                entry["recent_outcomes"] = recent[-WINDOW_SIZE:]
+            entry["last_ts_ms"] = event["ts_ms"]
+            registry["candidates"][key] = entry
+            self._atomic_write_json(registry_path, registry)
+            self._update_pipeline_registry(candidate_key=key, entry=entry)
 
     def _record_pipeline_event(
         self,
@@ -1765,77 +1769,77 @@ class EmergeDaemon:
             pass
 
         registry_path = session_dir / "candidates.json"
-        registry = self._load_json_object(registry_path, root_key="candidates")
-        entry = registry["candidates"].get(
-            key,
-            {
-                "source": "pipeline",
-                "pipeline_id": pipeline_id,
-                "target_profile": target_profile,
-                "last_execution_path": execution_path,
-                "intent_signature": intent_signature or pipeline_id,
-                "script_ref": pipeline_id,
-                "attempts": 0,
-                "successes": 0,
-                "verify_passes": 0,
-                "human_fixes": 0,
-                "degraded_count": 0,
-                "consecutive_failures": 0,
-                "recent_outcomes": [],
-                "total_calls": 0,
-                "policy_enforced_count": 0,
-                "stop_triggered_count": 0,
-                "rollback_executed_count": 0,
-                "last_policy_action": "none",
-                "last_ts_ms": 0,
-            },
-        )
-        # Pipeline path is authoritative: always mark source=pipeline so
-        # synthesis_ready is never set for an already-crystallized intent.
-        entry["source"] = "pipeline"
-        entry["last_execution_path"] = execution_path
-        # Store description from YAML (never overwrite existing)
-        if pipeline_description and not entry.get("description"):
-            entry["description"] = pipeline_description
-        policy_enforced = bool(result.get("policy_enforced", False))
-        stop_triggered = bool(result.get("stop_triggered", False))
-        rollback_executed = bool(result.get("rollback_executed", False))
-        if policy_enforced:
-            entry["policy_enforced_count"] = int(entry.get("policy_enforced_count", 0)) + 1
-        if stop_triggered:
-            entry["stop_triggered_count"] = int(entry.get("stop_triggered_count", 0)) + 1
-        if rollback_executed:
-            entry["rollback_executed_count"] = int(entry.get("rollback_executed_count", 0)) + 1
-        if rollback_executed:
-            entry["last_policy_action"] = "rollback"
-        elif stop_triggered:
-            entry["last_policy_action"] = "stop"
-        else:
-            entry["last_policy_action"] = "none"
-        entry["total_calls"] = int(entry.get("total_calls", 0)) + 1
-        if sampled_in_policy:
-            entry["attempts"] += 1
-            if not is_error:
-                entry["successes"] += 1
-            if event["verify_passed"]:
-                entry["verify_passes"] += 1
-            # human_fixes incremented via _increment_human_fix() on icc_reconcile(outcome=correct)
-        is_degraded = str(result.get("verification_state", "")).lower() == "degraded"
-        failed_attempt = (is_error or is_degraded) and sampled_in_policy
-        if sampled_in_policy and is_degraded:
-            entry["degraded_count"] += 1
-        if sampled_in_policy:
-            entry["consecutive_failures"] = (
-                int(entry.get("consecutive_failures", 0)) + 1 if failed_attempt else 0
+        with self._registry_lock:
+            registry = self._load_json_object(registry_path, root_key="candidates")
+            entry = registry["candidates"].get(
+                key,
+                {
+                    "source": "pipeline",
+                    "pipeline_id": pipeline_id,
+                    "target_profile": target_profile,
+                    "last_execution_path": execution_path,
+                    "intent_signature": intent_signature or pipeline_id,
+                    "script_ref": pipeline_id,
+                    "attempts": 0,
+                    "successes": 0,
+                    "verify_passes": 0,
+                    "human_fixes": 0,
+                    "degraded_count": 0,
+                    "consecutive_failures": 0,
+                    "recent_outcomes": [],
+                    "total_calls": 0,
+                    "policy_enforced_count": 0,
+                    "stop_triggered_count": 0,
+                    "rollback_executed_count": 0,
+                    "last_policy_action": "none",
+                    "last_ts_ms": 0,
+                },
             )
-            recent = list(entry.get("recent_outcomes", []))
-            recent.append(0 if failed_attempt else 1)
-            entry["recent_outcomes"] = recent[-WINDOW_SIZE:]
-        entry["last_ts_ms"] = event["ts_ms"]
-        registry["candidates"][key] = entry
-
-        self._atomic_write_json(registry_path, registry)
-        self._update_pipeline_registry(candidate_key=key, entry=entry)
+            # Pipeline path is authoritative: always mark source=pipeline so
+            # synthesis_ready is never set for an already-crystallized intent.
+            entry["source"] = "pipeline"
+            entry["last_execution_path"] = execution_path
+            # Store description from YAML (never overwrite existing)
+            if pipeline_description and not entry.get("description"):
+                entry["description"] = pipeline_description
+            policy_enforced = bool(result.get("policy_enforced", False))
+            stop_triggered = bool(result.get("stop_triggered", False))
+            rollback_executed = bool(result.get("rollback_executed", False))
+            if policy_enforced:
+                entry["policy_enforced_count"] = int(entry.get("policy_enforced_count", 0)) + 1
+            if stop_triggered:
+                entry["stop_triggered_count"] = int(entry.get("stop_triggered_count", 0)) + 1
+            if rollback_executed:
+                entry["rollback_executed_count"] = int(entry.get("rollback_executed_count", 0)) + 1
+            if rollback_executed:
+                entry["last_policy_action"] = "rollback"
+            elif stop_triggered:
+                entry["last_policy_action"] = "stop"
+            else:
+                entry["last_policy_action"] = "none"
+            entry["total_calls"] = int(entry.get("total_calls", 0)) + 1
+            if sampled_in_policy:
+                entry["attempts"] += 1
+                if not is_error:
+                    entry["successes"] += 1
+                if event["verify_passed"]:
+                    entry["verify_passes"] += 1
+                # human_fixes incremented via _increment_human_fix() on icc_reconcile(outcome=correct)
+            is_degraded = str(result.get("verification_state", "")).lower() == "degraded"
+            failed_attempt = (is_error or is_degraded) and sampled_in_policy
+            if sampled_in_policy and is_degraded:
+                entry["degraded_count"] += 1
+            if sampled_in_policy:
+                entry["consecutive_failures"] = (
+                    int(entry.get("consecutive_failures", 0)) + 1 if failed_attempt else 0
+                )
+                recent = list(entry.get("recent_outcomes", []))
+                recent.append(0 if failed_attempt else 1)
+                entry["recent_outcomes"] = recent[-WINDOW_SIZE:]
+            entry["last_ts_ms"] = event["ts_ms"]
+            registry["candidates"][key] = entry
+            self._atomic_write_json(registry_path, registry)
+            self._update_pipeline_registry(candidate_key=key, entry=entry)
 
     def _update_pipeline_registry(
         self,
@@ -2140,17 +2144,18 @@ class EmergeDaemon:
         candidates_path = session_dir / "candidates.json"
         if not candidates_path.exists():
             return
-        registry = self._load_json_object(candidates_path, root_key="candidates")
-        entry = registry["candidates"].get(intent_signature)
-        if not isinstance(entry, dict):
-            return
-        entry["human_fixes"] = int(entry.get("human_fixes", 0)) + 1
-        registry["candidates"][intent_signature] = entry
-        self._atomic_write_json(candidates_path, registry)
-        try:
-            self._update_pipeline_registry(candidate_key=intent_signature, entry=entry)
-        except Exception:
-            pass
+        with self._registry_lock:
+            registry = self._load_json_object(candidates_path, root_key="candidates")
+            entry = registry["candidates"].get(intent_signature)
+            if not isinstance(entry, dict):
+                return
+            entry["human_fixes"] = int(entry.get("human_fixes", 0)) + 1
+            registry["candidates"][intent_signature] = entry
+            self._atomic_write_json(candidates_path, registry)
+            try:
+                self._update_pipeline_registry(candidate_key=intent_signature, entry=entry)
+            except Exception:
+                pass
 
     def _resolve_script_roots(self) -> list[Path]:
         raw = os.environ.get("EMERGE_SCRIPT_ROOTS", "").strip()

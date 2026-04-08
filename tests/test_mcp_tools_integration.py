@@ -2520,3 +2520,43 @@ def test_frozen_pipeline_skips_auto_promotion(tmp_path, monkeypatch):
     )
     data = json.loads(reg_path.read_text())
     assert data["pipelines"][key]["status"] == old_status
+
+
+def test_concurrent_exec_events_do_not_lose_attempts(tmp_path, monkeypatch):
+    """Two threads calling _record_exec_event concurrently must not lose counts."""
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon()
+    base_args = {
+        "intent_signature": "zwcad.read.state",
+        "code": "__result = 1",
+        "target_profile": "default",
+        "description": "",
+    }
+    fake_result = {"isError": False}
+    errors = []
+
+    def record():
+        try:
+            daemon._record_exec_event(
+                arguments=base_args,
+                result=fake_result,
+                target_profile="default",
+                mode="inline_code",
+                execution_path="local",
+                sampled_in_policy=True,
+                candidate_key="zwcad.read.state",
+            )
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=record) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"Errors during concurrent execution: {errors}"
+    session_dir = tmp_path / daemon._base_session_id
+    reg = json.loads((session_dir / "candidates.json").read_text())
+    assert reg["candidates"]["zwcad.read.state"]["attempts"] == 20, \
+        f"Expected 20 attempts, got {reg['candidates']['zwcad.read.state']['attempts']} — lost updates!"
