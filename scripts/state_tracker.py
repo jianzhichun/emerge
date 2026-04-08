@@ -89,12 +89,18 @@ class StateTracker:
         text = str(risk).strip()
         if not text:
             return
+        # Dedup key includes intent_signature: same message from different intents
+        # creates separate risk entries (they represent different failure sites).
+        # No-intent risks (intent_signature=None or "") dedup on text alone.
+        dedup_key = f"{text}\x00{intent_signature or ''}"
         for existing in self.state["open_risks"]:
-            if isinstance(existing, dict) and existing.get("text") == text:
+            if isinstance(existing, dict):
+                existing_key = f"{existing.get('text', '')}\x00{existing.get('intent_signature', '') or ''}"
+                if existing_key == dedup_key:
+                    return
+            elif isinstance(existing, str) and existing == text and not (intent_signature or ""):
                 return
-            if isinstance(existing, str) and existing == text:
-                return
-        risk_id = "r-" + hashlib.sha256(text.encode()).hexdigest()[:12]
+        risk_id = "r-" + hashlib.sha256(dedup_key.encode()).hexdigest()[:12]
         self.state["open_risks"].append(
             {
                 "risk_id": risk_id,
