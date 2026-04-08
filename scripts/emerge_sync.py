@@ -294,3 +294,304 @@ def git_setup_worktree(worktree: Path, remote: str, branch: str, author: str) ->
     )
     _git(["push", "-u", "origin", branch], cwd=worktree)
     return {"ok": True, "action": "created"}
+
+
+# ── Conflict detection ──────────────────────────────────────────────────────
+
+def _build_conflict_entries(
+    conflict_files: list[str],
+    connector: str,
+    pipelines_registry: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Build structured conflict entries with metadata for AI analysis."""
+    entries = []
+    for file_path in conflict_files:
+        cid = new_conflict_id()
+        entry: dict[str, Any] = {
+            "conflict_id": cid,
+            "connector": connector,
+            "file": file_path,
+            "status": "pending",
+            "resolution": None,
+            "ours_ts_ms": int(time.time() * 1000),
+            "theirs_ts_ms": 0,
+        }
+        if pipelines_registry:
+            mode = "write" if "/write/" in file_path else "read"
+            pipeline_key = f"{connector}.{mode}.{Path(file_path).stem}"
+            reg_entry = pipelines_registry.get("pipelines", {}).get(pipeline_key)
+            if isinstance(reg_entry, dict):
+                entry["ours_success_rate"] = reg_entry.get("success_rate", 0.0)
+                entry["ours_attempts"] = reg_entry.get("attempts", 0)
+        entries.append(entry)
+    return entries
+
+
+def record_conflicts(connector: str, conflict_files: list[str]) -> None:
+    """Write conflict entries to pending-conflicts.json and enqueue notification event."""
+    data = load_pending_conflicts()
+    new_entries = _build_conflict_entries(conflict_files, connector)
+    data["conflicts"].extend(new_entries)
+    save_pending_conflicts(data)
+    append_sync_event({
+        "event": "conflicts_pending",
+        "connector": connector,
+        "count": len(new_entries),
+        "ts_ms": int(time.time() * 1000),
+    })
+    logger.warning(
+        "Hub sync: %d conflict(s) for connector '%s' — resolve via icc_hub(action='status')",
+        len(new_entries), connector,
+    )
+
+
+# ── Resolution application ──────────────────────────────────────────────────
+
+def _apply_pending_resolutions(worktree: Path) -> bool:
+    """Apply any resolved conflicts via git checkout --ours/--theirs.
+
+    Returns True if any resolutions were applied.
+    """
+    data = load_pending_conflicts()
+    resolved = [
+        c for c in data.get("conflicts", [])
+        if c.get("status") == "resolved" and c.get("resolution") in ("ours", "theirs")
+    ]
+    if not resolved:
+        return False
+
+    for conflict in resolved:
+        file_path = conflict["file"]
+        choice = "--ours" if conflict["resolution"] == "ours" else "--theirs"
+        result = _git(["checkout", choice, file_path], cwd=worktree, check=False)
+        if result.returncode == 0:
+            _git(["add", file_path], cwd=worktree, check=False)
+            conflict["status"] = "applied"
+        else:
+            logger.warning("Failed to apply resolution for %s: %s", file_path, result.stderr.strip())
+
+    save_pending_conflicts(data)
+
+    status = _git(["status", "--porcelain"], cwd=worktree, check=False)
+    if status.stdout.strip():
+        _git(["commit", "-m", "hub: apply conflict resolutions"], cwd=worktree, check=False)
+    return True
+
+
+# ── Push and pull flows ─────────────────────────────────────────────────────
+
+def push_flow(
+    connector: str,
+    *,
+    connectors_root: Path | None = None,
+    hub_worktree: Path | None = None,
+) -> dict[str, Any]:
+    """Full push flow: merge remote → export local → git commit+push."""
+    cfg = load_hub_config()
+    worktree = hub_worktree or hub_worktree_path()
+    conns_root = connectors_root or _connectors_root()
+    author = cfg.get("author", "emerge-sync <emerge-sync@local>")
+    branch = cfg.get("branch", "emerge-hub")
+
+    merge_result = git_merge_remote(worktree, branch, author=author)
+    if merge_result.get("conflict"):
+        record_conflicts(connector, merge_result["files"])
+        return {"ok": False, "conflict": True, "files": merge_result["files"]}
+    if not merge_result.get("ok"):
+        return {"ok": False, "error": merge_result.get("error", "merge failed")}
+
+    export_vertical(connector, connectors_root=conns_root, hub_worktree=worktree)
+
+    result = git_push(worktree, branch, connector=connector, author=author)
+    if result.get("ok"):
+        append_sync_event({
+            "event": "consumed",
+            "connector": connector,
+            "ts_ms": int(time.time() * 1000),
+        })
+    return result
+
+
+def pull_flow(
+    connector: str,
+    *,
+    connectors_root: Path | None = None,
+    hub_worktree: Path | None = None,
+) -> dict[str, Any]:
+    """Full pull flow: fetch → check for changes → merge → import."""
+    cfg = load_hub_config()
+    worktree = hub_worktree or hub_worktree_path()
+    conns_root = connectors_root or _connectors_root()
+    author = cfg.get("author", "emerge-sync <emerge-sync@local>")
+    branch = cfg.get("branch", "emerge-hub")
+
+    if not git_has_remote_changes(worktree, branch):
+        return {"ok": True, "action": "up_to_date"}
+
+    merge_result = git_merge_remote(worktree, branch, author=author)
+    if merge_result.get("conflict"):
+        record_conflicts(connector, merge_result["files"])
+        return {"ok": False, "conflict": True, "files": merge_result["files"]}
+    if not merge_result.get("ok"):
+        return {"ok": False, "error": merge_result.get("error", "merge failed")}
+
+    import_vertical(connector, connectors_root=conns_root, hub_worktree=worktree)
+
+    append_sync_event({
+        "event": "reload",
+        "connector": connector,
+        "ts_ms": int(time.time() * 1000),
+    })
+    return {"ok": True, "action": "imported"}
+
+
+# ── Poll loop ──────────────────────────────────────────────────────────────
+
+def _run_stable_events() -> None:
+    """Consume 'stable' and 'pull_requested' events from sync-queue."""
+    cfg = load_hub_config()
+    worktree = hub_worktree_path()
+    if worktree.exists():
+        _apply_pending_resolutions(worktree)
+    selected = set(cfg.get("selected_verticals", []))
+    events = consume_sync_events(
+        lambda e: e.get("event") in ("stable", "pull_requested") and e.get("connector") in selected
+    )
+    push_processed: set[str] = set()
+    pull_requested: set[str] = set()
+    for event in events:
+        connector = event["connector"]
+        if event.get("event") == "pull_requested":
+            pull_requested.add(connector)
+            continue
+        if connector in push_processed:
+            continue
+        push_processed.add(connector)
+        try:
+            result = push_flow(connector)
+            if result.get("ok"):
+                logger.info("Hub push OK for %s", connector)
+            elif result.get("conflict"):
+                logger.warning("Hub push conflict for %s — %d file(s)", connector, len(result.get("files", [])))
+            else:
+                logger.error("Hub push failed for %s: %s", connector, result.get("error", "unknown"))
+        except Exception as exc:
+            logger.error("Hub push exception for %s: %s", connector, exc)
+
+    for connector in pull_requested:
+        try:
+            result = pull_flow(connector)
+            if result.get("action") == "imported":
+                logger.info("Hub pull OK for %s (manual sync)", connector)
+        except Exception as exc:
+            logger.error("Hub pull exception for %s: %s", connector, exc)
+
+
+def _run_pull_cycle() -> None:
+    """Pull updates for all selected verticals."""
+    cfg = load_hub_config()
+    for connector in cfg.get("selected_verticals", []):
+        try:
+            result = pull_flow(connector)
+            if result.get("action") == "imported":
+                logger.info("Hub pull: imported updates for %s", connector)
+        except Exception as exc:
+            logger.error("Hub pull exception for %s: %s", connector, exc)
+
+
+def run_poll_loop(stop_event: threading.Event | None = None) -> None:
+    """Main sync agent loop. Polls stable events and runs periodic pull.
+
+    Note: poll_interval is read once at startup. Restart the agent to pick up
+    config changes made via icc_hub add/remove.
+    """
+    cfg = load_hub_config()
+    poll_interval = int(cfg.get("poll_interval_seconds", 300))
+    last_pull = 0.0
+    logger.info("emerge_sync: poll loop started (interval=%ds)", poll_interval)
+    while True:
+        if stop_event and stop_event.is_set():
+            break
+        try:
+            _run_stable_events()
+            now = time.time()
+            if now - last_pull >= poll_interval:
+                _run_pull_cycle()
+                last_pull = now
+        except Exception as exc:
+            logger.error("emerge_sync poll loop error: %s", exc)
+        time.sleep(10)
+
+
+# ── CLI entry point ─────────────────────────────────────────────────────────
+
+def cmd_setup() -> None:
+    """Interactive setup wizard."""
+    print("emerge_sync setup")
+    remote = input("Remote URL (e.g. git@quasar:team/hub.git): ").strip()
+    branch = input("Branch name [emerge-hub]: ").strip() or "emerge-hub"
+    author = input("Author (e.g. alice <alice@team.com>): ").strip()
+
+    conns_root = _connectors_root()
+    available: list[str] = []
+    if conns_root.exists():
+        available = [d.name for d in conns_root.iterdir() if d.is_dir()]
+    if not available:
+        print("No local connectors found. Add connectors first.")
+        return
+    print(f"Available connectors: {', '.join(available)}")
+    selected_input = input("Select connectors (comma-separated): ").strip()
+    selected = [s.strip() for s in selected_input.split(",") if s.strip() in available]
+
+    cfg = {
+        "remote": remote,
+        "branch": branch,
+        "poll_interval_seconds": 300,
+        "selected_verticals": selected,
+        "author": author,
+    }
+    save_hub_config(cfg)
+
+    worktree = hub_worktree_path()
+    print(f"Setting up hub worktree at {worktree}...")
+    result = git_setup_worktree(worktree, remote, branch, author)
+    print(f"Worktree ready: {result['action']}")
+    print("Running initial pull...")
+    for connector in selected:
+        pull_flow(connector)
+    print("Setup complete.")
+
+
+def cmd_sync(connector: str | None = None) -> None:
+    cfg = load_hub_config()
+    verticals = [connector] if connector else cfg.get("selected_verticals", [])
+    for c in verticals:
+        result = push_flow(c)
+        if result.get("ok"):
+            print(f"sync {c}: ok (push)")
+        elif result.get("conflict"):
+            print(f"sync {c}: conflict — resolve via icc_hub(action='status')")
+        else:
+            print(f"sync {c}: error — {result.get('error', 'unknown')}")
+        pull_result = pull_flow(c)
+        if pull_result.get("action") == "imported":
+            print(f"sync {c}: ok (pull — imported updates)")
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    args = sys.argv[1:]
+    if not args or args[0] == "run":
+        if not is_configured():
+            print("Not configured. Run: python scripts/emerge_sync.py setup")
+            sys.exit(1)
+        run_poll_loop()
+    elif args[0] == "setup":
+        cmd_setup()
+    elif args[0] == "sync":
+        connector_arg = args[1] if len(args) > 1 else None
+        cmd_sync(connector_arg)
+    else:
+        print(f"Unknown command: {args[0]}")
+        print("Usage: emerge_sync.py [run|setup|sync [connector]]")
+        sys.exit(1)

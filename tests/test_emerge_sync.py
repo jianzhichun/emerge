@@ -114,21 +114,28 @@ def git_setup(tmp_path, monkeypatch):
 
 
 def _init_hub_worktree(worktree: Path, remote: str, branch: str = "emerge-hub") -> None:
-    """Bootstrap hub worktree with orphan branch and push to remote using subprocess directly."""
+    """Bootstrap hub worktree — clones existing branch or creates orphan if branch doesn't exist yet."""
     worktree.mkdir(parents=True, exist_ok=True)
 
-    def _run(*args: str) -> None:
-        subprocess.run(list(args), cwd=str(worktree), check=True, capture_output=True,
-                       env={**os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@test.com",
-                            "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@test.com"})
+    _git_env = {**os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@test.com",
+                "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@test.com"}
+
+    def _run(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+        return subprocess.run(list(args), cwd=str(worktree), check=check,
+                              capture_output=True, env=_git_env)
 
     _run("git", "init")
     _run("git", "config", "user.name", "test")
     _run("git", "config", "user.email", "test@test.com")
     _run("git", "remote", "add", "origin", remote)
-    _run("git", "checkout", "--orphan", branch)
-    _run("git", "commit", "--allow-empty", "-m", "chore: init emerge-hub")
-    _run("git", "push", "-u", "origin", branch)
+
+    fetch = _run("git", "fetch", "origin", branch, check=False)
+    if fetch.returncode == 0:
+        _run("git", "checkout", "-b", branch, f"origin/{branch}")
+    else:
+        _run("git", "checkout", "--orphan", branch)
+        _run("git", "commit", "--allow-empty", "-m", "chore: init emerge-hub")
+        _run("git", "push", "-u", "origin", branch)
 
 
 def test_git_fetch_and_detect_no_changes(git_setup):
@@ -152,3 +159,37 @@ def test_git_push_commits_and_updates_remote(git_setup, connector_home):
     result = git_push(worktree, "emerge-hub", connector="gmail", author="test <test@test.com>")
     assert result["ok"] is True
     assert result.get("pushed") is True
+
+
+# ── Push/pull flow tests ────────────────────────────────────────────────────
+
+def test_push_flow_exports_and_pushes(git_setup, connector_home):
+    from scripts.emerge_sync import push_flow
+    bare_remote, worktree, hub_home = git_setup
+    connectors, _ = connector_home
+    _make_connector(connectors, "gmail")
+    _init_hub_worktree(worktree, str(bare_remote))
+
+    result = push_flow("gmail", connectors_root=connectors, hub_worktree=worktree)
+    assert result["ok"] is True
+
+
+def test_pull_flow_imports_remote_changes(git_setup, connector_home):
+    from scripts.emerge_sync import pull_flow, push_flow
+    bare_remote, worktree_a, hub_home = git_setup
+    connectors_a, _ = connector_home
+
+    # Initialize BOTH worktrees before machine A pushes so machine B is behind after the push
+    connectors_b = hub_home / "connectors_b"
+    worktree_b = hub_home / "worktree_b"
+    _init_hub_worktree(worktree_a, str(bare_remote))
+    _init_hub_worktree(worktree_b, str(bare_remote))
+
+    # Machine A pushes new content — remote now has files that machine B doesn't
+    _make_connector(connectors_a, "gmail")
+    push_flow("gmail", connectors_root=connectors_a, hub_worktree=worktree_a)
+
+    # Machine B pulls the new content
+    result = pull_flow("gmail", connectors_root=connectors_b, hub_worktree=worktree_b)
+    assert result["ok"] is True
+    assert (connectors_b / "gmail" / "pipelines" / "read" / "fetch.py").exists()
