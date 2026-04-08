@@ -110,7 +110,6 @@ class EmergeDaemon:
         self.pipeline = PipelineEngine(root=resolved_root)
         self._root = resolved_root
         self._script_roots = self._resolve_script_roots()
-        self._runner_router = RunnerRouter.from_env()  # cached; refreshed lazily via _get_runner_router()
         # Coarse lock protecting concurrent read-modify-write operations on
         # candidates.json and pipelines-registry.json. Always held for the
         # full load→mutate→save cycle to prevent lost updates.
