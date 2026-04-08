@@ -2785,14 +2785,39 @@ def test_icc_hub_status_shows_pending_conflicts(tmp_path, monkeypatch):
     save_hub_config({"remote": "git@x:y.git", "selected_verticals": ["gmail"]})
     save_pending_conflicts({"conflicts": [
         {"conflict_id": "abc", "connector": "gmail", "file": "fetch.py",
-         "status": "pending", "resolution": None, "ours_ts_ms": 1, "theirs_ts_ms": 0}
+         "status": "pending", "resolution": None, "ours_ts_ms": 1, "theirs_ts_ms": 0},
+        {"conflict_id": "def", "connector": "gmail", "file": "send.py",
+         "status": "resolved", "resolution": "ours", "ours_ts_ms": 2, "theirs_ts_ms": 0},
     ]})
 
     daemon = EmergeDaemon(root=ROOT)
     result = daemon.call_tool("icc_hub", {"action": "status"})
     assert not result["isError"]
     payload = json.loads(result["content"][0]["text"])
-    assert payload["pending_conflicts"] == 1
+    assert payload["pending_conflicts"] == 1       # only "pending" counts here
+    assert payload["awaiting_application"] == 1   # "resolved" awaiting sync agent
+
+
+def test_icc_hub_resolve_does_not_leak_queue_event(tmp_path, monkeypatch):
+    """resolve action must NOT write any event to the sync queue (nothing consumes it)."""
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.hub_config import save_hub_config, save_pending_conflicts, sync_queue_path
+
+    monkeypatch.setenv("EMERGE_HUB_HOME", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir(parents=True)
+
+    save_hub_config({"remote": "git@x:y.git", "selected_verticals": ["gmail"]})
+    save_pending_conflicts({"conflicts": [
+        {"conflict_id": "abc", "connector": "gmail", "file": "fetch.py",
+         "status": "pending", "resolution": None, "ours_ts_ms": 1, "theirs_ts_ms": 0}
+    ]})
+
+    daemon = EmergeDaemon(root=ROOT)
+    daemon.call_tool("icc_hub", {"action": "resolve", "conflict_id": "abc", "resolution": "ours"})
+
+    qp = sync_queue_path()
+    assert not qp.exists() or qp.read_text().strip() == ""
 
 
 def test_icc_hub_sync_enqueues_push_and_pull(tmp_path, monkeypatch):

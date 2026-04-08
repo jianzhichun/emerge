@@ -277,3 +277,45 @@ def test_apply_pending_resolutions_ours_marks_applied_without_git_change(git_set
     assert (worktree / "connectors" / "gmail" / "NOTES.md").read_text(encoding="utf-8") == original_content
     updated = load_pending_conflicts()
     assert updated["conflicts"][0]["status"] == "applied"
+
+
+def test_run_stable_events_skips_pull_when_push_conflicts(git_setup, connector_home, monkeypatch):
+    """When push_flow records a conflict for a connector, pull_flow for the same connector
+    must be skipped in the same cycle to avoid duplicating conflict records."""
+    from unittest.mock import patch, MagicMock
+    from scripts.emerge_sync import _run_stable_events
+    from scripts.hub_config import append_sync_event, load_pending_conflicts, save_hub_config
+
+    bare_remote, worktree, hub_home = git_setup
+    connectors, _ = connector_home
+    monkeypatch.setenv("EMERGE_HUB_HOME", str(hub_home))
+
+    save_hub_config({
+        "remote": str(bare_remote),
+        "branch": "emerge-hub",
+        "selected_verticals": ["gmail"],
+        "author": "test <test@test.com>",
+    })
+
+    # Enqueue both a stable and a pull_requested event for gmail
+    append_sync_event({"event": "stable", "connector": "gmail", "pipeline": "fetch", "ts_ms": 1})
+    append_sync_event({"event": "pull_requested", "connector": "gmail", "ts_ms": 1})
+
+    pull_call_count = 0
+
+    def fake_push_flow(connector, **kwargs):
+        return {"ok": False, "conflict": True, "files": ["connectors/gmail/fetch.py"]}
+
+    def fake_pull_flow(connector, **kwargs):
+        nonlocal pull_call_count
+        pull_call_count += 1
+        return {"ok": True, "action": "up_to_date"}
+
+    with patch("scripts.emerge_sync.push_flow", fake_push_flow), \
+         patch("scripts.emerge_sync.pull_flow", fake_pull_flow), \
+         patch("scripts.emerge_sync._apply_pending_resolutions", return_value=False):
+        _run_stable_events()
+
+    assert pull_call_count == 0, (
+        "pull_flow must not be called when push_flow had a conflict for the same connector"
+    )

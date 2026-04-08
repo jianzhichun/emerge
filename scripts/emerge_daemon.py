@@ -1102,7 +1102,9 @@ class EmergeDaemon:
         if action == "status":
             cfg = load_hub_config()
             pending = load_pending_conflicts()
-            unresolved = [c for c in pending.get("conflicts", []) if c.get("status") == "pending"]
+            all_conflicts = pending.get("conflicts", [])
+            unresolved = [c for c in all_conflicts if c.get("status") == "pending"]
+            awaiting_apply = [c for c in all_conflicts if c.get("status") == "resolved"]
             queue_depth = 0
             qp = sync_queue_path()
             if qp.exists():
@@ -1113,6 +1115,7 @@ class EmergeDaemon:
                 "selected_verticals": cfg.get("selected_verticals", []),
                 "pending_conflicts": len(unresolved),
                 "conflicts": unresolved,
+                "awaiting_application": len(awaiting_apply),
                 "queue_depth": queue_depth,
             })
 
@@ -1153,12 +1156,6 @@ class EmergeDaemon:
             if not matched:
                 return self._tool_error(f"icc_hub resolve: conflict_id '{conflict_id}' not found")
             save_pending_conflicts(data)
-            append_sync_event({
-                "event": "resolution_applied",
-                "conflict_id": conflict_id,
-                "resolution": resolution,
-                "ts_ms": int(_time.time() * 1000),
-            })
             return self._tool_ok_json({"ok": True, "conflict_id": conflict_id, "resolution": resolution})
 
         return self._tool_error(

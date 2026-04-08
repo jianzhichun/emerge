@@ -484,6 +484,7 @@ def _run_stable_events() -> None:
         lambda e: e.get("event") in ("stable", "pull_requested") and e.get("connector") in selected
     )
     push_processed: set[str] = set()
+    push_conflicts: set[str] = set()
     pull_requested: set[str] = set()
     for event in events:
         connector = event["connector"]
@@ -498,6 +499,7 @@ def _run_stable_events() -> None:
             if result.get("ok"):
                 logger.info("Hub push OK for %s", connector)
             elif result.get("conflict"):
+                push_conflicts.add(connector)
                 logger.warning("Hub push conflict for %s — %d file(s)", connector, len(result.get("files", [])))
             else:
                 logger.error("Hub push failed for %s: %s", connector, result.get("error", "unknown"))
@@ -505,6 +507,11 @@ def _run_stable_events() -> None:
             logger.error("Hub push exception for %s: %s", connector, exc)
 
     for connector in pull_requested:
+        if connector in push_conflicts:
+            # Push already recorded conflicts for this connector; pulling against the same
+            # remote would trigger another conflicting merge and duplicate conflict entries.
+            logger.info("Hub pull skipped for %s — unresolved push conflict pending", connector)
+            continue
         try:
             result = pull_flow(connector)
             if result.get("action") == "imported":
