@@ -38,6 +38,44 @@ def _connectors_root() -> Path:
     return Path.home() / ".emerge" / "connectors"
 
 
+def _file_to_intent_sig(connector: str, rel: Path) -> str:
+    """Convert pipelines/read/foo.py → connector.read.foo"""
+    parts = rel.parts
+    if len(parts) == 2:
+        mode = parts[0]
+        name = Path(parts[1]).stem
+        return f"{connector}.{mode}.{name}"
+    return ""
+
+
+def _load_candidate_timestamps(connector_dir: Path) -> dict[str, int]:
+    """Return {intent_sig: last_ts_ms} for stable entries in span-candidates.json."""
+    p = connector_dir / "span-candidates.json"
+    if not p.exists():
+        return {}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        return {
+            k: int(v.get("last_ts_ms", 0))
+            for k, v in raw.get("candidates", {}).items()
+            if isinstance(v, dict) and v.get("status") == "stable"
+        }
+    except Exception:
+        return {}
+
+
+def _load_spans_timestamps(worktree_connector_dir: Path) -> dict[str, int]:
+    """Return {intent_sig: last_ts_ms} from spans.json in the hub worktree connector dir."""
+    p = worktree_connector_dir / "spans.json"
+    if not p.exists():
+        return {}
+    try:
+        spans = json.loads(p.read_text(encoding="utf-8")).get("spans", {})
+        return {k: int(v.get("last_ts_ms", 0)) for k, v in spans.items() if isinstance(v, dict)}
+    except Exception:
+        return {}
+
+
 # ── Export ──────────────────────────────────────────────────────────────────
 
 def export_vertical(
@@ -46,27 +84,51 @@ def export_vertical(
     connectors_root: Path | None = None,
     hub_worktree: Path | None = None,
 ) -> None:
-    """Copy connector assets from local connectors dir into the hub worktree."""
+    """Copy connector assets from local connectors dir into the hub worktree.
+
+    Per-pipeline additive export: only overwrites a worktree pipeline when the
+    local candidate has a higher (or equal) last_ts_ms than the remote version.
+    Remote-only pipelines are left untouched — they remain in the worktree from
+    the preceding git_merge_remote call in push_flow.
+    """
     src = (connectors_root or _connectors_root()) / connector
     dst = (hub_worktree or hub_worktree_path()) / "connectors" / connector
+    dst.mkdir(parents=True, exist_ok=True)
 
     src_pipelines = src / "pipelines"
     dst_pipelines = dst / "pipelines"
+
     if src_pipelines.exists():
-        if dst_pipelines.exists():
-            shutil.rmtree(dst_pipelines)
-        shutil.copytree(src_pipelines, dst_pipelines)
+        local_ts = _load_candidate_timestamps(src)
+        remote_ts = _load_spans_timestamps(dst)
+
+        for py_file in src_pipelines.rglob("*.py"):
+            rel = py_file.relative_to(src_pipelines)
+            intent_sig = _file_to_intent_sig(connector, rel)
+            if not intent_sig or intent_sig not in local_ts:
+                continue
+            l_ts = local_ts[intent_sig]
+            r_ts = remote_ts.get(intent_sig, 0)
+            if l_ts >= r_ts:
+                dst_file = dst_pipelines / rel
+                dst_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(py_file, dst_file)
+                yaml_src = py_file.with_suffix(".yaml")
+                dst_yaml = dst_file.with_suffix(".yaml")
+                if yaml_src.exists():
+                    shutil.copy2(yaml_src, dst_yaml)
+                elif dst_yaml.exists():
+                    dst_yaml.unlink()
 
     notes_src = src / "NOTES.md"
     if notes_src.exists():
-        dst.mkdir(parents=True, exist_ok=True)
         shutil.copy2(notes_src, dst / "NOTES.md")
 
     _export_spans_json(src, dst)
 
 
 def _export_spans_json(src: Path, dst: Path) -> None:
-    """Generate spans.json from span-candidates.json (stable entries only, stripped)."""
+    """Merge local stable spans into the worktree spans.json. Remote-only spans are preserved."""
     candidates_path = src / "span-candidates.json"
     if not candidates_path.exists():
         return
@@ -75,22 +137,36 @@ def _export_spans_json(src: Path, dst: Path) -> None:
         candidates = raw.get("candidates", {})
     except Exception:
         return
-    spans: dict[str, Any] = {}
+
+    local_spans: dict[str, Any] = {}
     for key, entry in candidates.items():
         if not isinstance(entry, dict):
             continue
         if entry.get("status") != "stable":
             continue
-        spans[key] = {
+        local_spans[key] = {
             "intent_signature": entry.get("intent_signature", key),
             "status": "stable",
             "last_ts_ms": entry.get("last_ts_ms", 0),
         }
+
+    # Load existing worktree spans so we don't erase other members' entries
+    existing_path = dst / "spans.json"
+    existing_spans: dict[str, Any] = {}
+    if existing_path.exists():
+        try:
+            existing_spans = json.loads(existing_path.read_text(encoding="utf-8")).get("spans", {})
+        except Exception:
+            pass
+
+    merged = dict(existing_spans)
+    for key, entry in local_spans.items():
+        existing = merged.get(key)
+        if not isinstance(existing, dict) or entry.get("last_ts_ms", 0) >= existing.get("last_ts_ms", 0):
+            merged[key] = entry
+
     dst.mkdir(parents=True, exist_ok=True)
-    (dst / "spans.json").write_text(
-        json.dumps({"spans": spans}, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    _write_json(dst / "spans.json", {"spans": merged})
 
 
 # ── Import ──────────────────────────────────────────────────────────────────

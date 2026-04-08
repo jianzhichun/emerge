@@ -1165,6 +1165,22 @@ class EmergeDaemon:
                 worktree = hub_worktree_path()
                 result = git_setup_worktree(worktree, remote, branch, author)
                 action_taken = result.get("action", "unknown")
+
+                if action_taken == "cloned" and cfg.get("selected_verticals"):
+                    import logging as _logging
+
+                    from scripts.emerge_sync import import_vertical as _import_vertical
+
+                    _log = _logging.getLogger(__name__)
+                    for _connector in cfg["selected_verticals"]:
+                        try:
+                            _import_vertical(_connector, hub_worktree=worktree)
+                        except Exception as _exc:
+                            _log.warning(
+                                "icc_hub configure: initial import failed for %s: %s",
+                                _connector,
+                                _exc,
+                            )
             except Exception as exc:
                 return self._tool_error(
                     f"icc_hub configure: git worktree init failed — {exc}. "
