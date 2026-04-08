@@ -117,4 +117,4 @@ When making code changes, keep these in sync:
 | New observer or adapter interface change | `skills/writing-vertical-adapter/SKILL.md` |
 | OperatorMonitor env var change | README.md env var table + `skills/operator-monitor-debug/SKILL.md` |
 | Memory Hub config or sync flow change | `README.md` component table + `CLAUDE.md` Architecture section + `CLAUDE.md` Key Invariants |
-| New `icc_hub` action or queue event type | `README.md` MCP Tools table + `CLAUDE.md` Key Invariants (queue contract) |
+| New `icc_hub` action or queue event type | `README.md` MCP Tools table + `CLAUDE.md` Key Invariants (queue contract) + `commands/hub.md` if setup flow is affected |

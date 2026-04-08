@@ -240,7 +240,7 @@ flowchart LR
 | `icc_goal_ingest` | Submit goal events (`human_edit` / `hook_payload` / `system_*`) to Goal Control Plane. Returns acceptance decision + active snapshot metadata.                                               |
 | `icc_goal_read`   | Read active goal snapshot plus recent goal ledger events.                                                                                                                                    |
 | `icc_goal_rollback` | Roll back active goal to a previous goal event id and produce a new snapshot version.                                                                                                      |
-| `icc_hub`           | Memory Hub management: `list` config · `add`/`remove` connectors · `sync` (enqueue push+pull) · `status` (pending conflicts + awaiting-application count) · `resolve` conflicts (`ours`/`theirs`/`skip`) · `setup` (print wizard instructions). |
+| `icc_hub`           | Memory Hub management: `configure` (first-time setup — saves config + initialises git worktree, callable from CC via natural language) · `list` config · `add`/`remove` connectors · `sync` (enqueue push+pull) · `status` (pending conflicts + awaiting-application count) · `resolve` conflicts (`ours`/`theirs`/`skip`). |
 
 > `icc_read` / `icc_write` are deprecated and removed from schema. Use `icc_span_open` instead — the span bridge executes the pipeline automatically when stable.
 

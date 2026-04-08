@@ -1129,12 +1129,69 @@ class EmergeDaemon:
                 append_sync_event({"event": "pull_requested", "connector": c, "ts_ms": ts})
             return self._tool_ok_json({"ok": True, "triggered": verticals})
 
+        if action == "configure":
+            remote = str(arguments.get("remote", "")).strip()
+            if not remote:
+                return self._tool_error("icc_hub configure: 'remote' is required (e.g. user@host:repos/hub.git)")
+            branch = str(arguments.get("branch", "emerge-hub")).strip() or "emerge-hub"
+            author = str(arguments.get("author", "")).strip()
+            if not author:
+                return self._tool_error(
+                    "icc_hub configure: 'author' is required (e.g. 'Alice <alice@team.com>')"
+                )
+            poll_interval = int(arguments.get("poll_interval_seconds", 300))
+            new_verticals = arguments.get("selected_verticals")
+            if isinstance(new_verticals, str):
+                new_verticals = [v.strip() for v in new_verticals.split(",") if v.strip()]
+            if not isinstance(new_verticals, list):
+                new_verticals = []
+
+            cfg = load_hub_config()
+            cfg.update({
+                "remote": remote,
+                "branch": branch,
+                "author": author,
+                "poll_interval_seconds": poll_interval,
+            })
+            if new_verticals:
+                cfg["selected_verticals"] = new_verticals
+            elif "selected_verticals" not in cfg:
+                cfg["selected_verticals"] = []
+            save_hub_config(cfg)
+
+            try:
+                from scripts.emerge_sync import git_setup_worktree
+                from scripts.hub_config import hub_worktree_path
+                worktree = hub_worktree_path()
+                result = git_setup_worktree(worktree, remote, branch, author)
+                action_taken = result.get("action", "unknown")
+            except Exception as exc:
+                return self._tool_error(
+                    f"icc_hub configure: git worktree init failed — {exc}. "
+                    "Check that the remote URL is reachable and SSH keys are in place."
+                )
+
+            return self._tool_ok_json({
+                "ok": True,
+                "action": action_taken,  # "created" | "cloned" | "already_exists"
+                "remote": remote,
+                "branch": branch,
+                "selected_verticals": cfg["selected_verticals"],
+                "worktree": str(hub_worktree_path()),
+                "next": (
+                    "Hub configured. Start the sync agent in a terminal: "
+                    "python scripts/emerge_sync.py run"
+                ),
+            })
+
         if action == "setup":
             return self._tool_ok_json({
                 "ok": True,
                 "message": (
-                    "Setup wizard runs in a terminal: python scripts/emerge_sync.py setup. "
-                    "Run it there, then call icc_hub(action='list') to verify configuration."
+                    "Use icc_hub(action='configure', remote='user@host:repos/hub.git', "
+                    "author='Name <email>', selected_verticals=['connector1']) to configure "
+                    "the hub directly from Claude Code. "
+                    "Or run the interactive CLI wizard: python scripts/emerge_sync.py setup"
                 ),
             })
 
@@ -1159,7 +1216,7 @@ class EmergeDaemon:
             return self._tool_ok_json({"ok": True, "conflict_id": conflict_id, "resolution": resolution})
 
         return self._tool_error(
-            f"icc_hub: unknown action '{action}'. Valid: list|add|remove|sync|status|resolve|setup"
+            f"icc_hub: unknown action '{action}'. Valid: configure|list|add|remove|sync|status|resolve|setup"
         )
 
     def handle_jsonrpc(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -1372,18 +1429,39 @@ class EmergeDaemon:
                             "name": "icc_hub",
                             "description": (
                                 "Manage Memory Hub — bidirectional connector asset sync via a self-hosted git repo. "
-                                "Actions: list (show config), add/remove (manage verticals), "
+                                "Actions: configure (first-time setup — saves config and initialises git worktree), "
+                                "list (show config), add/remove (manage verticals), "
                                 "sync (manual push+pull), status (show pending conflicts), "
-                                "resolve (resolve a conflict with ours|theirs|skip), "
-                                "setup (instructions to run the interactive setup wizard)."
+                                "resolve (resolve a conflict with ours|theirs|skip)."
                             ),
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "action": {
                                         "type": "string",
-                                        "enum": ["list", "add", "remove", "sync", "status", "resolve", "setup"],
+                                        "enum": ["configure", "list", "add", "remove", "sync", "status", "resolve", "setup"],
                                         "description": "Hub action to perform",
+                                    },
+                                    "remote": {
+                                        "type": "string",
+                                        "description": "Git remote URL (required for configure, e.g. user@host:repos/hub.git)",
+                                    },
+                                    "branch": {
+                                        "type": "string",
+                                        "description": "Orphan branch name (configure only, default: emerge-hub)",
+                                    },
+                                    "author": {
+                                        "type": "string",
+                                        "description": "Git commit author (required for configure, e.g. 'Alice <alice@team.com>')",
+                                    },
+                                    "selected_verticals": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "Connector names to sync (configure only)",
+                                    },
+                                    "poll_interval_seconds": {
+                                        "type": "integer",
+                                        "description": "Background pull interval in seconds (configure only, default: 300)",
                                     },
                                     "connector": {
                                         "type": "string",

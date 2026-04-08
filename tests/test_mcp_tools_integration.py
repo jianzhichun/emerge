@@ -2867,3 +2867,64 @@ def test_icc_hub_resolve_conflict(tmp_path, monkeypatch):
     conflict = data["conflicts"][0]
     assert conflict["resolution"] == "ours"
     assert conflict["status"] == "resolved"
+
+
+def test_icc_hub_configure_saves_config_and_inits_worktree(tmp_path, monkeypatch):
+    """configure action saves hub-config.json and calls git_setup_worktree."""
+    import subprocess
+    from unittest.mock import patch
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.hub_config import load_hub_config
+
+    monkeypatch.setenv("EMERGE_HUB_HOME", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir(parents=True)
+
+    # Use a real local bare repo as remote so git_setup_worktree succeeds
+    bare = tmp_path / "remote.git"
+    bare.mkdir()
+    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+
+    daemon = EmergeDaemon(root=ROOT)
+    result = daemon.call_tool("icc_hub", {
+        "action": "configure",
+        "remote": str(bare),
+        "author": "test <test@test.com>",
+        "selected_verticals": ["gmail", "linear"],
+        "branch": "emerge-hub",
+    })
+
+    assert not result["isError"], result
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["ok"] is True
+    assert payload["action"] in ("created", "cloned", "already_exists")
+    assert payload["remote"] == str(bare)
+
+    cfg = load_hub_config()
+    assert cfg["remote"] == str(bare)
+    assert cfg["author"] == "test <test@test.com>"
+    assert "gmail" in cfg["selected_verticals"]
+    assert "linear" in cfg["selected_verticals"]
+
+    worktree = tmp_path / "hub-worktree"
+    assert worktree.exists()
+    assert (worktree / ".git").exists()
+
+
+def test_icc_hub_configure_requires_remote_and_author(tmp_path, monkeypatch):
+    """configure must reject calls missing required fields."""
+    from scripts.emerge_daemon import EmergeDaemon
+
+    monkeypatch.setenv("EMERGE_HUB_HOME", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir(parents=True)
+
+    daemon = EmergeDaemon(root=ROOT)
+
+    r1 = daemon.call_tool("icc_hub", {"action": "configure", "author": "A <a@b.com>"})
+    assert r1["isError"]
+    assert "remote" in r1["content"][0]["text"]
+
+    r2 = daemon.call_tool("icc_hub", {"action": "configure", "remote": "git@x:y.git"})
+    assert r2["isError"]
+    assert "author" in r2["content"][0]["text"]
