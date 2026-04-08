@@ -3,9 +3,11 @@
 ![Version](https://img.shields.io/badge/version-v0.3.43-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-332%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-353%20passing-brightgreen?logo=pytest)
 
-**Emerge** is a Claude Code plugin that implements a **muscle-memory flywheel**: repeated work is tracked via two paths — `icc_exec` (ad-hoc code) and `icc_span_open/close` (intent spans) — promoted through a **policy registry** (explore → canary → stable), and **crystallized** into connector pipelines that execute automatically when the bridge detects a stable intent.
+**Emerge** 解决的核心问题是：AI 操作员反复执行相同操作但无法学习——每次都要重新推理。它通过**双向飞轮**将重复工作结晶化为确定性管道：**前向飞轮**（`icc_exec`/`icc_span_open` 追踪执行 → policy 促进 explore→canary→stable → 自动结晶化为 `.py+.yaml` 管道 → 后续零 LLM 推理），**反向飞轮**（`OperatorMonitor` 观察人类操作员 → `PatternDetector` 检测重复模式 → 弹出询问 → 任务交付 AI 接管）。
+
+**Emerge** is a Claude Code plugin that implements a **dual flywheel**: repeated AI work is tracked via `icc_exec` (ad-hoc code) and `icc_span_open/close` (intent spans), promoted through a **policy registry** (explore → canary → stable), and **crystallized** into connector pipelines that execute with zero LLM inference once stable. A reverse flywheel watches human operators via `OperatorMonitor`, detects repetition with `PatternDetector`, and hands tasks to the AI.
 
 Design anchors:
 
