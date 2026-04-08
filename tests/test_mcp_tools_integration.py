@@ -2560,3 +2560,66 @@ def test_concurrent_exec_events_do_not_lose_attempts(tmp_path, monkeypatch):
     reg = json.loads((session_dir / "candidates.json").read_text())
     assert reg["candidates"]["zwcad.read.state"]["attempts"] == 20, \
         f"Expected 20 attempts, got {reg['candidates']['zwcad.read.state']['attempts']} — lost updates!"
+
+
+def test_bridge_failure_records_consecutive_failure(tmp_path, monkeypatch):
+    """When the flywheel bridge raises, consecutive_failures must increment in the registry."""
+    import json
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    from scripts.emerge_daemon import EmergeDaemon
+    daemon = EmergeDaemon()
+
+    # Seed pipelines-registry with a stable pipeline
+    registry_path = tmp_path / "pipelines-registry.json"
+    from scripts.emerge_daemon import EmergeDaemon as _D
+    _D._atomic_write_json(registry_path, {
+        "pipelines": {
+            "zwcad.read.state": {
+                "status": "stable",
+                "rollout_pct": 100,
+                "consecutive_failures": 0,
+                "attempts": 50,
+                "successes": 50,
+                "verify_passes": 50,
+                "human_fixes": 0,
+            }
+        }
+    })
+
+    # Also seed candidates.json so _record_pipeline_event can update it
+    session_dir = tmp_path / daemon._base_session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    _D._atomic_write_json(session_dir / "candidates.json", {
+        "candidates": {
+            "zwcad.read.state": {
+                "source": "pipeline",
+                "pipeline_id": "zwcad.read.state",
+                "target_profile": "default",
+                "last_execution_path": "local",
+                "intent_signature": "zwcad.read.state",
+                "script_ref": "zwcad.read.state",
+                "attempts": 50,
+                "successes": 50,
+                "verify_passes": 50,
+                "human_fixes": 0,
+                "degraded_count": 0,
+                "consecutive_failures": 0,
+                "recent_outcomes": [1] * 20,
+                "total_calls": 50,
+                "last_ts_ms": 0,
+            }
+        }
+    })
+
+    # Patch PipelineEngine.run_read to raise
+    def boom(*args, **kwargs):
+        raise RuntimeError("connection refused")
+    monkeypatch.setattr(daemon.pipeline, "run_read", boom)
+
+    result = daemon._try_flywheel_bridge({"intent_signature": "zwcad.read.state"})
+    assert result is None  # bridge must fail gracefully
+
+    # Verify consecutive_failures was incremented in pipelines-registry
+    updated = json.loads(registry_path.read_text())
+    assert updated["pipelines"]["zwcad.read.state"]["consecutive_failures"] == 1, \
+        f"Expected consecutive_failures=1, got {updated['pipelines']['zwcad.read.state']['consecutive_failures']}"

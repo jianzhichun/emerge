@@ -207,6 +207,20 @@ class EmergeDaemon:
                 "flywheel bridge failed for %s (%s), falling back to LLM: %s",
                 base_pipeline_id, mode, _bridge_exc,
             )
+            # Increment consecutive_failures directly in the registry so the policy engine
+            # can downgrade stable→explore if the bridge keeps failing, without polluting
+            # the recent_outcomes window (which would cause spurious window-failure downgrades).
+            try:
+                _reg_path = self._state_root / "pipelines-registry.json"
+                with self._registry_lock:
+                    _reg = self._load_json_object(_reg_path, root_key="pipelines")
+                    _pe = _reg["pipelines"].get(base_pipeline_id)
+                    if isinstance(_pe, dict):
+                        _pe["consecutive_failures"] = int(_pe.get("consecutive_failures", 0)) + 1
+                        _reg["pipelines"][base_pipeline_id] = _pe
+                        self._atomic_write_json(_reg_path, _reg)
+            except Exception:
+                pass
             return None
         result["bridge_promoted"] = True
         try:
