@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -87,3 +88,67 @@ def test_import_merges_spans_json_newer_wins(connector_home):
     merged = json.loads((local_dir / "spans.json").read_text())
     assert merged["spans"]["gmail.read.fetch"]["last_ts_ms"] == 999
     assert "gmail.read.send" in merged["spans"]
+
+
+# ── Git operation tests ─────────────────────────────────────────────────────
+
+@pytest.fixture()
+def git_setup(tmp_path, monkeypatch):
+    """Create a bare remote and local hub worktree pointing to it."""
+    bare_remote = tmp_path / "remote.git"
+    bare_remote.mkdir()
+    subprocess.run(["git", "init", "--bare", str(bare_remote)], check=True, capture_output=True)
+
+    worktree = tmp_path / "hub-worktree"
+    monkeypatch.setenv("EMERGE_HUB_HOME", str(tmp_path))
+
+    cfg = {
+        "remote": str(bare_remote),
+        "branch": "emerge-hub",
+        "poll_interval_seconds": 300,
+        "selected_verticals": ["gmail"],
+        "author": "test <test@test.com>",
+    }
+    save_hub_config(cfg)
+    return bare_remote, worktree, tmp_path
+
+
+def _init_hub_worktree(worktree: Path, remote: str, branch: str = "emerge-hub") -> None:
+    """Bootstrap hub worktree with orphan branch and push to remote using subprocess directly."""
+    worktree.mkdir(parents=True, exist_ok=True)
+
+    def _run(*args: str) -> None:
+        subprocess.run(list(args), cwd=str(worktree), check=True, capture_output=True,
+                       env={**os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@test.com",
+                            "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@test.com"})
+
+    _run("git", "init")
+    _run("git", "config", "user.name", "test")
+    _run("git", "config", "user.email", "test@test.com")
+    _run("git", "remote", "add", "origin", remote)
+    _run("git", "checkout", "--orphan", branch)
+    _run("git", "commit", "--allow-empty", "-m", "chore: init emerge-hub")
+    _run("git", "push", "-u", "origin", branch)
+
+
+def test_git_fetch_and_detect_no_changes(git_setup):
+    from scripts.emerge_sync import git_has_remote_changes
+    bare_remote, worktree, hub_home = git_setup
+    _init_hub_worktree(worktree, str(bare_remote))
+    assert git_has_remote_changes(worktree, "emerge-hub") is False
+
+
+def test_git_push_commits_and_updates_remote(git_setup, connector_home):
+    from scripts.emerge_sync import git_push
+    bare_remote, worktree, hub_home = git_setup
+    connectors, _ = connector_home
+    _make_connector(connectors, "gmail")
+    _init_hub_worktree(worktree, str(bare_remote))
+
+    hub_dir = worktree / "connectors" / "gmail"
+    hub_dir.mkdir(parents=True)
+    (hub_dir / "NOTES.md").write_text("# hub notes", encoding="utf-8")
+
+    result = git_push(worktree, "emerge-hub", connector="gmail", author="test <test@test.com>")
+    assert result["ok"] is True
+    assert result.get("pushed") is True
