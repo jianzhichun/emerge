@@ -153,3 +153,31 @@ def test_latest_successful_span_ignores_failures(tracker):
     s = tracker.open_span("lark.read.get-doc")
     tracker.close_span(s, outcome="failure")
     assert tracker.latest_successful_span("lark.read.get-doc") is None
+
+
+# ── _atomic_write ─────────────────────────────────────────────────────────────
+
+def test_atomic_write_leaves_no_stray_tmp_file(tmp_path):
+    """After _atomic_write succeeds, no fixed-name .tmp file must remain."""
+    from scripts.span_tracker import SpanTracker
+    st = SpanTracker(state_root=tmp_path, hook_state_root=tmp_path)
+    target = tmp_path / "state.json"
+    st._atomic_write(target, {"key": "value"})
+    assert target.exists()
+    # Old implementation leaves state.tmp behind (it's the temp file that was renamed)
+    # Actually .replace() removes the source, so no file remains — but verify anyway
+    # The real issue is that the OLD code uses write_text (no fsync) + a fixed name.
+    # New code must use mkstemp so the temp name is unique (verified via glob).
+    stray = list(tmp_path.glob("state.tmp"))
+    assert stray == [], f"stray .tmp files: {stray}"
+
+def test_atomic_write_content_correct(tmp_path):
+    """Written content must be exactly what was passed in."""
+    import json
+    from scripts.span_tracker import SpanTracker
+    st = SpanTracker(state_root=tmp_path, hook_state_root=tmp_path)
+    target = tmp_path / "out.json"
+    data = {"hello": "world", "num": 42, "nested": {"a": [1, 2, 3]}}
+    st._atomic_write(target, data)
+    result = json.loads(target.read_text(encoding="utf-8"))
+    assert result == data

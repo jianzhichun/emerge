@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -126,9 +128,21 @@ class SpanTracker:
     # ── helpers ────────────────────────────────────────────────────────────
 
     def _atomic_write(self, path: Path, data: dict) -> None:
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path_str = tempfile.mkstemp(
+            prefix=f"{path.stem}-", suffix=".tmp", dir=str(path.parent)
+        )
+        _tmp = tmp_path_str
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path_str, path)
+            _tmp = ""
+        finally:
+            if _tmp and os.path.exists(_tmp):
+                os.unlink(_tmp)
 
     def _load_state(self) -> dict:
         p = self._state_path()
