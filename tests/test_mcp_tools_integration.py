@@ -3013,3 +3013,51 @@ def test_concurrent_tool_calls_each_get_correct_response():
 
     ids = {r["id"] for r in results if r}
     assert len(ids) == 5  # each request gets its own response id
+
+
+def test_initialize_declares_elicitation_capability():
+    """initialize response must advertise elicitation capability and protocol 2025-03-26."""
+    from scripts.emerge_daemon import EmergeDaemon
+    daemon = EmergeDaemon()
+    resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+    result = resp["result"]
+    assert result["protocolVersion"] == "2025-03-26"
+    assert "elicitation" in result["capabilities"]
+
+
+def test_elicit_returns_result_when_response_arrives():
+    """_elicit() must return the response payload set via correlation map."""
+    import threading, time
+    from scripts.emerge_daemon import EmergeDaemon
+    daemon = EmergeDaemon()
+    captured_push = []
+    daemon._write_mcp_push = lambda p: captured_push.append(p)
+
+    result_holder = []
+
+    def _run():
+        result_holder.append(daemon._elicit("Confirm?", {"type": "object",
+            "properties": {"confirmed": {"type": "boolean"}}}, timeout=5.0))
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    # Let _elicit register its event before we simulate the response
+    time.sleep(0.05)
+    assert len(captured_push) == 1
+    elicit_id = captured_push[0]["id"]
+    # Simulate CC sending back an elicitation response
+    daemon._elicit_results[elicit_id] = {"confirmed": True}
+    daemon._elicit_events.pop(elicit_id).set()
+
+    t.join(timeout=2.0)
+    assert result_holder == [{"confirmed": True}]
+
+
+def test_elicit_returns_none_on_timeout():
+    """_elicit() must return None when no response arrives within timeout."""
+    from scripts.emerge_daemon import EmergeDaemon
+    daemon = EmergeDaemon()
+    daemon._write_mcp_push = lambda _: None
+    result = daemon._elicit("Confirm?", {}, timeout=0.1)
+    assert result is None

@@ -1249,12 +1249,13 @@ class EmergeDaemon:
                 "jsonrpc": "2.0",
                 "id": req_id,
                 "result": {
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": "2025-03-26",
                     "capabilities": {
                         "tools": {},
                         "resources": {"subscribe": False},
                         "prompts": {},
                         "logging": {},
+                        "elicitation": {},
                     },
                     "serverInfo": {"name": "emerge", "version": self._version},
                 },
@@ -2705,6 +2706,34 @@ class EmergeDaemon:
         with _stdout_lock:
             sys.stdout.write(line)
             sys.stdout.flush()
+
+    def _elicit(
+        self,
+        message: str,
+        schema: dict,
+        timeout: float = 60.0,
+    ) -> dict | None:
+        """Send elicitations/create to CC; block current thread until response.
+
+        Must be called from a worker thread (not the main stdio loop).
+        Returns the content dict from the response, or None on timeout.
+        """
+        import uuid
+        elicit_id = f"elicit-{uuid.uuid4().hex[:8]}"
+        event = threading.Event()
+        self._elicit_events[elicit_id] = event
+        self._write_mcp_push({
+            "jsonrpc": "2.0",
+            "id": elicit_id,
+            "method": "elicitations/create",
+            "params": {"message": message, "requestedSchema": schema},
+        })
+        fired = event.wait(timeout=timeout)
+        if not fired:
+            self._elicit_events.pop(elicit_id, None)
+            self._elicit_results.pop(elicit_id, None)
+            return None
+        return self._elicit_results.pop(elicit_id, None)
 
 
 def _format_pending_actions_message(actions: list) -> str:
