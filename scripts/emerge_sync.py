@@ -26,6 +26,7 @@ from scripts.hub_config import (
     new_conflict_id,
     save_hub_config,
     save_pending_conflicts,
+    sync_queue_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -589,28 +590,58 @@ def _run_pull_cycle() -> None:
             logger.error("Hub pull exception for %s: %s", connector, exc)
 
 
-def run_poll_loop(stop_event: threading.Event | None = None) -> None:
-    """Main sync agent loop. Polls stable events and runs periodic pull.
+def run_event_loop(stop_event: threading.Event | None = None) -> None:
+    """Event-driven sync agent. Watches sync-queue.jsonl via EventRouter.
 
-    Note: poll_interval is read once at startup. Restart the agent to pick up
-    config changes made via icc_hub add/remove.
+    Replaces run_poll_loop. poll_interval is re-read each Timer cycle so
+    config changes take effect without restart.
     """
-    cfg = load_hub_config()
-    poll_interval = int(cfg.get("poll_interval_seconds", 300))
-    last_pull = 0.0
-    logger.info("emerge_sync: poll loop started (interval=%ds)", poll_interval)
-    while True:
-        if stop_event and stop_event.is_set():
-            break
+    from scripts.event_router import EventRouter
+
+    logger.info("emerge_sync: event loop started")
+
+    _timer: list[threading.Timer] = []  # mutable cell for recursive timer
+
+    def _schedule_pull() -> None:
+        cfg2 = load_hub_config()
+        interval = int(cfg2.get("poll_interval_seconds", 300))
+        try:
+            _run_pull_cycle()
+        except Exception as exc:
+            logger.error("emerge_sync pull cycle error: %s", exc)
+        if stop_event is None or not stop_event.is_set():
+            t = threading.Timer(interval, _schedule_pull)
+            t.daemon = True
+            _timer.clear()
+            _timer.append(t)
+            t.start()
+
+    def _on_queue_change(_path: Path) -> None:
         try:
             _run_stable_events()
-            now = time.time()
-            if now - last_pull >= poll_interval:
-                _run_pull_cycle()
-                last_pull = now
         except Exception as exc:
-            logger.error("emerge_sync poll loop error: %s", exc)
-        time.sleep(10)
+            logger.error("emerge_sync stable events error: %s", exc)
+
+    router = EventRouter({sync_queue_path(): _on_queue_change})
+    router.start()
+
+    # Kick off the first pull immediately (also schedules recurring)
+    _schedule_pull()
+
+    try:
+        while True:
+            if stop_event and stop_event.is_set():
+                break
+            threading.Event().wait(timeout=1.0)
+    finally:
+        router.stop()
+        for t in _timer:
+            t.cancel()
+
+
+def run_poll_loop(stop_event: threading.Event | None = None) -> None:
+    """Deprecated: use run_event_loop. Kept for backward compat."""
+    run_event_loop(stop_event)
 
 
 # ── CLI entry point ─────────────────────────────────────────────────────────
@@ -676,7 +707,7 @@ if __name__ == "__main__":
         if not is_configured():
             print("Not configured. Run: python scripts/emerge_sync.py setup")
             sys.exit(1)
-        run_poll_loop()
+        run_event_loop()
     elif args[0] == "setup":
         cmd_setup()
     elif args[0] == "sync":

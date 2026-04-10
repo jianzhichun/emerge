@@ -576,3 +576,48 @@ def test_run_stable_events_skips_pull_when_push_conflicts(git_setup, connector_h
     assert pull_call_count == 0, (
         "pull_flow must not be called when push_flow had a conflict for the same connector"
     )
+
+
+def test_run_event_loop_fires_stable_events_on_queue_write(tmp_path, monkeypatch):
+    """Writing to sync-queue.jsonl must trigger _run_stable_events immediately."""
+    from scripts import emerge_sync
+    import threading
+
+    fired = threading.Event()
+    monkeypatch.setattr(emerge_sync, "_run_stable_events", lambda: fired.set())
+    monkeypatch.setattr(emerge_sync, "_run_pull_cycle", lambda: None)
+
+    queue = tmp_path / "sync-queue.jsonl"
+    monkeypatch.setattr(emerge_sync, "sync_queue_path", lambda: queue)
+    monkeypatch.setattr(emerge_sync, "load_hub_config",
+                        lambda: {"poll_interval_seconds": 999})
+
+    stop = threading.Event()
+    t = threading.Thread(target=emerge_sync.run_event_loop, args=(stop,), daemon=True)
+    t.start()
+
+    queue.write_text('{"type":"stable"}\n')
+    assert fired.wait(timeout=3.0), "stable event handler never fired"
+    stop.set()
+    t.join(timeout=2)
+
+
+def test_run_event_loop_pull_cycle_fires_on_timer(tmp_path, monkeypatch):
+    """_run_pull_cycle must fire after poll_interval_seconds."""
+    from scripts import emerge_sync
+    import threading
+
+    pulled = threading.Event()
+    monkeypatch.setattr(emerge_sync, "_run_stable_events", lambda: None)
+    monkeypatch.setattr(emerge_sync, "_run_pull_cycle", lambda: pulled.set())
+    monkeypatch.setattr(emerge_sync, "sync_queue_path", lambda: tmp_path / "q.jsonl")
+    monkeypatch.setattr(emerge_sync, "load_hub_config",
+                        lambda: {"poll_interval_seconds": 1})  # 1s for test speed
+
+    stop = threading.Event()
+    t = threading.Thread(target=emerge_sync.run_event_loop, args=(stop,), daemon=True)
+    t.start()
+
+    assert pulled.wait(timeout=4.0), "pull cycle never fired"
+    stop.set()
+    t.join(timeout=2)
