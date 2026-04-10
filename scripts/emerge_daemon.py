@@ -580,7 +580,10 @@ class EmergeDaemon:
 
     @staticmethod
     def _tool_ok_json(payload: Any) -> dict[str, Any]:
-        return {"isError": False, "content": [{"type": "text", "text": json.dumps(payload)}]}
+        base: dict[str, Any] = {"isError": False, "content": [{"type": "text", "text": json.dumps(payload)}]}
+        if isinstance(payload, dict):
+            base.update(payload)
+        return base
 
     @staticmethod
     def _as_float(value: Any, default: float) -> float:
@@ -866,6 +869,26 @@ class EmergeDaemon:
             real_dir.mkdir(parents=True, exist_ok=True)
             real_py = real_dir / f"{pipeline_name}.py"
             real_yaml = real_dir / f"{pipeline_name}.yaml"
+            # Ask user to confirm before activating the pipeline
+            elicit_resp = self._elicit(
+                f"确认激活 pipeline `{intent_signature}`？\n"
+                f"将从 _pending/ 移动到 {real_dir} 并启用桥接。",
+                {
+                    "type": "object",
+                    "properties": {"confirmed": {"type": "boolean", "title": "激活"}},
+                    "required": ["confirmed"],
+                },
+            )
+            if elicit_resp is None:
+                return self._tool_error(
+                    "icc_span_approve: elicitation timed out — operation cancelled"
+                )
+            if not elicit_resp.get("confirmed"):
+                return self._tool_ok_json({
+                    "approved": False,
+                    "cancelled": True,
+                    "message": "icc_span_approve cancelled by user.",
+                })
             # Atomic move: write to temp in target dir, then replace
             fd, tmp_py = tempfile.mkstemp(prefix=".approve-", dir=str(real_dir))
             try:
@@ -1029,9 +1052,30 @@ class EmergeDaemon:
             if not delta_id:
                 return self._tool_error("icc_reconcile: delta_id is required")
             if outcome not in ("confirm", "correct", "retract"):
-                return self._tool_error(
-                    f"icc_reconcile: outcome must be confirm/correct/retract, got {outcome!r}"
+                # outcome not supplied — ask via ElicitRequest
+                elicit_resp = self._elicit(
+                    f"请选择 delta `{delta_id}` 的处置结果：",
+                    {
+                        "type": "object",
+                        "properties": {
+                            "outcome": {
+                                "type": "string",
+                                "enum": ["confirm", "correct", "retract"],
+                                "title": "处置结果",
+                            }
+                        },
+                        "required": ["outcome"],
+                    },
                 )
+                if elicit_resp is None:
+                    return self._tool_error(
+                        "icc_reconcile: elicitation timed out — operation cancelled"
+                    )
+                outcome = str(elicit_resp.get("outcome", "")).strip()
+                if outcome not in ("confirm", "correct", "retract"):
+                    return self._tool_error(
+                        f"icc_reconcile: invalid outcome from elicitation: {outcome!r}"
+                    )
             from scripts.state_tracker import load_tracker, save_tracker
             state_path = self._hook_state_path()
             tracker = load_tracker(state_path)
@@ -1219,7 +1263,29 @@ class EmergeDaemon:
             if not conflict_id:
                 return self._tool_error("icc_hub resolve: 'conflict_id' is required")
             if resolution not in ("ours", "theirs", "skip"):
-                return self._tool_error("icc_hub resolve: 'resolution' must be ours|theirs|skip")
+                elicit_resp = self._elicit(
+                    f"请选择冲突 `{conflict_id}` 的解决策略：",
+                    {
+                        "type": "object",
+                        "properties": {
+                            "resolution": {
+                                "type": "string",
+                                "enum": ["ours", "theirs", "skip"],
+                                "title": "解决策略",
+                            }
+                        },
+                        "required": ["resolution"],
+                    },
+                )
+                if elicit_resp is None:
+                    return self._tool_error(
+                        "icc_hub resolve: elicitation timed out — operation cancelled"
+                    )
+                resolution = str(elicit_resp.get("resolution", "")).strip()
+                if resolution not in ("ours", "theirs", "skip"):
+                    return self._tool_error(
+                        f"icc_hub resolve: invalid resolution from elicitation: {resolution!r}"
+                    )
             data = load_pending_conflicts()
             matched = False
             for conflict in data.get("conflicts", []):

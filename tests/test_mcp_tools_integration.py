@@ -2410,7 +2410,9 @@ def test_span_approve_moves_pending_and_generates_yaml(tmp_path, monkeypatch):
         daemon._open_spans[s.span_id] = s
         daemon._span_tracker.close_span(s, outcome="success")
 
-    result = daemon.call_tool("icc_span_approve", {"intent_signature": "lark.write.create-doc"})
+    from unittest.mock import patch
+    with patch.object(daemon, "_elicit", return_value={"confirmed": True}):
+        result = daemon.call_tool("icc_span_approve", {"intent_signature": "lark.write.create-doc"})
     assert result.get("isError") is not True
     body = json.loads(result["content"][0]["text"])
     assert body.get("approved") is True
@@ -3061,3 +3063,114 @@ def test_elicit_returns_none_on_timeout():
     daemon._write_mcp_push = lambda _: None
     result = daemon._elicit("Confirm?", {}, timeout=0.1)
     assert result is None
+
+
+def test_span_approve_elicitation_confirmed(tmp_path):
+    """icc_span_approve must call _elicit and proceed when confirmed=True."""
+    import os
+    from scripts.emerge_daemon import EmergeDaemon
+    from unittest.mock import patch
+    daemon = EmergeDaemon()
+
+    conn, mode, name = "testconn", "read", "fetch"
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path)
+    pending_dir = tmp_path / conn / "pipelines" / mode / "_pending"
+    pending_dir.mkdir(parents=True)
+    (pending_dir / f"{name}.py").write_text(
+        "def run_read(m,a): return {}\ndef verify_read(m,a,r): return True\n"
+    )
+
+    with patch.object(daemon._span_tracker, "get_policy_status", return_value="stable"):
+        with patch.object(daemon, "_elicit", return_value={"confirmed": True}) as mock_elicit:
+            result = daemon.call_tool("icc_span_approve", {"intent_signature": f"{conn}.{mode}.{name}"})
+
+    assert result.get("approved") is True
+    mock_elicit.assert_called_once()
+    os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+
+
+def test_span_approve_elicitation_cancelled(tmp_path):
+    """icc_span_approve must return cancellation when confirmed=False."""
+    import os
+    from scripts.emerge_daemon import EmergeDaemon
+    from unittest.mock import patch
+    daemon = EmergeDaemon()
+
+    conn, mode, name = "testconn", "read", "fetch"
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path)
+    pending_dir = tmp_path / conn / "pipelines" / mode / "_pending"
+    pending_dir.mkdir(parents=True)
+    (pending_dir / f"{name}.py").write_text(
+        "def run_read(m,a): return {}\ndef verify_read(m,a,r): return True\n"
+    )
+
+    with patch.object(daemon._span_tracker, "get_policy_status", return_value="stable"):
+        with patch.object(daemon, "_elicit", return_value={"confirmed": False}):
+            result = daemon.call_tool("icc_span_approve", {"intent_signature": f"{conn}.{mode}.{name}"})
+
+    assert result.get("approved") is not True
+    assert "cancel" in str(result).lower()
+    os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+
+
+def test_span_approve_elicitation_timeout(tmp_path):
+    """icc_span_approve must return error when _elicit times out (returns None)."""
+    import os
+    from scripts.emerge_daemon import EmergeDaemon
+    from unittest.mock import patch
+    daemon = EmergeDaemon()
+
+    conn, mode, name = "testconn", "read", "fetch"
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path)
+    pending_dir = tmp_path / conn / "pipelines" / mode / "_pending"
+    pending_dir.mkdir(parents=True)
+    (pending_dir / f"{name}.py").write_text(
+        "def run_read(m,a): return {}\ndef verify_read(m,a,r): return True\n"
+    )
+
+    with patch.object(daemon._span_tracker, "get_policy_status", return_value="stable"):
+        with patch.object(daemon, "_elicit", return_value=None):
+            result = daemon.call_tool("icc_span_approve", {"intent_signature": f"{conn}.{mode}.{name}"})
+
+    assert result.get("isError") or "timed out" in str(result).lower()
+    os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+
+
+def test_reconcile_elicitation_used_when_outcome_not_provided():
+    """icc_reconcile with no outcome must call _elicit to ask the user."""
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.state_tracker import load_tracker, save_tracker
+    from unittest.mock import patch
+    daemon = EmergeDaemon()
+
+    state_path = daemon._hook_state_path()
+    tracker = load_tracker(state_path)
+    tracker.add_delta("test message", "info", intent_signature="test:sig")
+    save_tracker(state_path, tracker)
+    delta_id = tracker.state["deltas"][-1]["id"]
+
+    with patch.object(daemon, "_elicit", return_value={"outcome": "confirm"}) as mock_elicit:
+        result = daemon.call_tool("icc_reconcile", {"delta_id": delta_id})
+
+    assert result.get("outcome") == "confirm"
+    mock_elicit.assert_called_once()
+
+
+def test_hub_resolve_elicitation_used_when_resolution_not_provided():
+    """icc_hub resolve without resolution arg must call _elicit."""
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.hub_config import save_pending_conflicts
+    from unittest.mock import patch
+    daemon = EmergeDaemon()
+
+    save_pending_conflicts({"conflicts": [
+        {"conflict_id": "c1", "connector": "gmail", "file": "x.py", "status": "pending"}
+    ]})
+
+    with patch.object(daemon, "_elicit", return_value={"resolution": "ours"}) as mock_elicit:
+        result = daemon.call_tool("icc_hub", {
+            "action": "resolve", "conflict_id": "c1"
+        })
+
+    assert result.get("ok") is True
+    mock_elicit.assert_called_once()
