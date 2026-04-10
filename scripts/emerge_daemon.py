@@ -133,6 +133,8 @@ class EmergeDaemon:
             self._version = "0.0.0"
         self._operator_monitor: "OperatorMonitor | None" = None
         self._pending_monitor: "PendingActionMonitor | None" = None
+        self._elicit_events: dict[str, threading.Event] = {}
+        self._elicit_results: dict[str, dict] = {}
         self._goal_control = GoalControlPlane(Path(default_hook_state_root()))
         self._goal_control.ensure_initialized()
         self._migrate_legacy_goal_once()
@@ -2802,13 +2804,26 @@ class PendingActionMonitor(threading.Thread):
         self._stop_event.set()
 
 
+def _write_response(payload: dict) -> None:
+    """Write a JSON-RPC response to stdout, thread-safe."""
+    with _stdout_lock:
+        sys.stdout.write(json.dumps(payload) + "\n")
+        sys.stdout.flush()
+
+
 def run_stdio() -> None:
     import atexit
+    from concurrent.futures import ThreadPoolExecutor
+
     daemon = EmergeDaemon()
+    executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="emerge-worker")
+
     daemon.start_operator_monitor()
-    atexit.register(daemon.stop_operator_monitor)
     daemon.start_pending_monitor()
+    atexit.register(daemon.stop_operator_monitor)
     atexit.register(daemon.stop_pending_monitor)
+    atexit.register(lambda: executor.shutdown(wait=False))
+
     for line in sys.stdin:
         text = line.strip()
         if not text:
@@ -2816,28 +2831,41 @@ def run_stdio() -> None:
         try:
             req = json.loads(text)
         except json.JSONDecodeError as exc:  # pragma: no cover
-            resp = {
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {"code": -32700, "message": f"Parse error: {exc}"},
-            }
-            if resp is not None:
-                with _stdout_lock:
-                    sys.stdout.write(json.dumps(resp) + "\n")
-                    sys.stdout.flush()
+            _write_response({"jsonrpc": "2.0", "id": None,
+                             "error": {"code": -32700, "message": f"Parse error: {exc}"}})
             continue
+
+        req_id = req.get("id")
+        method = req.get("method", "")
+
+        # Elicitation responses: wake waiting worker thread, never dispatch as a request
+        if req_id and req_id in daemon._elicit_events:
+            daemon._elicit_results[req_id] = req.get("result") or {}
+            daemon._elicit_events.pop(req_id).set()
+            continue
+
+        # Tool calls run in thread pool so _elicit() can block a worker
+        # while the main loop continues routing
+        if method == "tools/call":
+            def _run(_req=req, _id=req_id):
+                try:
+                    resp = daemon.handle_jsonrpc(_req)
+                except Exception as exc:  # pragma: no cover
+                    resp = {"jsonrpc": "2.0", "id": _id,
+                            "error": {"code": -32603, "message": str(exc)}}
+                if resp is not None:
+                    _write_response(resp)
+            executor.submit(_run)
+            continue
+
+        # All other methods (initialize, ping, tools/list, resources/*) are synchronous
         try:
             resp = daemon.handle_jsonrpc(req)
         except Exception as exc:  # pragma: no cover
-            resp = {
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {"code": -32603, "message": str(exc)},
-            }
+            resp = {"jsonrpc": "2.0", "id": req_id,
+                    "error": {"code": -32603, "message": str(exc)}}
         if resp is not None:
-            with _stdout_lock:
-                sys.stdout.write(json.dumps(resp) + "\n")
-                sys.stdout.flush()
+            _write_response(resp)
 
 
 if __name__ == "__main__":

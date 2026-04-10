@@ -2993,3 +2993,23 @@ def test_icc_hub_configure_requires_remote_and_author(tmp_path, monkeypatch):
     r2 = daemon.call_tool("icc_hub", {"action": "configure", "remote": "git@x:y.git"})
     assert r2["isError"]
     assert "author" in r2["content"][0]["text"]
+
+
+def test_concurrent_tool_calls_each_get_correct_response():
+    """Multiple simultaneous tool calls must each return their own result."""
+    import concurrent.futures
+    from scripts.emerge_daemon import EmergeDaemon
+    daemon = EmergeDaemon()
+
+    def call(i):
+        return daemon.handle_jsonrpc({
+            "jsonrpc": "2.0", "id": f"req-{i}", "method": "tools/call",
+            "params": {"name": "icc_goal_read", "arguments": {}}
+        })
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        futures = [pool.submit(call, i) for i in range(5)]
+        results = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+    ids = {r["id"] for r in results if r}
+    assert len(ids) == 5  # each request gets its own response id
