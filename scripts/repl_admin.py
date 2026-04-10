@@ -44,6 +44,25 @@ from scripts.goal_control_plane import (
 )
 from scripts.state_tracker import StateTracker, load_tracker, save_tracker
 
+import io as _io
+_sse_clients: list[_io.RawIOBase] = []
+_sse_lock = threading.Lock()
+
+
+def _sse_broadcast(event: dict) -> None:
+    """Push event to all connected SSE clients; silently drop dead connections."""
+    data = f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
+    with _sse_lock:
+        dead = []
+        for wfile in _sse_clients:
+            try:
+                wfile.write(data)
+                wfile.flush()
+            except OSError:
+                dead.append(wfile)
+        for d in dead:
+            _sse_clients.remove(d)
+
 
 def _local_plugin_version() -> str:
     manifest = ROOT / ".claude-plugin" / "plugin.json"
@@ -1741,6 +1760,33 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                 intent=qs.get("intent", [""])[0],
                 intent_prefix=qs.get("intent_prefix", [""])[0],
             ))
+        elif path == "/api/sse/status":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            msg = json.dumps({
+                "status": "online",
+                "pid": os.getpid(),
+                "ts_ms": int(time.time() * 1000),
+            }, ensure_ascii=False)
+            self.wfile.write(f"data: {msg}\n\n".encode())
+            self.wfile.flush()
+            with _sse_lock:
+                _sse_clients.append(self.wfile)
+            try:
+                while True:
+                    time.sleep(25)
+                    self.wfile.write(b": keep-alive\n\n")
+                    self.wfile.flush()
+            except OSError:
+                pass
+            finally:
+                with _sse_lock:
+                    if self.wfile in _sse_clients:
+                        _sse_clients.remove(self.wfile)
+            return
         else:
             self._err(404)
 

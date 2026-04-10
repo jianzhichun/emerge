@@ -1,0 +1,51 @@
+# tests/test_cockpit_sse.py
+from __future__ import annotations
+import json
+import threading
+import time
+import urllib.request
+import pytest
+
+
+def _start_cockpit_server(tmp_path, monkeypatch):
+    """Start cockpit HTTP server via cmd_serve; return base URL."""
+    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
+    (tmp_path / "connectors").mkdir(exist_ok=True)
+    from scripts.repl_admin import cmd_serve
+    result = cmd_serve(port=0, open_browser=False)
+    assert result["ok"]
+    return result["url"]
+
+
+def test_sse_status_returns_online_event(tmp_path, monkeypatch):
+    """GET /api/sse/status must stream an online event immediately."""
+    url = _start_cockpit_server(tmp_path, monkeypatch)
+    resp = urllib.request.urlopen(f"{url}/api/sse/status", timeout=3)
+    assert "text/event-stream" in resp.headers["Content-Type"]
+    line = resp.readline().decode().strip()
+    assert line.startswith("data:")
+    data = json.loads(line[5:])
+    assert data["status"] == "online"
+    assert "pid" in data
+
+
+def test_sse_broadcast_reaches_connected_client(tmp_path, monkeypatch):
+    """_sse_broadcast must push events to connected SSE clients."""
+    import scripts.repl_admin as repl_admin
+    url = _start_cockpit_server(tmp_path, monkeypatch)
+    resp = urllib.request.urlopen(f"{url}/api/sse/status", timeout=3)
+    # SSE format: "data: {...}\n\n" — consume both the data line and the blank separator
+    resp.readline()  # data: {...}\n
+    resp.readline()  # blank \n separator
+    # Wait for the handler to register itself in _sse_clients
+    deadline = time.time() + 2.0
+    while not repl_admin._sse_clients and time.time() < deadline:
+        time.sleep(0.01)
+    repl_admin._sse_broadcast({"status": "test_event", "x": 42})
+    time.sleep(0.1)
+    line = resp.readline().decode().strip()
+    assert line.startswith("data:")
+    data = json.loads(line[5:])
+    assert data["x"] == 42
