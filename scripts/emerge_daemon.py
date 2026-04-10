@@ -133,6 +133,8 @@ class EmergeDaemon:
             self._version = "0.0.0"
         self._operator_monitor: "OperatorMonitor | None" = None
         self._pending_monitor: "PendingActionMonitor | None" = None
+        self._event_router = None
+        self._last_seen_pending_ts: int = 0
         self._elicit_events: dict[str, threading.Event] = {}
         self._elicit_results: dict[str, dict] = {}
         self._goal_control = GoalControlPlane(Path(default_hook_state_root()))
@@ -2731,6 +2733,75 @@ class EmergeDaemon:
         if self._pending_monitor is not None:
             self._pending_monitor.stop()
 
+    def start_event_router(self) -> None:
+        """Start EventRouter to watch pending-actions.json and local operator events."""
+        from scripts.event_router import EventRouter
+        from pathlib import Path as _Path
+
+        handlers = {
+            self._state_root / "pending-actions.json": lambda _: self._on_pending_actions(),
+        }
+        event_root = _Path.home() / ".emerge" / "operator-events"
+        if event_root.exists():
+            handlers[event_root] = lambda p: self._on_local_event_file(p)
+
+        self._event_router = EventRouter(handlers)
+        self._event_router.start()
+
+    def stop_event_router(self) -> None:
+        if self._event_router is not None:
+            self._event_router.stop()
+
+    def _on_pending_actions(self) -> None:
+        """Called by EventRouter when pending-actions.json is created/modified."""
+        pending_path = self._state_root / "pending-actions.json"
+        if not pending_path.exists():
+            return
+        try:
+            text = pending_path.read_text(encoding="utf-8")
+        except OSError:
+            return
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            try:
+                pending_path.rename(self._state_root / "pending-actions.invalid.json")
+            except OSError:
+                pass
+            return
+        ts = int(data.get("submitted_at", 0))
+        if ts <= self._last_seen_pending_ts:
+            return
+        actions = data.get("actions", [])
+        self._write_mcp_push({
+            "jsonrpc": "2.0",
+            "method": "notifications/claude/channel",
+            "params": {
+                "serverName": "emerge",
+                "content": _format_pending_actions_message(actions),
+                "meta": {
+                    "source": "cockpit",
+                    "action_count": len(actions),
+                    "action_types": list({a.get("type") for a in actions}),
+                },
+            },
+        })
+        try:
+            processed = self._state_root / "pending-actions.processed.json"
+            pending_path.rename(processed)
+            self._last_seen_pending_ts = ts
+        except OSError:
+            pass
+
+    def _on_local_event_file(self, path) -> None:
+        """Called by EventRouter when an operator events.jsonl file changes."""
+        if self._operator_monitor is None:
+            return
+        try:
+            self._operator_monitor._poll_local()
+        except Exception:
+            pass
+
     def _push_pattern(self, stage: str, context: dict, summary: Any) -> None:
         """Push pattern detection result to CC via MCP channel notification.
 
@@ -2915,8 +2986,10 @@ def run_stdio() -> None:
 
     daemon.start_operator_monitor()
     daemon.start_pending_monitor()
+    daemon.start_event_router()
     atexit.register(daemon.stop_operator_monitor)
     atexit.register(daemon.stop_pending_monitor)
+    atexit.register(daemon.stop_event_router)
     atexit.register(lambda: executor.shutdown(wait=False))
 
     for line in sys.stdin:

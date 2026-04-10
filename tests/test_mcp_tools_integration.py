@@ -3174,3 +3174,35 @@ def test_hub_resolve_elicitation_used_when_resolution_not_provided():
 
     assert result.get("ok") is True
     mock_elicit.assert_called_once()
+
+
+def test_event_router_replaces_pending_monitor(tmp_path):
+    """EventRouter must fire MCP push when pending-actions.json is created."""
+    import threading, json, time, os
+    from scripts.emerge_daemon import EmergeDaemon
+
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
+    daemon = EmergeDaemon()
+
+    pushed = []
+    daemon._write_mcp_push = lambda p: pushed.append(p)
+    daemon.start_event_router()
+    time.sleep(0.1)
+
+    pending = tmp_path / "pending-actions.json"
+    pending.write_text(json.dumps({
+        "submitted_at": int(time.time() * 1000),
+        "actions": [{"type": "prompt", "prompt": "hello"}]
+    }))
+
+    # Wait for EventRouter to pick it up
+    deadline = time.time() + 3.0
+    while time.time() < deadline and not pushed:
+        time.sleep(0.05)
+
+    daemon.stop_event_router()
+    os.environ.pop("EMERGE_STATE_ROOT", None)
+
+    assert len(pushed) == 1
+    assert pushed[0]["method"] == "notifications/claude/channel"
+    assert pushed[0]["params"]["meta"]["source"] == "cockpit"
