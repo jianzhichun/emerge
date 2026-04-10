@@ -2773,19 +2773,22 @@ class EmergeDaemon:
         if ts <= self._last_seen_pending_ts:
             return
         actions = data.get("actions", [])
-        self._write_mcp_push({
-            "jsonrpc": "2.0",
-            "method": "notifications/claude/channel",
-            "params": {
-                "serverName": "emerge",
-                "content": _format_pending_actions_message(actions),
-                "meta": {
-                    "source": "cockpit",
-                    "action_count": len(actions),
-                    "action_types": list({a.get("type") for a in actions}),
+        try:
+            self._write_mcp_push({
+                "jsonrpc": "2.0",
+                "method": "notifications/claude/channel",
+                "params": {
+                    "serverName": "emerge",
+                    "content": _format_pending_actions_message(actions),
+                    "meta": {
+                        "source": "cockpit",
+                        "action_count": len(actions),
+                        "action_types": list({a.get("type") for a in actions}),
+                    },
                 },
-            },
-        })
+            })
+        except Exception:
+            return  # don't advance _last_seen_pending_ts — allow retry
         try:
             processed = self._state_root / "pending-actions.processed.json"
             pending_path.rename(processed)
