@@ -71,6 +71,8 @@ python3 scripts/emerge_sync.py sync gmail
 
 **Memory Hub**: `emerge_sync.py` is a standalone sync agent that shares connector assets (pipelines, NOTES.md, spans.json) via a self-hosted git repo's orphan branch (`emerge-hub`). The daemon writes a `stable` event to `~/.emerge/sync-queue.jsonl` when a pipeline is promoted to stable; emerge_sync polls the queue and triggers a push flow. A background timer drives periodic pull. Conflicts are written to `~/.emerge/pending-conflicts.json` and resolved via `icc_hub(action="resolve", ...)`. Hub config lives in `~/.emerge/hub-config.json`. Never synced: credentials, operator-events, `pipelines-registry.json`.
 
+**EventRouter**: File system watcher that monitors `pending-actions.json` (created by CC when a pending action exists) and local operator event files. Triggers async handlers on file changes. Enforces drain-on-start contract: all existing watched files are processed synchronously before watchdog activation.
+
 **Cockpit control plane**: `repl_admin.py` exposes `/api/control-plane/*` read endpoints (state, intents, session, exec-events, pipeline-events, spans, span-candidates) and write endpoints (delta/reconcile, risk/update, risk/add, policy/freeze, policy/unfreeze, session/export, session/reset). The cockpit HTML has an Overview intent table, connector sub-panels (Deltas/Risks/Spans/Exec Events), and global Audit/Session/Operator tabs.
 
 ## Test Infrastructure
@@ -98,6 +100,8 @@ Integration tests go in `test_mcp_tools_integration.py` and call `EmergeDaemon.c
 - **Memory Hub sync queue contract**: `sync-queue.jsonl` carries exactly two event types — `stable` (written by daemon on policy promotion, consumed by `_run_stable_events`) and `pull_requested` (written by `icc_hub sync`, consumed by `_run_stable_events`). Never write other event types to the queue; unconsumed events accumulate without bound.
 - **Memory Hub conflict resolution states**: `pending` → user calls `icc_hub resolve` → `resolved` → emerge_sync applies it → `applied`. "ours" leaves the file at HEAD (no-op). "theirs" uses `git show origin/<branch>:<file>` to write the remote version. "skip" marks applied without any git op. Never re-attempt pull_flow for a connector that had a push conflict in the same cycle.
 - **Memory Hub never syncs**: `pipelines-registry.json`, `span-candidates.json`, `state.json`, operator-events, credentials. Only pipeline `.py`/`.yaml` files, `NOTES.md`, and a stripped `spans.json` (stable entries only) are shared.
+- **EventRouter drain-on-start contract**: `EventRouter.start()` synchronously calls handlers for all existing watched files before handing control to watchdog/polling. This ensures no events are lost between daemon restart and watchdog activation.
+- **MCP protocol version**: daemon advertises `2025-03-26` with `elicitation: {}` capability. `_elicit()` must only be called from worker threads (ThreadPoolExecutor), never from the main stdin loop.
 
 ## Documentation Update Rules
 
