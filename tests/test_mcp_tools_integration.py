@@ -3600,3 +3600,43 @@ def test_all_notifications_use_unified_meta_fields():
         meta = p["params"]["meta"]
         for required_field in ("source", "severity", "category", "requires_action"):
             assert required_field in meta, f"Missing {required_field!r} in meta: {meta}"
+
+
+def test_initialize_declares_resource_subscribe_capability():
+    """initialize response must set resources.subscribe=True (MCP 2025-03-26)."""
+    from scripts.emerge_daemon import EmergeDaemon
+    daemon = EmergeDaemon()
+    req = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+           "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                      "clientInfo": {"name": "test", "version": "0"}}}
+    resp = daemon.handle_jsonrpc(req)
+    assert resp["result"]["capabilities"]["resources"]["subscribe"] is True
+
+
+def test_registry_write_emits_list_changed_notification(tmp_path, monkeypatch):
+    """Writing pipelines-registry.json must push resources/list_changed notification."""
+    import json
+    from scripts.emerge_daemon import EmergeDaemon
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon()
+    pushed = []
+    daemon._write_mcp_push = lambda p: pushed.append(p)
+
+    # Trigger a registry write via _update_pipeline_registry
+    # We need to call it with valid args — look at the signature: candidate_key, entry
+    # Seed a candidate first to trigger a registry update
+    daemon._update_pipeline_registry(
+        candidate_key="gmail.read.fetch",
+        entry={
+            "attempts": 1,
+            "successes": 1,
+            "verify_passes": 1,
+            "human_fixes": 0,
+            "consecutive_failures": 0,
+            "recent_outcomes": [1],
+            "source": "exec",
+        },
+    )
+
+    list_changed = [p for p in pushed if p.get("method") == "notifications/resources/list_changed"]
+    assert len(list_changed) >= 1

@@ -1356,7 +1356,7 @@ class EmergeDaemon:
                     "protocolVersion": "2025-03-26",
                     "capabilities": {
                         "tools": {},
-                        "resources": {"subscribe": False},
+                        "resources": {"subscribe": True},
                         "prompts": {},
                         "logging": {},
                         "elicitation": {},
@@ -2377,6 +2377,15 @@ class EmergeDaemon:
 
         registry["pipelines"][candidate_key] = pipeline
         self._atomic_write_json(registry_path, registry)
+        # Notify CC that the resource list has changed (MCP 2025-03-26 subscriptions)
+        try:
+            self._write_mcp_push({
+                "jsonrpc": "2.0",
+                "method": "notifications/resources/list_changed",
+                "params": {},
+            })
+        except Exception:
+            pass
 
     def _run_pipeline_remotely(
         self,
