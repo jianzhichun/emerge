@@ -34,14 +34,15 @@ def test_sse_status_returns_online_event(tmp_path, monkeypatch):
 def test_sse_broadcast_reaches_connected_client(tmp_path, monkeypatch):
     """_sse_broadcast must push events to connected SSE clients."""
     import scripts.repl_admin as repl_admin
+    start_clients = len(repl_admin._sse_clients)
     url = _start_cockpit_server(tmp_path, monkeypatch)
     resp = urllib.request.urlopen(f"{url}/api/sse/status", timeout=3)
     # SSE format: "data: {...}\n\n" — consume both the data line and the blank separator
     resp.readline()  # data: {...}\n
     resp.readline()  # blank \n separator
-    # Wait for the handler to register itself in _sse_clients
+    # Wait for this newly-opened connection to register itself in _sse_clients.
     deadline = time.time() + 2.0
-    while not repl_admin._sse_clients and time.time() < deadline:
+    while len(repl_admin._sse_clients) <= start_clients and time.time() < deadline:
         time.sleep(0.01)
     repl_admin._sse_broadcast({"status": "test_event", "x": 42})
     time.sleep(0.1)
@@ -54,13 +55,14 @@ def test_sse_broadcast_reaches_connected_client(tmp_path, monkeypatch):
 def test_sse_broadcast_pending_on_submit(tmp_path, monkeypatch):
     """POST /api/submit must broadcast a pending=true event via SSE."""
     import scripts.repl_admin as repl_admin
+    start_clients = len(repl_admin._sse_clients)
     url = _start_cockpit_server(tmp_path, monkeypatch)
     resp = urllib.request.urlopen(f"{url}/api/sse/status", timeout=3)
     resp.readline()  # data: {status: online}\n
     resp.readline()  # blank separator
 
     deadline = time.time() + 2.0
-    while not repl_admin._sse_clients and time.time() < deadline:
+    while len(repl_admin._sse_clients) <= start_clients and time.time() < deadline:
         time.sleep(0.01)
 
     body = json.dumps({"actions": [{"type": "pipeline-delete", "key": "x"}]}).encode()
