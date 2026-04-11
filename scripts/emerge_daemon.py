@@ -1407,6 +1407,31 @@ class EmergeDaemon:
                                 },
                                 "required": ["intent_signature"],
                             },
+                            "outputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "span_id": {
+                                        "type": "string",
+                                        "description": "Unique identifier for this span — pass to icc_span_close",
+                                    },
+                                    "intent_signature": {"type": "string"},
+                                    "status": {
+                                        "type": "string",
+                                        "description": "opened | bridge (when pipeline bridged directly)",
+                                    },
+                                    "policy_status": {
+                                        "type": "string",
+                                        "description": "explore | canary | stable",
+                                    },
+                                    "bridge": {
+                                        "type": "boolean",
+                                        "description": "True when span was bridged — no span_id returned, result is in 'result'",
+                                    },
+                                    "result": {
+                                        "description": "Pipeline result when bridge=true",
+                                    },
+                                },
+                            },
                         },
                         {
                             "name": "icc_span_close",
@@ -1430,6 +1455,34 @@ class EmergeDaemon:
                                 },
                                 "required": ["outcome"],
                             },
+                            "outputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "span_id": {"type": "string"},
+                                    "intent_signature": {"type": "string"},
+                                    "outcome": {
+                                        "type": "string",
+                                        "description": "success | failure | aborted",
+                                    },
+                                    "policy_status": {
+                                        "type": "string",
+                                        "description": "explore | canary | stable",
+                                    },
+                                    "synthesis_ready": {
+                                        "type": "boolean",
+                                        "description": "True when the pipeline skeleton is ready for icc_span_approve",
+                                    },
+                                    "is_read_only": {"type": "boolean"},
+                                    "skeleton_path": {
+                                        "type": "string",
+                                        "description": "Path to generated _pending/<name>.py — present when synthesis_ready=true",
+                                    },
+                                    "next_step": {
+                                        "type": "string",
+                                        "description": "Human-readable action hint when skeleton is ready",
+                                    },
+                                },
+                            },
                         },
                         {
                             "name": "icc_span_approve",
@@ -1450,6 +1503,24 @@ class EmergeDaemon:
                                     },
                                 },
                                 "required": ["intent_signature"],
+                            },
+                            "outputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "intent_signature": {"type": "string"},
+                                    "pipeline_path": {
+                                        "type": "string",
+                                        "description": "Path to activated .py pipeline",
+                                    },
+                                    "yaml_path": {
+                                        "type": "string",
+                                        "description": "Path to generated .yaml metadata",
+                                    },
+                                    "activated": {
+                                        "type": "boolean",
+                                        "description": "True when bridge is now active",
+                                    },
+                                },
                             },
                         },
                         {
@@ -1472,6 +1543,30 @@ class EmergeDaemon:
                                     "base_pipeline_id": {"type": "string", "description": "Pipeline id for flywheel bridge routing (e.g. mock.read.layers)"},
                                 },
                                 "required": [],
+                            },
+                            "outputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "bridge_promoted": {
+                                        "type": "boolean",
+                                        "description": "True when flywheel bridge short-circuited to pipeline result",
+                                    },
+                                    "synthesis_ready": {
+                                        "type": "boolean",
+                                        "description": "True when enough execs recorded to crystallize a pipeline",
+                                    },
+                                    "policy_status": {
+                                        "type": "string",
+                                        "description": "Current flywheel policy status: explore | canary | stable",
+                                    },
+                                    "result": {
+                                        "description": "Exec result payload (stdout, result_var extraction, or pipeline data)",
+                                    },
+                                    "error": {
+                                        "type": "string",
+                                        "description": "Error message if isError=true",
+                                    },
+                                },
                             },
                         },
                         # icc_read and icc_write are intentionally omitted from the schema.

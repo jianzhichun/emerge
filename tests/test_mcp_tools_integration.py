@@ -3733,4 +3733,32 @@ def test_tool_list_has_title_and_annotations():
     assert tools["icc_goal_read"]["annotations"]["readOnlyHint"] is True
     assert tools["icc_goal_rollback"]["annotations"]["destructiveHint"] is True
     assert tools["icc_reconcile"]["annotations"]["idempotentHint"] is True
+
+
+def test_tool_list_key_tools_have_output_schema():
+    """icc_exec, icc_span_open, icc_span_close, icc_span_approve must declare outputSchema."""
+    daemon = EmergeDaemon(root=ROOT)
+    response = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+    tools = {t["name"]: t for t in response["result"]["tools"]}
+
+    for name in ("icc_exec", "icc_span_open", "icc_span_close", "icc_span_approve"):
+        assert "outputSchema" in tools[name], f"{name} missing 'outputSchema'"
+        schema = tools[name]["outputSchema"]
+        assert schema.get("type") == "object", f"{name} outputSchema must be object type"
+        assert "properties" in schema, f"{name} outputSchema missing 'properties'"
+
+    exec_props = tools["icc_exec"]["outputSchema"]["properties"]
+    assert "bridge_promoted" in exec_props
+    assert "synthesis_ready" in exec_props
+    assert "policy_status" in exec_props
+
+    span_open_props = tools["icc_span_open"]["outputSchema"]["properties"]
+    assert "span_id" in span_open_props
+    assert "bridge" in span_open_props
+    assert "policy_status" in span_open_props
+
+    span_close_props = tools["icc_span_close"]["outputSchema"]["properties"]
+    assert "span_id" in span_close_props
+    assert "synthesis_ready" in span_close_props
+    assert "skeleton_path" in span_close_props
     assert tools["icc_span_approve"]["annotations"]["idempotentHint"] is True
