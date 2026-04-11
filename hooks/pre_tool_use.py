@@ -23,13 +23,19 @@ def main() -> None:
 
     # Validation rules per tool
     error_msg: str | None = None
+    _sig_normalized_from: str | None = None
+    _sig_normalized_to: str | None = None
 
     # icc_read / icc_write are removed from schema (deprecated: use icc_span_open).
     # No validation block needed — PreToolUse only fires for schema-listed tools.
 
     if tool_name.endswith("__icc_exec"):
         mode = str(arguments.get("mode", "inline_code")).strip()
-        intent_signature = str(arguments.get("intent_signature", "")).strip()
+        _sig_raw = str(arguments.get("intent_signature", "")).strip()
+        intent_signature = _sig_raw.lower()
+        if intent_signature != _sig_raw:
+            _sig_normalized_from = _sig_raw
+            _sig_normalized_to = intent_signature
         if mode not in ("inline_code", "script_ref"):
             error_msg = f"icc_exec: 'mode' must be inline_code or script_ref, got {mode!r}"
         elif mode == "inline_code" and not str(arguments.get("code", "")).strip():
@@ -82,7 +88,11 @@ def main() -> None:
             error_msg = f"icc_reconcile: 'outcome' must be confirm/correct/retract, got {outcome!r}"
 
     if tool_name.endswith("__icc_crystallize"):
-        intent_signature = str(arguments.get("intent_signature", "")).strip()
+        _sig_raw = str(arguments.get("intent_signature", "")).strip()
+        intent_signature = _sig_raw.lower()
+        if intent_signature != _sig_raw:
+            _sig_normalized_from = _sig_raw
+            _sig_normalized_to = intent_signature
         connector = str(arguments.get("connector", "")).strip()
         pipeline_name = str(arguments.get("pipeline_name", "")).strip()
         mode = str(arguments.get("mode", "")).strip()
@@ -102,7 +112,11 @@ def main() -> None:
 
     if tool_name.endswith("__icc_span_open"):
         import re as _re
-        intent_signature = str(arguments.get("intent_signature", "")).strip()
+        _sig_raw = str(arguments.get("intent_signature", "")).strip()
+        intent_signature = _sig_raw.lower()
+        if intent_signature != _sig_raw:
+            _sig_normalized_from = _sig_raw
+            _sig_normalized_to = intent_signature
         if not intent_signature:
             error_msg = (
                 "icc_span_open: 'intent_signature' is required "
@@ -123,7 +137,11 @@ def main() -> None:
             )
 
     if tool_name.endswith("__icc_span_approve"):
-        intent_signature = str(arguments.get("intent_signature", "")).strip()
+        _sig_raw = str(arguments.get("intent_signature", "")).strip()
+        intent_signature = _sig_raw.lower()
+        if intent_signature != _sig_raw:
+            _sig_normalized_from = _sig_raw
+            _sig_normalized_to = intent_signature
         if not intent_signature:
             error_msg = "icc_span_approve: 'intent_signature' is required"
 
@@ -135,6 +153,18 @@ def main() -> None:
                 "permissionDecisionReason": error_msg,
             },
             "systemMessage": f"Tool call blocked by emerge PreToolUse validator: {error_msg}",
+        }
+    elif _sig_normalized_to is not None:
+        out = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": {"intent_signature": _sig_normalized_to},
+            },
+            "systemMessage": (
+                f"pre_tool_use: normalized intent_signature "
+                f"from {_sig_normalized_from!r} to {_sig_normalized_to!r}"
+            ),
         }
     else:
         out = {
