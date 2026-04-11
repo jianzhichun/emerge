@@ -2781,13 +2781,12 @@ class EmergeDaemon:
             pass
 
     def _on_local_event_file(self, path) -> None:
-        """Called by EventRouter when an operator events.jsonl file changes."""
-        if self._operator_monitor is None:
-            return
-        try:
-            self._operator_monitor._poll_local()
-        except Exception:
-            pass
+        """Called by EventRouter when an operator events.jsonl file changes.
+
+        _poll_local was removed in the event-driven refactor. EventRouter
+        now delivers events directly; OperatorMonitor handles remote runners only.
+        """
+        pass
 
     def _push_pattern(self, stage: str, context: dict, summary: Any) -> None:
         """Push pattern detection result to CC via MCP channel notification.
