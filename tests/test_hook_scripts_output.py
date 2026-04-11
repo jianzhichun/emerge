@@ -70,7 +70,11 @@ def test_post_tool_use_and_pre_compact_contract(tmp_path: Path):
         capture_output=True, text=True, env=env, check=True,
     )
     out = json.loads(proc.stdout.strip())
-    assert out["hookSpecificOutput"]["hookEventName"] == "PreCompact"
+    assert "hookSpecificOutput" not in out
+    assert "systemMessage" in out
+    assert "FLYWHEEL_TOKEN" in out["systemMessage"]
+    pc_token = _extract_flywheel_token(out["systemMessage"])
+    assert pc_token["schema_version"] == "flywheel.v1"
 
 
 def test_hook_default_state_dir_uses_home_emerge(tmp_path: Path):
@@ -169,8 +173,9 @@ def test_pre_compact_emits_recovery_token(tmp_path: Path):
         capture_output=True, text=True, env=env, check=True,
     )
     out = json.loads(proc.stdout.strip())
-    assert out["hookSpecificOutput"]["hookEventName"] == "PreCompact"
-    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "hookSpecificOutput" not in out
+    assert "systemMessage" in out
+    ctx = out["systemMessage"]
     assert "FLYWHEEL_TOKEN" in ctx
     token_text = ctx.rsplit("FLYWHEEL_TOKEN\n", 1)[1].strip()
     token = json.loads(token_text)
