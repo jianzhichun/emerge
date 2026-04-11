@@ -3480,11 +3480,11 @@ def test_bridge_failure_pushes_high_severity_notification(tmp_path, monkeypatch)
     assert n["source"] == "bridge"
     assert n["severity"] == "high"
     assert n["intent_signature"] == "gmail.read.fetch"
+    assert "timeout" in n["content"]
 
 
 def test_span_close_stable_pushes_skeleton_ready_notification(tmp_path, monkeypatch):
     """icc_span_close generating a skeleton must push a skeleton-ready notification to CC."""
-    import os
     from scripts.emerge_daemon import EmergeDaemon
     from unittest.mock import patch, MagicMock
 
@@ -3516,6 +3516,7 @@ def test_span_close_stable_pushes_skeleton_ready_notification(tmp_path, monkeypa
     n = notified[0]
     assert n["source"] == "span_synthesizer"
     assert n["severity"] == "info"
+    assert n["category"] == "action_needed"
     assert n["requires_action"] is True
     assert n["intent_signature"] == "gmail.read.fetch"
     assert str(fake_path) in n["content"]
