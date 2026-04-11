@@ -3411,3 +3411,73 @@ def test_notify_helper_builds_correct_meta():
     assert meta["intent_signature"] == "gmail.read.fetch"
     assert meta["requires_action"] is False
     assert p["params"]["content"] == "bridge failed for gmail.read.fetch"
+
+
+def test_notify_extra_meta_cannot_overwrite_required_fields():
+    """extra_meta keys must NOT overwrite source/severity/category/requires_action."""
+    from scripts.emerge_daemon import EmergeDaemon
+    daemon = EmergeDaemon()
+    pushed = []
+    daemon._write_mcp_push = lambda p: pushed.append(p)
+
+    daemon._notify(
+        content="test",
+        source="bridge",
+        severity="high",
+        category="warning",
+        requires_action=False,
+        extra_meta={"source": "evil", "severity": "low", "requires_action": True},
+    )
+
+    meta = pushed[0]["params"]["meta"]
+    assert meta["source"] == "bridge"      # not overwritten by extra_meta
+    assert meta["severity"] == "high"      # not overwritten by extra_meta
+    assert meta["requires_action"] is False  # not overwritten by extra_meta
+
+
+def test_notify_extra_meta_fields_are_merged():
+    """extra_meta fields are present in the final notification meta."""
+    from scripts.emerge_daemon import EmergeDaemon
+    daemon = EmergeDaemon()
+    pushed = []
+    daemon._write_mcp_push = lambda p: pushed.append(p)
+
+    daemon._notify(
+        content="test",
+        source="cockpit",
+        extra_meta={"action_count": 3, "action_types": ["prompt"]},
+    )
+
+    meta = pushed[0]["params"]["meta"]
+    assert meta["action_count"] == 3
+    assert meta["action_types"] == ["prompt"]
+    assert meta["source"] == "cockpit"  # required field still present
+
+
+def test_bridge_failure_pushes_high_severity_notification(tmp_path, monkeypatch):
+    """When flywheel bridge raises, daemon must push severity=high notification."""
+    import json
+    from scripts.emerge_daemon import EmergeDaemon
+    from unittest.mock import patch
+
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon()
+
+    # Seed pipelines-registry with a stable pipeline so bridge fires
+    reg = {"pipelines": {"gmail.read.fetch": {"status": "stable", "consecutive_failures": 0}}}
+    (tmp_path / "pipelines-registry.json").write_text(json.dumps(reg))
+
+    notified = []
+    daemon._notify = lambda **kw: notified.append(kw)
+
+    # Patch pipeline.run_read to raise
+    with patch.object(daemon.pipeline, "run_read", side_effect=RuntimeError("timeout")):
+        result = daemon._try_flywheel_bridge({"intent_signature": "gmail.read.fetch"})
+
+    assert result is None  # bridge fell through
+    assert len(notified) == 1
+    n = notified[0]
+    assert n["source"] == "bridge"
+    assert n["severity"] == "high"
+    assert n["intent_signature"] == "gmail.read.fetch"
+    assert "timeout" in n["content"]

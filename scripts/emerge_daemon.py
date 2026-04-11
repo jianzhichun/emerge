@@ -229,6 +229,21 @@ class EmergeDaemon:
                 "flywheel bridge failed for %s (%s), falling back to LLM: %s",
                 base_pipeline_id, mode, _bridge_exc,
             )
+            # Notify CC so it can intervene, retrigger, or log the degradation
+            try:
+                self._notify(
+                    content=(
+                        f"⚠️ Flywheel bridge failed for `{base_pipeline_id}` ({mode}): "
+                        f"{_bridge_exc}. Falling back to LLM inference."
+                    ),
+                    source="bridge",
+                    severity="high",
+                    category="warning",
+                    intent_signature=base_pipeline_id,
+                    extra_meta={"failure_reason": str(_bridge_exc)},
+                )
+            except Exception:
+                pass
             # Increment consecutive_failures directly in the registry so the policy engine
             # can downgrade stable→explore if the bridge keeps failing, without polluting
             # the recent_outcomes window (which would cause spurious window-failure downgrades).
@@ -2858,16 +2873,17 @@ class EmergeDaemon:
         extra_meta: dict | None = None,
     ) -> None:
         """Push a channel notification to CC with unified meta schema."""
-        meta: dict = {
+        meta: dict = {}
+        if extra_meta:
+            meta.update(extra_meta)   # extra_meta applied first
+        meta.update({                  # required fields always override
             "source": source,
             "severity": severity,
             "category": category,
             "requires_action": requires_action,
-        }
+        })
         if intent_signature:
             meta["intent_signature"] = intent_signature
-        if extra_meta:
-            meta.update(extra_meta)
         self._write_mcp_push({
             "jsonrpc": "2.0",
             "method": "notifications/claude/channel",
