@@ -382,33 +382,40 @@ def _run_pre_hook(payload: dict) -> dict:
 
 def test_pre_hook_blocks_span_open_missing_intent():
     out = _run_pre_hook({"tool_name": "emerge__icc_span_open", "tool_input": {}})
-    assert out.get("decision") == "block"
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") == "deny"
 
 def test_pre_hook_blocks_span_open_invalid_intent():
     out = _run_pre_hook({"tool_name": "emerge__icc_span_open",
                          "tool_input": {"intent_signature": "no_mode_segment"}})
-    assert out.get("decision") == "block"
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") == "deny"
 
 def test_pre_hook_allows_valid_span_open():
     out = _run_pre_hook({"tool_name": "emerge__icc_span_open",
                          "tool_input": {"intent_signature": "lark.read.get-doc"}})
-    assert out.get("decision") != "block"
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") != "deny"
 
 def test_pre_hook_blocks_span_close_bad_outcome():
     out = _run_pre_hook({"tool_name": "emerge__icc_span_close",
                          "tool_input": {"outcome": "done"}})
-    assert out.get("decision") == "block"
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") == "deny"
 
 def test_pre_hook_allows_valid_span_close():
     out = _run_pre_hook({"tool_name": "emerge__icc_span_close",
                          "tool_input": {"outcome": "success"}})
-    assert out.get("decision") != "block"
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") != "deny"
 
 def test_pre_hook_blocks_span_approve_missing_intent():
     out = _run_pre_hook({"tool_name": "emerge__icc_span_approve", "tool_input": {}})
-    assert out.get("decision") == "block"
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") == "deny"
 
 def test_pre_hook_allows_valid_span_approve():
     out = _run_pre_hook({"tool_name": "emerge__icc_span_approve",
                          "tool_input": {"intent_signature": "lark.write.create-doc"}})
-    assert out.get("decision") != "block"
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") != "deny"

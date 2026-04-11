@@ -26,8 +26,10 @@ def test_pre_tool_use_blocks_missing_intent_with_correction_hint():
         "tool_name": "emerge__icc_exec",
         "tool_input": {"code": "result = {}", "mode": "inline_code"},
     })
-    assert out.get("decision") == "block"
-    assert "intent_signature" in out.get("reason", "").lower()
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") == "deny"
+    reason = hook_out.get("permissionDecisionReason", "").lower()
+    assert "intent_signature" in reason
 
 
 def test_pre_tool_use_approves_valid_intent_signature():
@@ -40,8 +42,9 @@ def test_pre_tool_use_approves_valid_intent_signature():
             "mode": "inline_code",
         },
     })
-    assert "decision" not in out  # no block
-    assert out["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") != "deny"  # no block
+    assert hook_out["hookEventName"] == "PreToolUse"
 
 
 def test_pre_tool_use_blocks_two_part_intent_with_fix_hint():
@@ -54,8 +57,9 @@ def test_pre_tool_use_blocks_two_part_intent_with_fix_hint():
             "mode": "inline_code",
         },
     })
-    assert out.get("decision") == "block"
-    reason = out.get("reason", "")
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") == "deny"
+    reason = hook_out.get("permissionDecisionReason", "")
     # Must explain correct format with 3 parts
     assert (
         "connector.mode.name" in reason

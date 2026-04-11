@@ -1986,8 +1986,10 @@ def test_pre_tool_use_rejects_invalid_intent_signature_format():
         capture_output=True, text=True,
     )
     out = _json.loads(result.stdout)
-    assert out["decision"] == "block"
-    assert "read|write" in out["reason"] or "read" in out["reason"]
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") == "deny"
+    reason = hook_out.get("permissionDecisionReason", "")
+    assert "read|write" in reason or "read" in reason
 
 
 def test_pre_tool_use_rejects_two_part_intent_signature():
@@ -2007,7 +2009,8 @@ def test_pre_tool_use_rejects_two_part_intent_signature():
         capture_output=True, text=True,
     )
     out = _json.loads(result.stdout)
-    assert out["decision"] == "block"
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") == "deny"
 
 
 def test_pre_tool_use_rejects_legacy_read_connector_name_order():
@@ -2027,8 +2030,10 @@ def test_pre_tool_use_rejects_legacy_read_connector_name_order():
         capture_output=True, text=True,
     )
     out = _json.loads(result.stdout)
-    assert out["decision"] == "block"
-    assert "Must be <connector>.(read|write).<name>" in out["reason"]
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") == "deny"
+    reason = hook_out.get("permissionDecisionReason", "")
+    assert "Must be <connector>.(read|write).<name>" in reason
 
 
 def test_pre_tool_use_accepts_valid_intent_signature():
@@ -2048,7 +2053,8 @@ def test_pre_tool_use_accepts_valid_intent_signature():
         capture_output=True, text=True,
     )
     out = _json.loads(result.stdout)
-    assert out.get("decision") != "block", f"Should not block valid signature: {out}"
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") != "deny", f"Should not block valid signature: {out}"
 
 
 def test_pre_tool_use_rejects_invalid_result_var():
@@ -2069,8 +2075,10 @@ def test_pre_tool_use_rejects_invalid_result_var():
         capture_output=True, text=True,
     )
     out = _json.loads(result.stdout)
-    assert out["decision"] == "block"
-    assert "result_var" in out["reason"]
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") == "deny"
+    reason = hook_out.get("permissionDecisionReason", "")
+    assert "result_var" in reason
 
 
 def test_pre_tool_use_accepts_valid_result_var():

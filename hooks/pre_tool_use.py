@@ -128,8 +128,14 @@ def main() -> None:
             error_msg = "icc_span_approve: 'intent_signature' is required"
 
     if error_msg:
-        # Return a block decision to reject the tool call
-        out = {"decision": "block", "reason": error_msg}
+        out = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": error_msg,
+            },
+            "systemMessage": f"Tool call blocked by emerge PreToolUse validator: {error_msg}",
+        }
     else:
         out = {
             "hookSpecificOutput": {
