@@ -69,7 +69,7 @@ from scripts.pattern_detector import PatternDetector
 events = [
     {"ts_ms": 1000 * i, "machine_id": "test", "session_role": "operator",
      "event_type": "entity_added", "app": "zwcad",
-     "payload": {"layer": "标注", "content": f"room_{i}"}}
+     "payload": {"layer": "annotation", "content": f"room_{i}"}}
     for i in range(4)
 ]
 summaries = PatternDetector().ingest(events)

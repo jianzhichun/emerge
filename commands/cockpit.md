@@ -8,10 +8,12 @@ Always invoke the admin CLI via the **Emerge plugin root** (not the user's open 
 
 Steps:
 
-1. **Start the server** (run foreground — it self-daemonizes and returns quickly):
+1. **Start the server** (long-running command; run in background):
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" serve --open --port 0`
-   - Idempotent: if an instance is already running, it returns the existing URL.
-   - Wait ~1 second, then read output to extract the URL (`Cockpit running at http://localhost:PORT`).
+   - Use the Bash tool with `run_in_background: true` (do not use shell `&`).
+   - Idempotent: if an instance is already running for the same project, it reuses the existing URL.
+   - Read startup output to extract URL (`Cockpit running at http://localhost:PORT`).
+   - Keep this process alive until explicit close (`serve-stop`).
 
 2. **Print status summary**:
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" policy-status --pretty`
@@ -38,30 +40,19 @@ Steps:
 
    Only skip injection if a connector has zero pipelines AND no NOTES.md.
 
-4. **Enter the dispatch loop** (core, background-driven):
+4. **Event-driven dispatch contract** (no polling loop, no `wait-for-submit`):
 
-   a. Launch `wait-for-submit` using the **Bash tool with `run_in_background: true` parameter** (timeout 600000ms):
-      `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" wait-for-submit`
-      - **CRITICAL**: Set the Bash tool's `run_in_background` parameter to `true` — do NOT use shell `&`. Only the tool parameter triggers the automatic completion notification.
-      - Tell the user the cockpit is ready and you'll handle submissions automatically; they are free to ask other questions in the meantime.
-      - You will be **notified automatically** when the command completes — do NOT poll or sleep.
-
-   b. When notified of completion, **always read the output file** (`cat <output-file-path>`) before doing anything else — the task-notification only contains a summary, not the actions. Parse the JSON:
-      - `{"ok": false, "timeout": true}` → re-launch wait-for-submit in background (back to step a); no user message needed
-      - If the user said "close cockpit" before the notification arrived, skip processing and go to step 5 instead.
-      - `{"ok": true, "actions": [...]}` → go to step c
-
-   c. **Re-arm FIRST, then process** — this order is critical:
-      1. **Immediately re-launch wait-for-submit in background** (back to step a pattern) so the frontend can accept the next submission while you process the current one.
-      2. Then process received actions sequentially:
-         - `pipeline-set` → `repl_admin.py pipeline-set --pipeline-key <key> --set <field>=<value>` (one --set per field)
-         - `pipeline-delete` → `repl_admin.py pipeline-delete --pipeline-key <key>`
-         - `notes-comment` → append `\n\n<!-- <ISO timestamp> -->\n<comment>` to `~/.emerge/connectors/<connector>/NOTES.md`
-         - `notes-edit` → overwrite `~/.emerge/connectors/<connector>/NOTES.md` entirely
-         - `tool-call` → **deterministic call only**: execute exactly `call.tool` + `call.arguments` (`icc_read`/`icc_write`); do not rewrite as free-form reasoning
-           - If `auto.mode=auto` and `flywheel.synthesis_ready=true`, append a crystallization suggestion after execution (do not block the result)
-         - `crystallize-component` → write to `~/.emerge/connectors/<connector>/cockpit/<filename>.html` and `<filename>.context.md`
-      3. Briefly report results. The next wait-for-submit is already running — no need to re-arm again.
+   - Cockpit submissions are written to `pending-actions.json` by `/api/submit`.
+   - `EmergeDaemon` `EventRouter` watches that file and pushes a channel notification to CC (`source=cockpit`, `requires_action=true`) with a formatted action list.
+   - Process actions when that notification arrives. Do not run polling/sleep loops for submissions.
+   - Execute actions sequentially and deterministically:
+     - `pipeline-set` → `repl_admin.py pipeline-set --pipeline-key <key> --set <field>=<value>` (one `--set` per field)
+     - `pipeline-delete` → `repl_admin.py pipeline-delete --pipeline-key <key>`
+     - `notes-comment` → append `\n\n<!-- <ISO timestamp> -->\n<comment>` to `~/.emerge/connectors/<connector>/NOTES.md`
+     - `notes-edit` → overwrite `~/.emerge/connectors/<connector>/NOTES.md` entirely
+     - `tool-call` → execute exactly `call.tool` + `call.arguments` (deterministic, no free-form reinterpretation)
+     - `crystallize-component` → write to `~/.emerge/connectors/<connector>/cockpit/<filename>.html` and `<filename>.context.md`
+   - Briefly report results after processing.
 
 5. **Close the cockpit**: when the user says close/exit:
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" serve-stop`

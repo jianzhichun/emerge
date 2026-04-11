@@ -27,6 +27,7 @@ Steps:
      git add -u
      git commit -m "chore: pre-release cleanup"
      ```
+   - Note: `git add -u` stages tracked-file changes only. Untracked files are left untouched unless explicitly added.
    - Skip if working tree is already clean.
 
 3. **Bump all version files** using the version-bump script:

@@ -211,7 +211,7 @@ Request body (JSON):
   "session_role": "operator",
   "event_type": "entity_added",
   "app": "zwcad",
-  "payload": {"layer": "标注", "content": "主卧"}
+  "payload": {"layer": "annotation", "content": "master_bedroom"}
 }
 ```
 
