@@ -1754,7 +1754,7 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Origin", self._cors_origin())
             self.end_headers()
             msg = json.dumps({
                 "status": "online",
@@ -1947,6 +1947,9 @@ def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
     pid_path.write_text(
         json.dumps({"pid": os.getpid(), "port": actual_port, "cwd": current_cwd}), encoding="utf-8"
     )
+
+    import atexit as _atexit
+    _atexit.register(lambda: _sse_broadcast({"status": "offline"}))
 
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()

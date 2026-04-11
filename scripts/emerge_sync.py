@@ -634,7 +634,6 @@ def run_event_loop(stop_event: threading.Event | None = None) -> None:
                 if stop_event.wait(timeout=1.0):
                     break
             else:
-                import time
                 time.sleep(1.0)
     finally:
         router.stop()

@@ -887,7 +887,7 @@ class EmergeDaemon:
             )
             if elicit_resp is None:
                 return self._tool_error(
-                    "icc_span_approve: elicitation timed out — operation cancelled"
+                    "icc_span_approve: elicitation declined or timed out — operation cancelled"
                 )
             if not elicit_resp.get("confirmed"):
                 return self._tool_ok_json({
@@ -1075,7 +1075,7 @@ class EmergeDaemon:
                 )
                 if elicit_resp is None:
                     return self._tool_error(
-                        "icc_reconcile: elicitation timed out — operation cancelled"
+                        "icc_reconcile: elicitation declined or timed out — operation cancelled"
                     )
                 outcome = str(elicit_resp.get("outcome", "")).strip()
                 if outcome not in ("confirm", "correct", "retract"):
@@ -1285,7 +1285,7 @@ class EmergeDaemon:
                 )
                 if elicit_resp is None:
                     return self._tool_error(
-                        "icc_hub resolve: elicitation timed out — operation cancelled"
+                        "icc_hub resolve: elicitation declined or timed out — operation cancelled"
                     )
                 resolution = str(elicit_resp.get("resolution", "")).strip()
                 if resolution not in ("ours", "theirs", "skip"):
