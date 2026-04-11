@@ -3774,3 +3774,62 @@ def test_tool_list_key_tools_have_output_schema():
     span_approve_props = tools["icc_span_approve"]["outputSchema"]["properties"]
     assert "activated" in span_approve_props
     assert "pipeline_path" in span_approve_props
+
+
+def test_initialize_version_negotiation_new_client():
+    """When client sends 2025-11-25, server must respond 2025-11-25."""
+    daemon = EmergeDaemon(root=ROOT)
+    response = daemon.handle_jsonrpc({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "claude-code", "version": "1.0"},
+        },
+    })
+    assert response["result"]["protocolVersion"] == "2025-11-25"
+
+
+def test_initialize_version_negotiation_old_client():
+    """When client sends 2025-03-26, server responds 2025-03-26 (min)."""
+    daemon = EmergeDaemon(root=ROOT)
+    response = daemon.handle_jsonrpc({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "claude-code", "version": "0.9"},
+        },
+    })
+    assert response["result"]["protocolVersion"] == "2025-03-26"
+
+
+def test_initialize_version_negotiation_no_version():
+    """When client omits version, server returns 2025-03-26 fallback."""
+    daemon = EmergeDaemon(root=ROOT)
+    response = daemon.handle_jsonrpc({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {"capabilities": {}},
+    })
+    assert response["result"]["protocolVersion"] == "2025-03-26"
+
+
+def test_initialize_version_negotiation_future_client():
+    """When client requests version newer than server max, server responds server_max."""
+    daemon = EmergeDaemon(root=ROOT)
+    response = daemon.handle_jsonrpc({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2026-01-01",
+            "capabilities": {},
+        },
+    })
+    assert response["result"]["protocolVersion"] == "2025-11-25"

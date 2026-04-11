@@ -91,6 +91,8 @@ class _RunnerClientAdapter:
 
 
 class EmergeDaemon:
+    _SERVER_MAX_PROTOCOL_VERSION = "2025-11-25"
+
     def __init__(self, root: Path | None = None) -> None:
         resolved_root = root or ROOT
         pin_plugin_data_path_if_present()
@@ -1349,11 +1351,21 @@ class EmergeDaemon:
             params = {}
 
         if method == "initialize":
+            client_version = str(params.get("protocolVersion", "") or "").strip()
+            # Version negotiation: respond with min(client, server_max).
+            # Versions are date-based (YYYY-MM-DD) — lexicographic comparison is correct.
+            _server_max = self._SERVER_MAX_PROTOCOL_VERSION
+            if client_version and client_version <= _server_max:
+                negotiated_version = client_version
+            elif client_version and client_version > _server_max:
+                negotiated_version = _server_max
+            else:
+                negotiated_version = "2025-03-26"  # fallback when client omits version
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
                 "result": {
-                    "protocolVersion": "2025-03-26",
+                    "protocolVersion": negotiated_version,
                     "capabilities": {
                         "tools": {},
                         "resources": {"subscribe": True},
