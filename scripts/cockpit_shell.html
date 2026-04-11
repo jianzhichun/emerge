@@ -617,7 +617,7 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 
 <div class="status-bar">
   <span id="status-msg">Ready</span>
-  <span id="cc-indicator" style="font-size:11px;margin-left:12px">○ CC offline</span>
+  <span id="cc-indicator" style="font-size:11px;margin-left:12px;color:#d29922">◐ Connecting to server…</span>
   <span id="refresh-timer">
     <span class="bar-track"><span class="bar-fill" id="refresh-bar" style="width:100%"></span></span>
     <span class="tick" id="refresh-tick">in 5s</span>
@@ -680,8 +680,8 @@ let queue = [];
 let currentTab = 'overview';
 let connectorPanelByTab = {};
 let queueIdSeq = 0;
-let ccListening = false;  // whether wait-for-submit is active in CC
-let ccListeningSignalKnown = true; // false when connected to legacy /api/status
+let sseConnected = false;  // true when EventSource is open
+let serverPending = false; // true when pending-actions.json exists server-side
 let goalHistory = [];
 let selectedGoalEventId = '';
 
@@ -783,7 +783,8 @@ async function init() {
     _lastRefreshAt = new Date();
     _resetRefreshTimer();
   }, REFRESH_INTERVAL_S * 1000);
-  setInterval(refreshStatus, 3000);
+  connectSSE();
+  setInterval(refreshStatus, 10000);
   setInterval(_tickRefreshTimer, 1000);
 }
 
@@ -864,24 +865,15 @@ function _softUpdateConnectorAssets(name) {
 }
 
 async function refreshStatus() {
-  let serverPending = false;
   try {
     const r = await fetch('/api/status');
     const d = await r.json();
-    if (Object.prototype.hasOwnProperty.call(d, 'cc_listening')) {
-      ccListening = !!d.cc_listening;
-      ccListeningSignalKnown = true;
-    } else {
-      // Legacy server: status endpoint has no cc_listening. Keep submit usable.
-      ccListening = true;
-      ccListeningSignalKnown = false;
-    }
     serverPending = !!d.pending;
-  } catch(e) {
-    ccListening = false;
-    ccListeningSignalKnown = true;
-  }
-  updateCcIndicator();
+  } catch(e) {}
+  updateSubmitState();
+}
+
+function updateSubmitState() {
   const btn = document.getElementById('submit-btn');
   const statusMsg = document.getElementById('status-msg');
   if (serverPending && statusMsg && !statusMsg.textContent.startsWith('✓')) {
@@ -889,7 +881,7 @@ async function refreshStatus() {
   } else if (!serverPending && statusMsg && statusMsg.textContent.startsWith('⏳')) {
     statusMsg.textContent = '';
   }
-  if (btn) btn.disabled = queue.length === 0 || serverPending || (ccListeningSignalKnown && !ccListening);
+  if (btn) btn.disabled = queue.length === 0 || serverPending;
 }
 
 async function refreshGoal() {
@@ -1030,18 +1022,40 @@ async function rollbackGoalToSelected() {
 function updateCcIndicator() {
   const el = document.getElementById('cc-indicator');
   if (!el) return;
-  if (!ccListeningSignalKnown) {
-    el.textContent = '◐ CC status unavailable (legacy server) — submit remains enabled';
-    el.style.color = '#d29922';
-    return;
-  }
-  if (ccListening) {
-    el.textContent = '● CC listening';
+  if (sseConnected) {
+    el.textContent = '● Server online';
     el.style.color = '#3fb950';
   } else {
-    el.textContent = '○ CC offline — run /cockpit in CC to start listening';
-    el.style.color = '#f85149';
+    el.textContent = '◐ Connecting to server…';
+    el.style.color = '#d29922';
   }
+}
+
+let _sseReconnectTimer = null;
+function connectSSE() {
+  if (_sseReconnectTimer) { clearTimeout(_sseReconnectTimer); _sseReconnectTimer = null; }
+  const es = new EventSource('/api/sse/status');
+  es.onopen = () => {
+    sseConnected = true;
+    updateCcIndicator();
+  };
+  es.onmessage = (evt) => {
+    try {
+      const d = JSON.parse(evt.data);
+      if (Object.prototype.hasOwnProperty.call(d, 'pending')) {
+        serverPending = !!d.pending;
+        updateSubmitState();
+      }
+    } catch(e) {}
+  };
+  es.onerror = () => {
+    sseConnected = false;
+    updateCcIndicator();
+    es.close();
+    if (!_sseReconnectTimer) {
+      _sseReconnectTimer = setTimeout(connectSSE, 3000);
+    }
+  };
 }
 
 // Refresh only policy-driven content without disturbing static sections (notes, controls).
@@ -2567,9 +2581,8 @@ function renderQueue() {
   const count = queue.length;
   document.getElementById('queue-count').textContent = count;
   const btn = document.getElementById('submit-btn');
-  const blockedByCcOffline = ccListeningSignalKnown && !ccListening;
-  btn.disabled = count === 0 || blockedByCcOffline;
-  btn.title = blockedByCcOffline ? 'CC is not listening — run /cockpit first' : '';
+  btn.disabled = count === 0 || serverPending;
+  btn.title = '';
   btn.textContent = `✓ Submit to CC (${count})`;
 
   const container = document.getElementById('queue-items');
@@ -2615,11 +2628,11 @@ async function submitQueue() {
       refreshPolicyDisplay();
     } else {
       document.getElementById('status-msg').textContent = 'Submit failed: ' + JSON.stringify(result);
-      btn.disabled = false;
+      updateSubmitState();
     }
   } catch(e) {
     document.getElementById('status-msg').textContent = 'Network error: ' + e.message;
-    btn.disabled = false;
+    updateSubmitState();
   }
 }
 
