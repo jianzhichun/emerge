@@ -842,6 +842,23 @@ class EmergeDaemon:
                             })
                         except Exception:
                             pass
+                        # Notify CC so it can review and call icc_span_approve
+                        try:
+                            self._notify(
+                                content=(
+                                    f"✅ Pipeline skeleton ready for `{closed.intent_signature}`. "
+                                    f"Review `{skeleton_path}`, complete any TODOs, "
+                                    "then call `icc_span_approve` to activate the bridge."
+                                ),
+                                source="span_synthesizer",
+                                severity="info",
+                                category="action_needed",
+                                intent_signature=closed.intent_signature,
+                                requires_action=True,
+                                extra_meta={"skeleton_path": skeleton_path},
+                            )
+                        except Exception:
+                            pass
             response: dict[str, Any] = {
                 "span_id": closed.span_id,
                 "intent_signature": closed.intent_signature,

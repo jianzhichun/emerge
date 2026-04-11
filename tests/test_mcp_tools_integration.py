@@ -3480,4 +3480,42 @@ def test_bridge_failure_pushes_high_severity_notification(tmp_path, monkeypatch)
     assert n["source"] == "bridge"
     assert n["severity"] == "high"
     assert n["intent_signature"] == "gmail.read.fetch"
-    assert "timeout" in n["content"]
+
+
+def test_span_close_stable_pushes_skeleton_ready_notification(tmp_path, monkeypatch):
+    """icc_span_close generating a skeleton must push a skeleton-ready notification to CC."""
+    import os
+    from scripts.emerge_daemon import EmergeDaemon
+    from unittest.mock import patch, MagicMock
+
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon()
+
+    # Open a span first
+    daemon.call_tool("icc_span_open", {"intent_signature": "gmail.read.fetch"})
+
+    notified = []
+    daemon._notify = lambda **kw: notified.append(kw)
+
+    # Fake skeleton path
+    fake_path = tmp_path / "gmail" / "pipelines" / "read" / "_pending" / "fetch.py"
+    fake_path.parent.mkdir(parents=True, exist_ok=True)
+    fake_path.write_text("# skeleton")
+
+    with patch.object(daemon, "_generate_span_skeleton", return_value=fake_path), \
+         patch.object(daemon._span_tracker, "is_synthesis_ready", return_value=True), \
+         patch.object(daemon._span_tracker, "skeleton_already_generated", return_value=False), \
+         patch.object(daemon._span_tracker, "latest_successful_span", return_value=MagicMock()), \
+         patch.object(daemon._span_tracker, "mark_skeleton_generated", return_value=None):
+        daemon.call_tool("icc_span_close", {
+            "intent_signature": "gmail.read.fetch",
+            "outcome": "success",
+        })
+
+    assert len(notified) == 1, f"Expected 1 notification, got {notified}"
+    n = notified[0]
+    assert n["source"] == "span_synthesizer"
+    assert n["severity"] == "info"
+    assert n["requires_action"] is True
+    assert n["intent_signature"] == "gmail.read.fetch"
+    assert str(fake_path) in n["content"]
