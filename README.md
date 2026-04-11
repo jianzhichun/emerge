@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/version-v0.3.48-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-476%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-479%20passing-brightgreen?logo=pytest)
 
 **Emerge** 解决的核心问题是：AI 操作员反复执行相同操作但无法学习——每次都要重新推理。它通过**双向飞轮**将重复工作结晶化为确定性管道：**前向飞轮**（`icc_exec`/`icc_span_open` 追踪执行 → policy 促进 explore→canary→stable → 自动结晶化为 `.py+.yaml` 管道 → 后续零 LLM 推理），**反向飞轮**（`OperatorMonitor` 观察人类操作员 → `PatternDetector` 检测重复模式 → 弹出询问 → 任务交付 AI 接管）。
 
@@ -289,7 +289,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 | Pattern detector         | `scripts/pattern_detector.py`                                                                                                                  |
 | Distiller                | `scripts/distiller.py`                                                                                                                         |
 | Operator monitor         | `scripts/operator_monitor.py`                                                                                                                  |
-| Ops / bootstrap          | `scripts/repl_admin.py`                                                                                                                        |
+| Ops / bootstrap / cockpit | `scripts/repl_admin.py` — HTTP cockpit with SSE real-time status, `cockpit_shell.html` SPA frontend                                           |
 | Memory Hub sync agent    | `scripts/emerge_sync.py`, `scripts/hub_config.py` — bidirectional connector asset sync via orphan-branch git repo; `icc_hub` MCP tool in daemon |
 | Test connector (mock)    | `tests/connectors/mock/pipelines/`                                                                                                             |
 | Slash commands           | `commands/` (`init`, `cockpit`, `runner-status`, `import`, `export`, `hub`)                                                                     |
@@ -303,7 +303,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 | Command          | Description                                                                                      |
 | ---------------- | ------------------------------------------------------------------------------------------------ |
 | `/init`          | Initialize a vertical flywheel from natural language context                                     |
-| `/cockpit`       | Browser control plane — intent overview, delta/risk/span/exec panels, audit trail, session mgmt |
+| `/cockpit`       | Browser control plane — SSE real-time status, intent overview, delta/risk/span/exec panels, audit trail, session mgmt |
 | `/runner-status` | Show remote runner health status                                                                 |
 | `/import`        | Import a connector asset package zip into local connector/pipeline state                         |
 | `/export`        | Export a connector asset package zip (connector files + registry entries)                        |
@@ -349,7 +349,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 python -m pytest tests -q
 ```
 
-Current baseline: **476** tests passing.
+Current baseline: **479** tests passing.
 
 Documentation release checklist: `docs/doc-consistency-checklist.md`
 

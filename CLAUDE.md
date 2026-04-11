@@ -75,7 +75,7 @@ python3 scripts/emerge_sync.py sync gmail
 
 **EventRouter**: File system watcher that monitors `pending-actions.json` (created by CC when a pending action exists) and local operator event files. Triggers async handlers on file changes. Enforces drain-on-start contract: all existing watched files are processed synchronously before watchdog activation.
 
-**Cockpit control plane**: `repl_admin.py` exposes `/api/control-plane/*` read endpoints (state, intents, session, exec-events, pipeline-events, spans, span-candidates) and write endpoints (delta/reconcile, risk/update, risk/add, policy/freeze, policy/unfreeze, session/export, session/reset). The cockpit HTML has an Overview intent table, connector sub-panels (Deltas/Risks/Spans/Exec Events), and global Audit/Session/Operator tabs.
+**Cockpit control plane**: `repl_admin.py` exposes `/api/control-plane/*` read endpoints (state, intents, session, exec-events, pipeline-events, spans, span-candidates) and write endpoints (delta/reconcile, risk/update, risk/add, policy/freeze, policy/unfreeze, session/export, session/reset). `/api/status` returns `{ok, pending, server_online}` (no `cc_listening`). `/api/sse/status` streams real-time events (online, pending-state changes) via Server-Sent Events; `_sse_broadcast()` pushes to all connected clients. The cockpit HTML uses `EventSource` for SSE as the primary status channel, with `/api/status` as a 10s fallback poll. The cockpit has an Overview intent table, connector sub-panels (Deltas/Risks/Spans/Exec Events), and global Audit/Session/Operator tabs.
 
 ## Test Infrastructure
 
@@ -117,6 +117,9 @@ Integration tests go in `test_mcp_tools_integration.py` and call `EmergeDaemon.c
 - **PreToolUse `updatedInput` normalization**: when `intent_signature` contains uppercase letters, `pre_tool_use.py` normalizes to lowercase and returns `updatedInput: {"intent_signature": lowercased}` with `permissionDecision: allow` instead of blocking. Only applied when the normalized value would be valid. Tracked via `_sig_normalized_from`/`_sig_normalized_to` in `main()`.
 - **PreToolUse `ask` for `icc_goal_rollback`**: returns `permissionDecision: ask` with a `systemMessage` warning about irreversibility. Blocks calls missing `target_event_id` with `deny`. Requires hooks.json PreToolUse matcher to cover `icc_goal_rollback` (matcher: `icc_.*`).
 - **hooks.json hook matchers**: `PreToolUse`, `PostToolUse`, `PostToolUseFailure` all use `mcp__plugin_.*emerge.*__icc_.*` to cover all current and future icc_ tools. `tool_audit.py` uses the inverse negative-lookahead. `SessionEnd`, `Stop`, `SubagentStop` are registered in `hooks/hooks.json` (matcher format). `plugin.json` only keeps `SessionStart → runner_sync.py` (runner sync runs separately from session_start.py).
+- **Cockpit status contract**: `/api/status` returns `{ok, pending, server_online}`. The `cc_listening` field is removed — submit availability depends only on `queue.length > 0 && !serverPending`. Frontend uses SSE (`/api/sse/status`) as primary status channel; `/api/status` is a 10s fallback poll. `_sse_broadcast()` pushes `{pending: true}` on successful submission.
+- **Cockpit session reset span guard**: `cmd_control_plane_session_reset` checks `active_span_id` in state before resetting. If a span is open, returns `{ok: false, error: "active_span_open"}`. Mirrors the Stop hook safety contract.
+- **`_normalize_state` span preservation**: `_normalize_state` in `state_tracker.py` preserves `active_span_id` and `active_span_intent` from raw state. `SessionStart` and `SessionEnd` hooks explicitly pop these fields for cleanup.
 
 ## Documentation Update Rules
 
@@ -140,3 +143,4 @@ When making code changes, keep these in sync:
 | OperatorMonitor env var change | README.md env var table + `skills/operator-monitor-debug/SKILL.md` |
 | Memory Hub config or sync flow change | `README.md` component table + `CLAUDE.md` Architecture section + `CLAUDE.md` Key Invariants |
 | New `icc_hub` action or queue event type | `README.md` MCP Tools table + `CLAUDE.md` Key Invariants (queue contract) + `commands/hub.md` if setup flow is affected |
+| Cockpit API contract change | `repl_admin.py` endpoint + `cockpit_shell.html` consumer + `CLAUDE.md` Architecture section + tests |
