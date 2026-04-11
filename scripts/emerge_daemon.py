@@ -2874,7 +2874,7 @@ class EmergeDaemon:
     ) -> None:
         """Push a channel notification to CC with unified meta schema."""
         meta: dict = {}
-        if extra_meta:
+        if extra_meta is not None:
             meta.update(extra_meta)   # extra_meta applied first
         meta.update({                  # required fields always override
             "source": source,
