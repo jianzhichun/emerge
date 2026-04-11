@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -16,7 +17,6 @@ def main() -> None:
     except Exception:
         payload = {}
 
-    import os
     data_root_env = os.environ.get("EMERGE_DATA_ROOT", "")
     if data_root_env:
         state_path = Path(data_root_env) / "state.json"
