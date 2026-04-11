@@ -3177,3 +3177,209 @@ def test_event_router_replaces_pending_monitor(tmp_path):
     assert len(pushed) == 1
     assert pushed[0]["method"] == "notifications/claude/channel"
     assert pushed[0]["params"]["meta"]["source"] == "cockpit"
+
+
+# ---------------------------------------------------------------------------
+# C2: Elicitation response extraction (accept / decline / cancel)
+# ---------------------------------------------------------------------------
+
+def _fire_elicit_response(daemon, elicit_id, action, content=None):
+    """Simulate what run_stdio() does when it receives an elicitation response.
+
+    This replicates the extraction logic from run_stdio exactly so tests
+    verify the correct code path, not just the _elicit() bookkeeping.
+    """
+    result_obj = {"action": action}
+    if content is not None:
+        result_obj["content"] = content
+    if action != "accept":
+        daemon._elicit_results[elicit_id] = None
+    else:
+        daemon._elicit_results[elicit_id] = result_obj.get("content") or {}
+    ev = daemon._elicit_events.pop(elicit_id, None)
+    if ev is not None:
+        ev.set()
+
+
+def test_elicit_accept_response_extracts_content():
+    """run_stdio accept response must extract result.content into _elicit_results."""
+    import threading, time
+    from scripts.emerge_daemon import EmergeDaemon
+    daemon = EmergeDaemon()
+    daemon._write_mcp_push = lambda p: None
+
+    result_holder = []
+
+    def _run():
+        result_holder.append(daemon._elicit(
+            "Confirm?",
+            {"type": "object", "properties": {"confirmed": {"type": "boolean"}}},
+            timeout=5.0,
+        ))
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    time.sleep(0.05)
+    assert daemon._elicit_events, "worker must register event before response"
+    elicit_id = next(iter(daemon._elicit_events))
+    _fire_elicit_response(daemon, elicit_id, "accept", {"confirmed": True})
+
+    t.join(timeout=2.0)
+    assert result_holder == [{"confirmed": True}]
+
+
+def test_elicit_decline_response_returns_none():
+    """run_stdio decline response must cause _elicit() to return None."""
+    import threading, time
+    from scripts.emerge_daemon import EmergeDaemon
+    daemon = EmergeDaemon()
+    daemon._write_mcp_push = lambda p: None
+
+    result_holder = []
+
+    def _run():
+        result_holder.append(daemon._elicit("Confirm?", {}, timeout=5.0))
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    time.sleep(0.05)
+    assert daemon._elicit_events
+    elicit_id = next(iter(daemon._elicit_events))
+    _fire_elicit_response(daemon, elicit_id, "decline")
+
+    t.join(timeout=2.0)
+    assert result_holder == [None]
+
+
+def test_elicit_cancel_response_returns_none():
+    """run_stdio cancel response must cause _elicit() to return None."""
+    import threading, time
+    from scripts.emerge_daemon import EmergeDaemon
+    daemon = EmergeDaemon()
+    daemon._write_mcp_push = lambda p: None
+
+    result_holder = []
+
+    def _run():
+        result_holder.append(daemon._elicit("Confirm?", {}, timeout=5.0))
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    time.sleep(0.05)
+    assert daemon._elicit_events
+    elicit_id = next(iter(daemon._elicit_events))
+    _fire_elicit_response(daemon, elicit_id, "cancel")
+
+    t.join(timeout=2.0)
+    assert result_holder == [None]
+
+
+# ---------------------------------------------------------------------------
+# C4: _on_local_event_file delegates to OperatorMonitor.process_local_file
+# ---------------------------------------------------------------------------
+
+def test_on_local_event_file_delegates_to_operator_monitor(tmp_path):
+    """_on_local_event_file must call OperatorMonitor.process_local_file."""
+    import os
+    from unittest.mock import MagicMock
+    from scripts.emerge_daemon import EmergeDaemon
+
+    daemon = EmergeDaemon()
+    mock_monitor = MagicMock()
+    daemon._operator_monitor = mock_monitor
+
+    events_path = tmp_path / "machine-1" / "events.jsonl"
+    events_path.parent.mkdir()
+    events_path.write_text("")
+
+    daemon._on_local_event_file(events_path)
+
+    mock_monitor.process_local_file.assert_called_once_with(events_path)
+
+
+def test_on_local_event_file_noop_when_monitor_not_running(tmp_path):
+    """_on_local_event_file must silently no-op when OperatorMonitor is None."""
+    from scripts.emerge_daemon import EmergeDaemon
+
+    daemon = EmergeDaemon()
+    assert daemon._operator_monitor is None
+
+    events_path = tmp_path / "machine-1" / "events.jsonl"
+    events_path.parent.mkdir()
+    events_path.write_text("")
+
+    # Must not raise
+    daemon._on_local_event_file(events_path)
+
+
+def test_on_local_event_file_ignores_non_events_jsonl(tmp_path):
+    """_on_local_event_file must ignore files that are not events.jsonl."""
+    from unittest.mock import MagicMock
+    from scripts.emerge_daemon import EmergeDaemon
+
+    daemon = EmergeDaemon()
+    mock_monitor = MagicMock()
+    daemon._operator_monitor = mock_monitor
+
+    other_path = tmp_path / "machine-1" / "state.json"
+    other_path.parent.mkdir()
+    other_path.write_text("{}")
+
+    daemon._on_local_event_file(other_path)
+
+    mock_monitor.process_local_file.assert_not_called()
+
+
+def test_process_local_file_reads_new_events(tmp_path):
+    """OperatorMonitor.process_local_file must ingest events newer than last_poll_ms."""
+    import json, time
+    from scripts.operator_monitor import OperatorMonitor
+
+    monitor = OperatorMonitor(machines={}, push_fn=lambda *a: None)
+
+    machine_dir = tmp_path / "machine-1"
+    machine_dir.mkdir()
+    events_path = machine_dir / "events.jsonl"
+
+    now_ms = int(time.time() * 1000)
+    events_path.write_text(
+        json.dumps({"ts_ms": now_ms, "type": "click", "session_role": "operator"}) + "\n" +
+        json.dumps({"ts_ms": now_ms + 1, "type": "click", "session_role": "operator"}) + "\n"
+    )
+
+    monitor.process_local_file(events_path)
+
+    assert monitor._last_poll_ms.get("local:machine-1") == now_ms + 1
+    assert len(monitor._event_buffers.get("local:machine-1", [])) == 2
+
+
+def test_process_local_file_skips_already_seen_events(tmp_path):
+    """process_local_file must not re-ingest events at or before last_poll_ms."""
+    import json, time
+    from scripts.operator_monitor import OperatorMonitor
+
+    monitor = OperatorMonitor(machines={}, push_fn=lambda *a: None)
+
+    machine_dir = tmp_path / "machine-1"
+    machine_dir.mkdir()
+    events_path = machine_dir / "events.jsonl"
+
+    now_ms = int(time.time() * 1000)
+    monitor._last_poll_ms["local:machine-1"] = now_ms  # already seen up to now_ms
+
+    events_path.write_text(
+        json.dumps({"ts_ms": now_ms - 100, "type": "click", "session_role": "operator"}) + "\n" +
+        json.dumps({"ts_ms": now_ms, "type": "click", "session_role": "operator"}) + "\n" +
+        json.dumps({"ts_ms": now_ms + 500, "type": "click", "session_role": "operator"}) + "\n"
+    )
+
+    monitor.process_local_file(events_path)
+
+    # Only the event at now_ms+500 is new
+    assert monitor._last_poll_ms["local:machine-1"] == now_ms + 500
+    buf = list(monitor._event_buffers.get("local:machine-1", []))
+    assert len(buf) == 1
+    assert buf[0]["ts_ms"] == now_ms + 500

@@ -2724,14 +2724,18 @@ class EmergeDaemon:
 
     def start_event_router(self) -> None:
         """Start EventRouter to watch pending-actions.json and local operator events."""
+        import os as _os
         from scripts.event_router import EventRouter
         from pathlib import Path as _Path
 
-        handlers = {
+        handlers: dict = {
             self._state_root / "pending-actions.json": lambda _: self._on_pending_actions(),
         }
-        event_root = _Path.home() / ".emerge" / "operator-events"
-        if event_root.exists():
+        # Register local operator-events handler only when OperatorMonitor is active.
+        # The handler delegates to OperatorMonitor.process_local_file() which owns the
+        # PatternDetector + event buffer state.
+        if _os.environ.get("EMERGE_OPERATOR_MONITOR") == "1":
+            event_root = _Path.home() / ".emerge" / "operator-events"
             handlers[event_root] = lambda p: self._on_local_event_file(p)
 
         self._event_router = EventRouter(handlers)
@@ -2788,10 +2792,18 @@ class EmergeDaemon:
     def _on_local_event_file(self, path) -> None:
         """Called by EventRouter when an operator events.jsonl file changes.
 
-        _poll_local was removed in the event-driven refactor. EventRouter
-        now delivers events directly; OperatorMonitor handles remote runners only.
+        Delegates to OperatorMonitor.process_local_file() which owns the
+        PatternDetector + sliding window buffer state for local machines.
+        Only registered when EMERGE_OPERATOR_MONITOR=1.
         """
-        pass
+        if self._operator_monitor is None:
+            return
+        if path.name != "events.jsonl":
+            return
+        try:
+            self._operator_monitor.process_local_file(path)
+        except Exception:
+            pass
 
     def _push_pattern(self, stage: str, context: dict, summary: Any) -> None:
         """Push pattern detection result to CC via MCP channel notification.
@@ -2928,7 +2940,14 @@ def run_stdio() -> None:
 
             # Elicitation responses: wake waiting worker thread, never dispatch as a request
             if req_id and req_id in daemon._elicit_events:
-                daemon._elicit_results[req_id] = req.get("result") or {}
+                result_obj = req.get("result") or {}
+                action = result_obj.get("action", "accept")
+                # MCP 2025-03-26: response is {"action": "accept"|"decline"|"cancel", "content": {...}}
+                # Store None for decline/cancel so _elicit() returns None → callers treat as cancelled
+                if action != "accept":
+                    daemon._elicit_results[req_id] = None
+                else:
+                    daemon._elicit_results[req_id] = result_obj.get("content") or {}
                 ev = daemon._elicit_events.pop(req_id, None)
                 if ev is not None:
                     ev.set()
