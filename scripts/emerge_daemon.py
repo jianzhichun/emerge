@@ -1384,6 +1384,8 @@ class EmergeDaemon:
                     "tools": [
                         {
                             "name": "icc_span_open",
+                            "title": "Open Intent Span",
+                            "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
                             "description": (
                                 "Open an intent span to track a multi-step MCP tool call sequence "
                                 "in the flywheel. Use before any sequence of Lark/context7/skill tool calls "
@@ -1408,6 +1410,8 @@ class EmergeDaemon:
                         },
                         {
                             "name": "icc_span_close",
+                            "title": "Close Intent Span",
+                            "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
                             "description": (
                                 "Close the current intent span and commit it to the flywheel WAL. "
                                 "When the intent reaches stable, auto-generates a Python skeleton "
@@ -1429,6 +1433,8 @@ class EmergeDaemon:
                         },
                         {
                             "name": "icc_span_approve",
+                            "title": "Approve Pipeline Skeleton",
+                            "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
                             "description": (
                                 "Approve a completed pipeline skeleton and activate the span bridge. "
                                 "Moves _pending/<name>.py to the real pipeline directory and generates "
@@ -1448,6 +1454,8 @@ class EmergeDaemon:
                         },
                         {
                             "name": "icc_exec",
+                            "title": "Execute Intent",
+                            "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
                             "description": "Execute Python in a persistent session with flywheel tracking. intent_signature is required (enforced). Read tasks set __result=[{...}]; write tasks set __action={'ok':True,...}; side effects use no_replay=True.",
                             "inputSchema": {
                                 "type": "object",
@@ -1472,6 +1480,8 @@ class EmergeDaemon:
                         # instead — the span bridge executes the pipeline automatically when stable.
                         {
                             "name": "icc_goal_ingest",
+                            "title": "Submit Goal",
+                            "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
                             "description": "Submit a goal event proposal to Goal Control Plane and get the latest decision snapshot.",
                             "_internal": True,
                             "inputSchema": {
@@ -1495,6 +1505,8 @@ class EmergeDaemon:
                         },
                         {
                             "name": "icc_goal_read",
+                            "title": "Read Goal",
+                            "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
                             "description": "Read active goal snapshot and recent goal event ledger.",
                             "_internal": True,
                             "inputSchema": {
@@ -1507,6 +1519,8 @@ class EmergeDaemon:
                         },
                         {
                             "name": "icc_goal_rollback",
+                            "title": "Rollback Goal",
+                            "annotations": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": False},
                             "description": "Rollback active goal to a previous goal event id.",
                             "_internal": True,
                             "inputSchema": {
@@ -1521,6 +1535,8 @@ class EmergeDaemon:
                         },
                         {
                             "name": "icc_reconcile",
+                            "title": "Reconcile Delta",
+                            "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
                             "description": "Reconcile a state tracker delta — confirm, correct, or retract a recorded observation. Pass intent_signature with outcome=correct to register a human fix against the policy flywheel.",
                             "_internal": True,
                             "inputSchema": {
@@ -1535,6 +1551,8 @@ class EmergeDaemon:
                         },
                         {
                             "name": "icc_crystallize",
+                            "title": "Crystallize Pipeline",
+                            "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
                             "description": "Crystallize exec history into a pipeline file. Reads the WAL for the most recent successful icc_exec matching intent_signature and generates .py + .yaml in the connector root. Call when synthesis_ready is true in policy://current.",
                             "inputSchema": {
                                 "type": "object",
@@ -1550,6 +1568,8 @@ class EmergeDaemon:
                         },
                         {
                             "name": "icc_hub",
+                            "title": "Memory Hub",
+                            "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
                             "description": (
                                 "Manage Memory Hub — bidirectional connector asset sync via a self-hosted git repo. "
                                 "Actions: configure (first-time setup — saves config and initialises git worktree), "

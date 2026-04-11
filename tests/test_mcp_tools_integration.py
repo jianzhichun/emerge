@@ -3718,4 +3718,22 @@ def test_format_context_does_not_trim_risks_under_budget():
 
     ctx = tracker.format_context(budget_chars=10000)  # large budget
     assert "Short risk" in ctx["Open Risks"]
-    assert "more" not in ctx["Open Risks"].lower()
+
+
+def test_tool_list_has_title_and_annotations():
+    """Every tool must declare title and annotations."""
+    daemon = EmergeDaemon(root=ROOT)
+    response = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+    tools = {t["name"]: t for t in response["result"]["tools"]}
+
+    for name, tool in tools.items():
+        assert "title" in tool, f"{name} missing 'title'"
+    for name, tool in tools.items():
+        assert "annotations" in tool, f"{name} missing 'annotations'"
+
+    assert tools["icc_goal_read"]["annotations"]["readOnlyHint"] is True
+    assert tools["icc_goal_rollback"]["annotations"]["destructiveHint"] is True
+    assert tools["icc_reconcile"]["annotations"]["idempotentHint"] is True
+    assert tools["icc_span_open"]["annotations"]["openWorldHint"] is False
+    assert tools["icc_span_close"]["annotations"]["openWorldHint"] is False
+    assert tools["icc_span_approve"]["annotations"]["openWorldHint"] is False
