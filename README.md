@@ -351,6 +351,8 @@ python -m pytest tests -q
 
 Current baseline: **476** tests passing.
 
+Documentation release checklist: `docs/doc-consistency-checklist.md`
+
 ## Repository layout
 
 ```
