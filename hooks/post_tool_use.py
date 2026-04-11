@@ -206,9 +206,8 @@ def main() -> None:
 
     save_tracker(state_path, tracker)
 
-    # Re-persist active span fields: save_tracker only writes known StateTracker
-    # fields and drops active_span_id. Re-merge so subsequent PostToolUse calls
-    # can still see the active span.
+    # Belt-and-suspenders: _normalize_state now preserves span fields, but
+    # re-persist them explicitly in case of any round-trip edge case.
     if _active_span_id:
         try:
             _state_now = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
