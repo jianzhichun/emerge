@@ -102,6 +102,8 @@ Integration tests go in `test_mcp_tools_integration.py` and call `EmergeDaemon.c
 - **Memory Hub never syncs**: `pipelines-registry.json`, `span-candidates.json`, `state.json`, operator-events, credentials. Only pipeline `.py`/`.yaml` files, `NOTES.md`, and a stripped `spans.json` (stable entries only) are shared.
 - **EventRouter drain-on-start contract**: `EventRouter.start()` synchronously calls handlers for all existing watched files before handing control to watchdog/polling. This ensures no events are lost between daemon restart and watchdog activation.
 - **MCP protocol version**: daemon advertises `2025-03-26` with `elicitation: {}` capability. `_elicit()` must only be called from worker threads (ThreadPoolExecutor), never from the main stdin loop.
+- **Unified notification meta schema**: All channel notifications go through `_notify()` in `emerge_daemon.py`. Required meta fields: `source` (bridge|cockpit|operator_monitor|span_synthesizer), `severity` (info|warning|high), `category` (informational|action_needed|warning), `requires_action` (bool). `extra_meta` is applied first; required fields always override. Bridge failures use `severity=high`; skeleton-ready and pending-actions use `requires_action=True`.
+- **SessionEnd hook** (`hooks/session_end.py`): clears stale `active_span_id` and `active_span_intent` from `state.json`. Registered in `.claude-plugin/plugin.json`. Complements `SessionStart` which also clears stale span state. Belt-and-suspenders cleanup for unresolvable open spans.
 
 ## Documentation Update Rules
 

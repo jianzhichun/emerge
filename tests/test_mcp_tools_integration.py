@@ -3577,3 +3577,26 @@ def test_on_pending_actions_uses_unified_meta_schema(tmp_path, monkeypatch):
     assert meta["severity"] == "info"
     assert meta["category"] == "action_needed"
     assert meta["requires_action"] is True
+
+
+def test_all_notifications_use_unified_meta_fields():
+    """All _notify() calls must produce notifications with all required meta fields."""
+    from scripts.emerge_daemon import EmergeDaemon
+
+    daemon = EmergeDaemon()
+    all_pushed = []
+    daemon._write_mcp_push = lambda p: all_pushed.append(p)
+
+    # Trigger notification via _notify directly
+    daemon._notify(
+        content="test",
+        source="bridge",
+        severity="high",
+        category="warning",
+        intent_signature="x.read.y",
+    )
+
+    for p in all_pushed:
+        meta = p["params"]["meta"]
+        for required_field in ("source", "severity", "category", "requires_action"):
+            assert required_field in meta, f"Missing {required_field!r} in meta: {meta}"
