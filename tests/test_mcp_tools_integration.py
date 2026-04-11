@@ -2099,7 +2099,8 @@ def test_pre_tool_use_accepts_valid_result_var():
         capture_output=True, text=True,
     )
     out = _json.loads(result.stdout)
-    assert out.get("decision") != "block", f"Should not block valid result_var: {out}"
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") != "deny", f"Should not block valid result_var: {out}"
 
 
 def test_wal_uses_unix_newlines(tmp_path: Path):
