@@ -2799,19 +2799,17 @@ class EmergeDaemon:
             return
         actions = data.get("actions", [])
         try:
-            self._write_mcp_push({
-                "jsonrpc": "2.0",
-                "method": "notifications/claude/channel",
-                "params": {
-                    "serverName": "emerge",
-                    "content": _format_pending_actions_message(actions),
-                    "meta": {
-                        "source": "cockpit",
-                        "action_count": len(actions),
-                        "action_types": list({a.get("type") for a in actions}),
-                    },
+            self._notify(
+                content=_format_pending_actions_message(actions),
+                source="cockpit",
+                severity="info",
+                category="action_needed",
+                requires_action=True,
+                extra_meta={
+                    "action_count": len(actions),
+                    "action_types": list({a.get("type") for a in actions}),
                 },
-            })
+            )
         except Exception:
             return  # don't advance _last_seen_pending_ts — allow retry
         try:
@@ -2844,22 +2842,20 @@ class EmergeDaemon:
         (via icc_exec → show_notify) or crystallize directly. Daemon never pops up.
         """
         message = self._build_explore_message(context, summary)
-        self._write_mcp_push({
-            "jsonrpc": "2.0",
-            "method": "notifications/claude/channel",
-            "params": {
-                "serverName": "emerge",
-                "content": message,
-                "meta": {
-                    "source": "operator_monitor",
-                    "intent_signature": summary.intent_signature,
-                    "policy_stage": stage,
-                    "occurrences": summary.occurrences,
-                    "window_minutes": summary.window_minutes,
-                    "machine_ids": summary.machine_ids,
-                },
+        self._notify(
+            content=message,
+            source="operator_monitor",
+            severity="info",
+            category="action_needed",
+            intent_signature=summary.intent_signature,
+            requires_action=True,
+            extra_meta={
+                "policy_stage": stage,
+                "occurrences": summary.occurrences,
+                "window_minutes": summary.window_minutes,
+                "machine_ids": summary.machine_ids,
             },
-        })
+        )
 
     def _build_explore_message(self, context: dict, summary: Any) -> str:
         app = context.get("app", "unknown")

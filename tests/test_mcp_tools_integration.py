@@ -3520,3 +3520,60 @@ def test_span_close_stable_pushes_skeleton_ready_notification(tmp_path, monkeypa
     assert n["requires_action"] is True
     assert n["intent_signature"] == "gmail.read.fetch"
     assert str(fake_path) in n["content"]
+
+
+def test_push_pattern_uses_unified_meta_schema():
+    """_push_pattern must use unified meta schema with source/severity/category."""
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.pattern_detector import PatternSummary
+    daemon = EmergeDaemon()
+    pushed = []
+    daemon._write_mcp_push = lambda p: pushed.append(p)
+
+    summary = PatternSummary(
+        intent_signature="zwcad.read.state",
+        occurrences=5,
+        window_minutes=12.0,
+        context_hint={"app": "ZWCAD"},
+        machine_ids=["m1"],
+        policy_stage="explore",
+        detector_signals=[],
+    )
+    daemon._push_pattern("explore", {"app": "ZWCAD"}, summary)
+
+    assert len(pushed) == 1
+    meta = pushed[0]["params"]["meta"]
+    # Unified schema fields must all be present
+    assert meta["source"] == "operator_monitor"
+    assert meta["severity"] == "info"
+    assert meta["category"] == "action_needed"
+    assert meta["intent_signature"] == "zwcad.read.state"
+    assert meta["requires_action"] is True
+    # Legacy fields still present via extra_meta
+    assert "policy_stage" in meta
+    assert "occurrences" in meta
+
+
+def test_on_pending_actions_uses_unified_meta_schema(tmp_path, monkeypatch):
+    """_on_pending_actions notification must use unified meta schema."""
+    import json
+    import time
+    from scripts.emerge_daemon import EmergeDaemon
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon()
+    pushed = []
+    daemon._write_mcp_push = lambda p: pushed.append(p)
+
+    pending = tmp_path / "pending-actions.json"
+    pending.write_text(json.dumps({
+        "submitted_at": int(time.time() * 1000),
+        "actions": [{"type": "prompt", "prompt": "hello"}],
+    }))
+    daemon._on_pending_actions()
+
+    assert len(pushed) == 1
+    meta = pushed[0]["params"]["meta"]
+    assert meta["source"] == "cockpit"
+    assert meta["severity"] == "info"
+    assert meta["category"] == "action_needed"
+    assert meta["requires_action"] is True
