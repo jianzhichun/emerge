@@ -3737,3 +3737,4 @@ def test_tool_list_has_title_and_annotations():
     assert tools["icc_span_open"]["annotations"]["openWorldHint"] is False
     assert tools["icc_span_close"]["annotations"]["openWorldHint"] is False
     assert tools["icc_span_approve"]["annotations"]["openWorldHint"] is False
+    assert tools["icc_span_approve"]["annotations"]["idempotentHint"] is True
