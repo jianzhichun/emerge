@@ -3761,4 +3761,7 @@ def test_tool_list_key_tools_have_output_schema():
     assert "span_id" in span_close_props
     assert "synthesis_ready" in span_close_props
     assert "skeleton_path" in span_close_props
-    assert tools["icc_span_approve"]["annotations"]["idempotentHint"] is True
+
+    span_approve_props = tools["icc_span_approve"]["outputSchema"]["properties"]
+    assert "activated" in span_approve_props
+    assert "pipeline_path" in span_approve_props
