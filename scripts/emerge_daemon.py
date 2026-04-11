@@ -911,11 +911,11 @@ class EmergeDaemon:
             real_yaml = real_dir / f"{pipeline_name}.yaml"
             # Ask user to confirm before activating the pipeline
             elicit_resp = self._elicit(
-                f"确认激活 pipeline `{intent_signature}`？\n"
-                f"将从 _pending/ 移动到 {real_dir} 并启用桥接。",
+                f"Activate pipeline `{intent_signature}`?\n"
+                f"This will move from _pending/ to {real_dir} and enable the bridge.",
                 {
                     "type": "object",
-                    "properties": {"confirmed": {"type": "boolean", "title": "激活"}},
+                    "properties": {"confirmed": {"type": "boolean", "title": "Activate"}},
                     "required": ["confirmed"],
                 },
             )
@@ -1094,14 +1094,14 @@ class EmergeDaemon:
             if outcome not in ("confirm", "correct", "retract"):
                 # outcome not supplied — ask via ElicitRequest
                 elicit_resp = self._elicit(
-                    f"请选择 delta `{delta_id}` 的处置结果：",
+                    f"Choose the reconciliation outcome for delta `{delta_id}`:",
                     {
                         "type": "object",
                         "properties": {
                             "outcome": {
                                 "type": "string",
                                 "enum": ["confirm", "correct", "retract"],
-                                "title": "处置结果",
+                                "title": "Outcome",
                             }
                         },
                         "required": ["outcome"],
@@ -1304,14 +1304,14 @@ class EmergeDaemon:
                 return self._tool_error("icc_hub resolve: 'conflict_id' is required")
             if resolution not in ("ours", "theirs", "skip"):
                 elicit_resp = self._elicit(
-                    f"请选择冲突 `{conflict_id}` 的解决策略：",
+                    f"Choose the resolution strategy for conflict `{conflict_id}`:",
                     {
                         "type": "object",
                         "properties": {
                             "resolution": {
                                 "type": "string",
                                 "enum": ["ours", "theirs", "skip"],
-                                "title": "解决策略",
+                                "title": "Resolution strategy",
                             }
                         },
                         "required": ["resolution"],
@@ -2998,10 +2998,10 @@ class EmergeDaemon:
         samples = context.get("samples", summary.context_hint.get("samples", []))
         sig = summary.intent_signature
         return (
-            f"[OperatorMonitor] 检测到 {app} 中反复出现操作模式 `{sig}`，"
-            f"共 {summary.occurrences} 次，约 {summary.window_minutes:.0f} 分钟内。"
-            + (f" 样本: {', '.join(str(s) for s in samples[:3])}。" if samples else "")
-            + " 请评估是否值得接管，如值得请发起 elicitation。"
+            f"[OperatorMonitor] Detected recurring pattern `{sig}` in {app} — "
+            f"{summary.occurrences} occurrences in ~{summary.window_minutes:.0f} min."
+            + (f" Samples: {', '.join(str(s) for s in samples[:3])}." if samples else "")
+            + " Evaluate whether to take over; if so, initiate elicitation."
         )
 
     def _write_mcp_push(self, payload: dict) -> None:
@@ -3073,7 +3073,7 @@ class EmergeDaemon:
 
 
 def _format_pending_actions_message(actions: list) -> str:
-    lines = ["[Cockpit] 用户提交了以下操作，请依次执行："]
+    lines = ["[Cockpit] The operator submitted the following actions — execute in order:"]
     for i, a in enumerate(actions, 1):
         t = a.get("type", "unknown")
         if t == "pipeline-set":
@@ -3081,9 +3081,9 @@ def _format_pending_actions_message(actions: list) -> str:
         elif t == "pipeline-delete":
             lines.append(f"{i}. pipeline-delete {a.get('key')}")
         elif t == "notes-edit":
-            lines.append(f"{i}. 更新 {a.get('connector')} NOTES.md（全文替换）")
+            lines.append(f"{i}. Update {a.get('connector')} NOTES.md (full replace)")
         elif t == "notes-comment":
-            lines.append(f"{i}. 追加 comment 到 {a.get('connector')} NOTES.md: {str(a.get('comment', ''))[:80]}")
+            lines.append(f"{i}. Append comment to {a.get('connector')} NOTES.md: {str(a.get('comment', ''))[:80]}")
         elif t == "tool-call":
             call = a.get("call", {}) if isinstance(a.get("call"), dict) else {}
             tool = call.get("tool", "?")
@@ -3091,9 +3091,9 @@ def _format_pending_actions_message(actions: list) -> str:
             meta = a.get("meta", {}) if isinstance(a.get("meta"), dict) else {}
             scope = str(meta.get("scope", "")).strip()
             scope_suffix = f" scope={scope}" if scope else ""
-            lines.append(f"{i}. 执行 tool-call {tool} args={call_args}{scope_suffix}")
+            lines.append(f"{i}. Execute tool-call {tool} args={call_args}{scope_suffix}")
         elif t == "crystallize-component":
-            lines.append(f"{i}. 固化组件 {a.get('filename')} → {a.get('connector')}/cockpit/")
+            lines.append(f"{i}. Crystallize component {a.get('filename')} -> {a.get('connector')}/cockpit/")
         else:
             lines.append(f"{i}. {t}: {a}")
     return "\n".join(lines)

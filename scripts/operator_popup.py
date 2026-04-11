@@ -54,7 +54,7 @@ def _render_choice(*, body: str, options: list[str], title: str, timeout_s: int)
     )
 
     if timeout_s > 0:
-        countdown_var = tk.StringVar(value=f"（{timeout_s}s 后自动选择 {options[0]}）")
+        countdown_var = tk.StringVar(value=f"(Auto-selecting {options[0]} in {timeout_s}s)")
         tk.Label(root, textvariable=countdown_var, font=("", 9), fg="gray").pack()
         remaining = [timeout_s]
 
@@ -65,7 +65,7 @@ def _render_choice(*, body: str, options: list[str], title: str, timeout_s: int)
                 result["value"] = options[0]
                 root.destroy()
                 return
-            countdown_var.set(f"（{remaining[0]}s 后自动选择 {options[0]}）")
+            countdown_var.set(f"(Auto-selecting {options[0]} in {remaining[0]}s)")
             root.after(1000, update_countdown)
 
         root.after(1000, update_countdown)
@@ -117,8 +117,8 @@ def _render_input(*, body: str, prefill: str, title: str) -> dict[str, Any]:
         result["action"] = "dismissed"
         root.destroy()
 
-    tk.Button(btn_frame, text="确认", command=on_confirm, width=8).pack(side="left", padx=4)
-    tk.Button(btn_frame, text="跳过", command=on_dismiss, width=8).pack(side="left", padx=4)
+    tk.Button(btn_frame, text="Confirm", command=on_confirm, width=8).pack(side="left", padx=4)
+    tk.Button(btn_frame, text="Skip", command=on_dismiss, width=8).pack(side="left", padx=4)
     root.mainloop()
     return result
 
@@ -145,8 +145,8 @@ def _render_confirm(*, body: str, title: str) -> dict[str, Any]:
     def on_dismiss() -> None:
         root.destroy()
 
-    tk.Button(btn_frame, text="确认", command=on_confirm, width=10).pack(side="left", padx=6)
-    tk.Button(btn_frame, text="取消", command=on_dismiss, width=10).pack(side="left", padx=6)
+    tk.Button(btn_frame, text="Confirm", command=on_confirm, width=10).pack(side="left", padx=6)
+    tk.Button(btn_frame, text="Cancel", command=on_dismiss, width=10).pack(side="left", padx=6)
     root.mainloop()
     return result
 
@@ -161,6 +161,6 @@ def _render_info(*, body: str, title: str) -> dict[str, Any]:
     tk.Label(root, text=body, wraplength=300, font=("", 11), justify="center").pack(
         pady=(16, 8), padx=16
     )
-    tk.Button(root, text="关闭", command=root.destroy, width=10).pack(pady=(0, 14))
+    tk.Button(root, text="Close", command=root.destroy, width=10).pack(pady=(0, 14))
     root.mainloop()
     return {"action": "dismissed", "value": ""}
