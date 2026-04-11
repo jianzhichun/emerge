@@ -119,7 +119,11 @@ def main() -> None:
     tool_name = payload.get("tool_name", "")
     raw_result = payload.get("tool_result", {})
     result = raw_result if isinstance(raw_result, dict) else {}
-    state_root = Path(default_hook_state_root())
+    _data_root_env = os.environ.get("EMERGE_DATA_ROOT", "")
+    if _data_root_env:
+        state_root = Path(_data_root_env)
+    else:
+        state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
     tracker = load_tracker(state_path)
     goal_cp = GoalControlPlane(state_root)
@@ -188,6 +192,17 @@ def main() -> None:
         tool_name, payload, state_root, state_path
     )
 
+    # _record_span_action skips icc_exec (WAL is handled by ExecSession).
+    # For span context injection we still need the active span fields — read
+    # them directly from state when the tool is icc_exec.
+    if not _active_span_id and tool_name.endswith("__icc_exec"):
+        try:
+            _raw = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+            _active_span_id = str(_raw.get("active_span_id", "") or "")
+            _active_span_intent = str(_raw.get("active_span_intent", "") or "")
+        except Exception:
+            pass
+
     save_tracker(state_path, tracker)
 
     # Re-persist active span fields: save_tracker only writes known StateTracker
@@ -204,14 +219,25 @@ def main() -> None:
         except Exception:
             pass
 
-    # Do NOT echo updatedMCPToolOutput — we have no modifications to make,
-    # and echoing the full result back wastes bandwidth on every tool call.
-    output = {
-        "hookSpecificOutput": {
-            "hookEventName": "PostToolUse",
-            "additionalContext": context_text,
-        }
+    hook_specific: dict = {
+        "hookEventName": "PostToolUse",
+        "additionalContext": context_text,
     }
+
+    # For icc_exec with an active span: inject _span_id/_span_intent into
+    # structuredContent so CC can correlate the exec result with the flywheel
+    # span without a separate state read.
+    _short_name = _short_tool_name(payload.get("tool_name", ""))
+    if _short_name == "icc_exec" and _active_span_id:
+        _tool_resp = payload.get("tool_response") or {}
+        _sc = dict(_tool_resp.get("structuredContent") or {})
+        _sc["_span_id"] = _active_span_id
+        _sc["_span_intent"] = _active_span_intent
+        _updated_resp = dict(_tool_resp)
+        _updated_resp["structuredContent"] = _sc
+        hook_specific["updatedMCPToolOutput"] = _updated_resp
+
+    output = {"hookSpecificOutput": hook_specific}
     print(json.dumps(output))
 
 
