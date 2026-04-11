@@ -37,6 +37,8 @@ python3 scripts/emerge_sync.py sync gmail
 
 ## Architecture
 
+**Documentation source of truth**: `README.md` is the canonical source for architecture and data-flow diagrams. `CLAUDE.md` focuses on implementation constraints and invariants; when behavior changes, update both, but keep diagram semantics centralized in `README.md` to avoid drift.
+
 **Single control plane**: `EmergeDaemon` (`scripts/emerge_daemon.py`) is the only MCP server. It handles all goal + flywheel tools (`icc_span_open`, `icc_span_close`, `icc_span_approve`, `icc_exec`, `icc_crystallize`, `icc_reconcile`, `icc_goal_ingest`, `icc_goal_read`, `icc_goal_rollback`) and all resources (`policy://`, `runner://`, `state://deltas`, `state://goal`, `state://goal-ledger`, `pipeline://`, `connector://`). There is no second server.
 
 **Two execution paths for pipelines**: `PipelineEngine` is called in-process by the span bridge (`icc_span_open` when stable) and directly by `icc_read`/`icc_write` (internal, schema-hidden). When `RunnerRouter` resolves a client, the daemon builds a self-contained inline `exec()` payload and POSTs to the remote runner. The runner never receives pipeline files — switching machines is a URL change only.
@@ -132,6 +134,7 @@ When making code changes, keep these in sync:
 | New/deleted skill | `README.md` What ships table + `skills/` directory |
 | Runner protocol change | `README.md` §"Remote runner — operations" + `skills/remote-runner-dev/SKILL.md` |
 | Architecture change | `README.md` architecture diagram + component table |
+| Data-flow or lifecycle diagram semantic change | `README.md` flow diagrams (canonical) + `CLAUDE.md` Architecture/Key Invariants wording |
 | Test count change | `README.md` badge + Quick verification baseline |
 | New observer or adapter interface change | `skills/writing-vertical-adapter/SKILL.md` |
 | OperatorMonitor env var change | README.md env var table + `skills/operator-monitor-debug/SKILL.md` |

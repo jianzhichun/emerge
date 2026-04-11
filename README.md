@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/version-v0.3.47-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-377%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-476%20passing-brightgreen?logo=pytest)
 
 **Emerge** 解决的核心问题是：AI 操作员反复执行相同操作但无法学习——每次都要重新推理。它通过**双向飞轮**将重复工作结晶化为确定性管道：**前向飞轮**（`icc_exec`/`icc_span_open` 追踪执行 → policy 促进 explore→canary→stable → 自动结晶化为 `.py+.yaml` 管道 → 后续零 LLM 推理），**反向飞轮**（`OperatorMonitor` 观察人类操作员 → `PatternDetector` 检测重复模式 → 弹出询问 → 任务交付 AI 接管）。
 
@@ -22,21 +22,26 @@ Emerge sits **inside the Claude Code process**: the plugin exposes one stdio MCP
 
 ```mermaid
 flowchart TB
-  CC[Claude Code<br/>Agent + Hooks]
-  D[EmergeDaemon<br/>tools + resources + OperatorMonitor]
-  C[Runtime Core<br/>ExecSession · PipelineEngine · Policy Registry<br/>StateTracker · Metrics · RunnerRouter]
-  R[Remote Runner optional<br/>RunnerClient to remote_runner.py]
-  P[Local Persistence<br/>session · pipelines-registry · plugin-data · operator-events]
-  X[PatternDetector + Distiller]
+  subgraph ccProcess [Claude Code process]
+    CC[Claude Code Agent]
+    HK[Plugin Hooks]
+    DAEMON[EmergeDaemon]
+    CORE[Runtime Core<br/>ExecSession · PipelineEngine · RunnerRouter]
+    POLICY[Policy + Goal + State<br/>pipelines-registry · goal snapshot/ledger · state tracker]
+  end
 
-  CC <-->|MCP stdio / JSON-RPC| D
-  D --> C
-  C -->|remote icc_exec| R
-  R -->|POST /operator-event| P
-  D -->|GET /operator-events| R
-  D --> X
-  X -->|MCP push| CC
-  C --> P
+  subgraph remoteSide [Optional remote runner side]
+    RUNNER[remote_runner.py]
+    EVENTBUS[operator-events EventBus]
+  end
+
+  CC <-->|MCP stdio / JSON-RPC| DAEMON
+  HK -->|context + guardrails| CC
+  DAEMON --> CORE
+  CORE --> POLICY
+  CORE -->|when routed| RUNNER
+  EVENTBUS -->|GET /operator-events polled by OperatorMonitor| DAEMON
+  RUNNER -->|POST /operator-event from observers| EVENTBUS
 ```
 
 
@@ -54,7 +59,7 @@ flowchart TB
 | **StateTracker**    | Maintains `Delta` / `Open Risks` session state and recovery token budgeting. Goal text is injected from GoalControlPlane snapshot.                                                                                                                                                |
 | **RunnerRouter**    | Selects a `RunnerClient` by `target_profile` / `runner_id` (map), consistent hash (pool), or default URL. Returns `None` when no runner is configured → local execution.                                                                                                             |
 | **Flywheel bridge** | Short-circuit inside `icc_exec`: when the matching candidate is `stable`, execution is redirected to the pipeline result without LLM inference. Zero overhead path once a pattern is trusted.                                                                                        |
-| **Hooks**           | Inject minimal context at session/prompt boundaries; record `Delta` after each `icc_`* call; preserve critical state across **PreCompact**. `PreToolUse` enforces `intent_signature` required on `icc_exec` and blocks calls that violate exec conventions. Not a second MCP server. |
+| **Hooks**           | Inject minimal context at session/prompt boundaries; record `Delta` after each `icc_`* call; preserve critical state across **PreCompact**; guard stop/exit with active-span safety checks. `PreToolUse` enforces `intent_signature` conventions, auto-normalizes uppercase signatures via `updatedInput`, and returns `ask` for irreversible `icc_goal_rollback`. Not a second MCP server. |
 | **`emerge_sync.py`** | Memory Hub sync agent. Bidirectional connector asset sync via orphan-branch git repo; event-driven push on stable promotion, periodic pull, AI-assisted conflict resolution via `icc_hub` MCP tool. |
 
 
@@ -66,42 +71,46 @@ The full lifecycle from exploratory exec to stable pipeline:
 
 ```mermaid
 flowchart TD
-  A([icc_exec + intent_signature])
-  B[ExecSession — execute + write WAL]
-  C[record exec event — candidates.json]
-  D[update policy registry — recompute rates]
+  A([icc_exec with intent_signature])
+  B[ExecSession execute and write WAL]
+  C[record exec event to candidates.json]
+  D[update policy registry and quality counters]
 
   subgraph lc [Policy lifecycle]
     E1[explore]
-    E2[canary — rollout 20%]
-    E3[stable — rollout 100%]
+    E2[canary rollout 20 percent]
+    E3[stable rollout 100 percent]
   end
 
-  F[synthesis_ready = true]
-  G([icc_crystallize — WAL to .py + .yaml])
-  H[icc_read / icc_write — validate pipeline]
-  I[flywheel bridge — exec short-circuits to pipeline]
+  F[synthesis_ready true]
+  G([icc_crystallize WAL to pipeline py and yaml])
+  H[exec bridge in icc_exec short-circuits to stable pipeline]
+  I[span bridge in icc_span_open executes stable pipeline]
 
   A --> B --> C --> D --> E1
-  E1 -->|attempts≥20 · success≥95% · fix≤5%| E2
-  E2 -->|attempts≥40 · success≥97% · verify≥99%| E3
-  E2 -->|2 consecutive failures| E1
-  E3 -->|2 failures or window rate under 90%| E1
-  E1 -->|WAL has replayable code| F
-  F --> G --> H -->|pipeline events feed registry| D
+  E1 -->|"attempts >= 20, success >= 95, fix <= 5"| E2
+  E2 -->|"attempts >= 40, success >= 97, verify >= 99"| E3
+  E2 -->|"2 consecutive failures"| E1
+  E3 -->|"2 failures or window success < 90"| E1
+  E1 -->|"WAL has replayable code"| F
+  F --> G
+  E3 --> H
   E3 --> I
+  H -->|pipeline events feed registry| D
+  I -->|pipeline events feed registry| D
 ```
 
 
 
 ### 2. Pipeline execution
 
-`icc_read` and `icc_write` have two execution paths depending on whether a remote runner is configured.
+Stable pipeline execution has two paths depending on whether a remote runner is configured. User-facing path is `icc_span_open` bridge; `icc_read`/`icc_write` remain internal compatibility paths.
 
 **Local (default).** The daemon calls the pipeline engine in-process. No network, no subprocess.
 
 ```
-icc_read { connector, pipeline }
+icc_span_open { intent_signature }
+  → bridge resolves stable pipeline
   → PipelineEngine.run_read(args)
   → { rows, verify_result, verification_state }
 ```
@@ -109,22 +118,17 @@ icc_read { connector, pipeline }
 **Remote.** When `RunnerRouter` resolves a client for the request, the daemon loads the pipeline source locally, builds a self-contained `icc_exec` payload, and dispatches it over HTTP. The runner machine never needs connector files — a machine change is a URL change only. Pipeline calls request a structured `result_var` from the runner, so parsing does not depend on stdout text. Local and remote paths return the same response shape and verification semantics.
 
 ```mermaid
-sequenceDiagram
-  participant CC as Claude Code
-  participant D as EmergeDaemon
-  participant PE as PipelineEngine
-  participant RR as RunnerRouter
-  participant R as Remote Runner
-
-  CC->>D: icc_read { connector, pipeline, target_profile }
-  D->>RR: find_client(arguments)
-  RR-->>D: RunnerClient
-  D->>PE: load pipeline source + metadata
-  PE-->>D: py_source + metadata dict
-  Note over D: strip __future__ imports, build inline exec payload
-  D->>R: POST /run { tool_name: icc_exec, code: inline, result_var: __emerge_pipeline_out }
-  R-->>D: { ok: true, result: { result_var_value: {...} } }
-  D-->>CC: { rows, verify_result, verification_state }
+flowchart TD
+  OPEN([icc_span_open with intent_signature]) --> RESOLVE[resolve stable pipeline id]
+  RESOLVE --> ROUTE{RunnerRouter has client}
+  ROUTE -->|No| LOCAL[run PipelineEngine in-process]
+  ROUTE -->|Yes| REMOTELOAD[load pipeline source and metadata locally]
+  REMOTELOAD --> REMOTEPAYLOAD[build inline icc_exec payload]
+  REMOTEPAYLOAD --> REMOTEPOST[POST run to remote runner]
+  REMOTEPOST --> REMOTERESULT[receive structured result_var payload]
+  LOCAL --> NORMALIZE[normalize rows verify_result verification_state]
+  REMOTERESULT --> NORMALIZE
+  NORMALIZE --> RETURN([return uniform response to Claude Code])
 ```
 
 
@@ -207,19 +211,28 @@ flowchart LR
   subgraph session [Session lifecycle]
     SS[SessionStart — inject Goal + open risks]
     UPS[UserPromptSubmit — inject Delta summary]
+    SE[SessionEnd — clear stale active span fields]
     PC[PreCompact — serialize recovery token]
   end
 
   subgraph percall [Per tool call]
-    PTU[PreToolUse — enforce conventions + validate args]
+    PTU[PreToolUse — enforce conventions + normalize args]
     EX[Tool executes]
     POTU[PostToolUse — record Delta]
+    PTF[PostToolUseFailure — mark degraded on real failures]
+  end
+
+  subgraph stopguard [Stop guard]
+    ST[Stop and SubagentStop — block on active span]
   end
 
   SS -->|additionalContext| Agent
   UPS -->|additionalContext| Agent
+  SE -->|cleanup| Agent
   PC -->|additionalContext| Agent
   Agent --> PTU --> EX --> POTU
+  EX --> PTF
+  Agent --> ST
 ```
 
 
@@ -249,7 +262,16 @@ flowchart LR
 
 **Prompts:** `icc_explore`
 
-**Hooks** (`hooks/hooks.json`): `Setup` · `SessionStart` · `UserPromptSubmit` · `PreToolUse` · `PostToolUse` · `PostToolUseFailure` · `PreCompact`
+**Hooks** (`hooks/hooks.json`): `Setup` · `SessionStart` · `SessionEnd` · `UserPromptSubmit` · `PreToolUse` · `PostToolUse` · `PostToolUseFailure` · `PreCompact` · `Stop` · `SubagentStop`
+
+### MCP protocol compliance (2025-11-25)
+
+Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
+
+- Tool schemas include `title`, `annotations`, and `outputSchema`.
+- Server version negotiation returns `min(client_version, "2025-11-25")`.
+- `PreToolUse` uses `hookSpecificOutput.permissionDecision` (`allow`/`deny`/`ask`) rather than legacy top-level block format.
+- `PostToolUse` can inject `updatedMCPToolOutput` for span correlation (`_span_id`, `_span_intent`).
 
 ## What ships in this repo
 
@@ -327,7 +349,7 @@ flowchart LR
 python -m pytest tests -q
 ```
 
-Current baseline: **377** tests passing.
+Current baseline: **476** tests passing.
 
 ## Repository layout
 
