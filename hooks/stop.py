@@ -51,7 +51,7 @@ def main() -> None:
     else:
         out = {
             "hookSpecificOutput": {
-                "hookEventName": "Stop",
+                "hookEventName": payload.get("hook_event_name", "Stop"),
                 "additionalContext": "emerge: no active span — safe to stop",
             }
         }
