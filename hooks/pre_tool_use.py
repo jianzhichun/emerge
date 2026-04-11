@@ -145,6 +145,11 @@ def main() -> None:
         if not intent_signature:
             error_msg = "icc_span_approve: 'intent_signature' is required"
 
+    if tool_name.endswith("__icc_goal_rollback"):
+        target_event_id = str(arguments.get("target_event_id", "")).strip()
+        if not target_event_id:
+            error_msg = "icc_goal_rollback: 'target_event_id' is required"
+
     if error_msg:
         out = {
             "hookSpecificOutput": {
@@ -153,6 +158,19 @@ def main() -> None:
                 "permissionDecisionReason": error_msg,
             },
             "systemMessage": f"Tool call blocked by emerge PreToolUse validator: {error_msg}",
+        }
+    elif tool_name.endswith("__icc_goal_rollback"):
+        target_event_id = str(arguments.get("target_event_id", "")).strip()
+        out = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "ask",
+            },
+            "systemMessage": (
+                f"emerge: icc_goal_rollback to target_event_id={target_event_id!r}. "
+                "This is irreversible — it will overwrite the active goal state. "
+                "Confirm only if the user explicitly requested this rollback."
+            ),
         }
     elif _sig_normalized_to is not None:
         out = {

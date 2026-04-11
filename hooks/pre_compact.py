@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.goal_control_plane import GoalControlPlane  # noqa: E402
-from scripts.policy_config import default_hook_state_root  # noqa: E402
+from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
 from scripts.state_tracker import StateTracker, load_tracker, save_tracker  # noqa: E402
 
 _BUDGET_CHARS = 800
@@ -22,6 +22,7 @@ def main() -> None:
     except Exception:
         payload = {}
 
+    pin_plugin_data_path_if_present()
     state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
     tracker = load_tracker(state_path)

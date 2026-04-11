@@ -125,3 +125,30 @@ def test_intent_signature_uppercase_invalid_structure_still_blocks():
     out = _run_hook(payload)
     hook_out = out.get("hookSpecificOutput", {})
     assert hook_out.get("permissionDecision") == "deny"
+
+
+def test_icc_goal_rollback_returns_ask():
+    """icc_goal_rollback must return permissionDecision: ask for user confirmation."""
+    payload = {
+        "tool_name": "mcp__plugin_emerge_emerge__icc_goal_rollback",
+        "tool_input": {"target_event_id": "evt-abc123", "actor": "claude"},
+    }
+    out = _run_hook(payload)
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("hookEventName") == "PreToolUse"
+    assert hook_out.get("permissionDecision") == "ask", \
+        f"icc_goal_rollback must ask for confirmation, got: {out}"
+    assert "systemMessage" in out
+    assert "rollback" in out["systemMessage"].lower() or "evt-abc123" in out["systemMessage"]
+
+
+def test_icc_goal_rollback_missing_target_blocks():
+    """icc_goal_rollback without target_event_id should deny (schema enforcement)."""
+    payload = {
+        "tool_name": "mcp__plugin_emerge_emerge__icc_goal_rollback",
+        "tool_input": {"actor": "claude"},
+    }
+    out = _run_hook(payload)
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") == "deny"
+    assert "target_event_id" in hook_out.get("permissionDecisionReason", "").lower()
