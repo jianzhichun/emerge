@@ -1785,7 +1785,12 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body: dict = json.loads(self.rfile.read(length)) if length else {}
         if path == "/api/submit":
-            self._json(cmd_submit_actions(body.get("actions", [])))
+            actions = body.get("actions", [])
+            result = cmd_submit_actions(actions)
+            self._json(result)
+            if result.get("ok"):
+                _sse_broadcast({"pending": True, "action_count": result.get("action_count", 0),
+                                "ts_ms": int(time.time() * 1000)})
         elif path == "/api/settings":
             self._json(_cmd_save_settings(body))
         elif path == "/api/goal":

@@ -49,3 +49,30 @@ def test_sse_broadcast_reaches_connected_client(tmp_path, monkeypatch):
     assert line.startswith("data:")
     data = json.loads(line[5:])
     assert data["x"] == 42
+
+
+def test_sse_broadcast_pending_on_submit(tmp_path, monkeypatch):
+    """POST /api/submit must broadcast a pending=true event via SSE."""
+    import scripts.repl_admin as repl_admin
+    url = _start_cockpit_server(tmp_path, monkeypatch)
+    resp = urllib.request.urlopen(f"{url}/api/sse/status", timeout=3)
+    resp.readline()  # data: {status: online}\n
+    resp.readline()  # blank separator
+
+    deadline = time.time() + 2.0
+    while not repl_admin._sse_clients and time.time() < deadline:
+        time.sleep(0.01)
+
+    body = json.dumps({"actions": [{"type": "pipeline-delete", "key": "x"}]}).encode()
+    req = urllib.request.Request(
+        f"{url}/api/submit", data=body,
+        headers={"Content-Type": "application/json"}, method="POST"
+    )
+    with urllib.request.urlopen(req) as r:
+        assert json.loads(r.read())["ok"] is True
+
+    time.sleep(0.2)
+    line = resp.readline().decode().strip()
+    assert line.startswith("data:")
+    data = json.loads(line[5:])
+    assert data["pending"] is True
