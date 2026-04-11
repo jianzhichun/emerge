@@ -2847,6 +2847,37 @@ class EmergeDaemon:
             sys.stdout.write(line)
             sys.stdout.flush()
 
+    def _notify(
+        self,
+        content: str,
+        source: str,
+        severity: str = "info",        # info | warning | high
+        category: str = "informational",  # informational | action_needed | warning
+        intent_signature: str = "",
+        requires_action: bool = False,
+        extra_meta: dict | None = None,
+    ) -> None:
+        """Push a channel notification to CC with unified meta schema."""
+        meta: dict = {
+            "source": source,
+            "severity": severity,
+            "category": category,
+            "requires_action": requires_action,
+        }
+        if intent_signature:
+            meta["intent_signature"] = intent_signature
+        if extra_meta:
+            meta.update(extra_meta)
+        self._write_mcp_push({
+            "jsonrpc": "2.0",
+            "method": "notifications/claude/channel",
+            "params": {
+                "serverName": "emerge",
+                "content": content,
+                "meta": meta,
+            },
+        })
+
     def _elicit(
         self,
         message: str,

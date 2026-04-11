@@ -3383,3 +3383,31 @@ def test_process_local_file_skips_already_seen_events(tmp_path):
     buf = list(monitor._event_buffers.get("local:machine-1", []))
     assert len(buf) == 1
     assert buf[0]["ts_ms"] == now_ms + 500
+
+
+def test_notify_helper_builds_correct_meta():
+    """_notify() must produce a channel notification with unified meta schema."""
+    from scripts.emerge_daemon import EmergeDaemon
+    daemon = EmergeDaemon()
+    pushed = []
+    daemon._write_mcp_push = lambda p: pushed.append(p)
+
+    daemon._notify(
+        content="bridge failed for gmail.read.fetch",
+        source="bridge",
+        severity="high",
+        category="warning",
+        intent_signature="gmail.read.fetch",
+        requires_action=False,
+    )
+
+    assert len(pushed) == 1
+    p = pushed[0]
+    assert p["method"] == "notifications/claude/channel"
+    meta = p["params"]["meta"]
+    assert meta["source"] == "bridge"
+    assert meta["severity"] == "high"
+    assert meta["category"] == "warning"
+    assert meta["intent_signature"] == "gmail.read.fetch"
+    assert meta["requires_action"] is False
+    assert p["params"]["content"] == "bridge failed for gmail.read.fetch"
