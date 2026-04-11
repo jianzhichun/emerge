@@ -1507,9 +1507,23 @@ def cmd_control_plane_session_export() -> dict:
 def cmd_control_plane_session_reset(confirm: str, full: bool = False) -> dict:
     if confirm != "RESET":
         return {"ok": False, "error": "must pass confirm='RESET'"}
-    export = cmd_control_plane_session_export()
     pin_plugin_data_path_if_present()
     state_path = Path(default_hook_state_root()) / "state.json"
+    try:
+        existing = load_tracker(state_path)
+        if existing.state.get("active_span_id"):
+            return {
+                "ok": False,
+                "error": "active_span_open",
+                "message": (
+                    f"Cannot reset while span is active "
+                    f"(intent={existing.state.get('active_span_intent', '?')}). "
+                    "Close or abort the span first via icc_span_close(outcome='aborted')."
+                ),
+            }
+    except Exception:
+        pass
+    export = cmd_control_plane_session_export()
     save_tracker(state_path, StateTracker())
     removed: list[str] = []
     if full:

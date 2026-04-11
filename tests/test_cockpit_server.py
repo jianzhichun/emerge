@@ -263,3 +263,29 @@ def test_cockpit_full_flow(tmp_path, monkeypatch):
     assert len(pending["actions"]) == 2
     assert pending["actions"][0]["type"] == "notes-comment"
     assert pending["actions"][1]["type"] == "tool-call"
+
+
+def test_session_reset_blocked_when_span_active(tmp_path, monkeypatch):
+    """session/reset must refuse when active_span_id is present in state."""
+    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
+    (tmp_path / "connectors").mkdir(exist_ok=True)
+
+    from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present
+    from scripts.state_tracker import load_tracker, save_tracker
+
+    pin_plugin_data_path_if_present()
+    state_path = Path(default_hook_state_root()) / "state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    tracker = load_tracker(state_path)
+    tracker.state["active_span_id"] = "span-123"
+    tracker.state["active_span_intent"] = "gmail.read.fetch"
+    save_tracker(state_path, tracker)
+
+    from scripts.repl_admin import cmd_control_plane_session_reset
+    result = cmd_control_plane_session_reset(confirm="RESET")
+
+    assert result["ok"] is False
+    assert "active_span" in result.get("error", "").lower() or "span" in result.get("error", "").lower()

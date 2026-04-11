@@ -475,7 +475,7 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
                 normalized["args_summary"] = str(item["args_summary"])[:200]
             deltas.append(normalized)
 
-    return {
+    out: dict[str, Any] = {
         "goal": goal,
         "goal_source": goal_source,
         "open_risks": open_risks,
@@ -483,6 +483,11 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
         "verification_state": verification_state,
         "consistency_window_ms": consistency_window_ms,
     }
+    # Preserve flywheel span fields (written by SpanTracker / hooks as raw JSON keys).
+    for _k in ("active_span_id", "active_span_intent"):
+        if _k in raw:
+            out[_k] = raw[_k]
+    return out
 
 
 def load_tracker(path: Path) -> StateTracker:
