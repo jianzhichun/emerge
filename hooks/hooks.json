@@ -22,6 +22,42 @@
         ]
       }
     ],
+    "SessionEnd": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/session_end.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/stop.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/stop.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "matcher": ".*",
@@ -35,7 +71,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "mcp__plugin_.*emerge.*__icc_(read|write|exec|reconcile|crystallize)",
+        "matcher": "mcp__plugin_.*emerge.*__icc_.*",
         "hooks": [
           {
             "type": "command",
@@ -46,7 +82,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__plugin_.*emerge.*__icc_(read|write|exec|reconcile|crystallize)",
+        "matcher": "mcp__plugin_.*emerge.*__icc_.*",
         "hooks": [
           {
             "type": "command",
@@ -66,7 +102,7 @@
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "mcp__plugin_.*emerge.*__icc_(read|write|exec|reconcile|crystallize)",
+        "matcher": "mcp__plugin_.*emerge.*__icc_.*",
         "hooks": [
           {
             "type": "command",
