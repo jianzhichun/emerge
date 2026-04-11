@@ -46,24 +46,32 @@ def main() -> None:
             )
         else:
             import re as _re
-            # Must be <connector>.(read|write).<name> — middle segment must be read or write
-            _sig_pattern = _re.compile(r'^[a-z][a-z0-9_-]*\.(read|write)\.[a-z][a-z0-9_./-]*$')
-            if not _sig_pattern.match(intent_signature):
+            # Check for common 2-part mistake (connector omitted)
+            if len(intent_signature.split(".")) == 2:
                 error_msg = (
-                    f"icc_exec: intent_signature {intent_signature!r} is invalid. "
-                    "Must be <connector>.(read|write).<name> — e.g. 'zwcad.read.state', "
-                    "'hypermesh.write.apply-change'. Middle segment must be 'read' or 'write'. "
-                    "Check connector://notes to see existing intents for this connector."
+                    f"icc_exec: intent_signature {intent_signature!r} has only 2 parts. "
+                    "Required format: connector.mode.name (e.g. 'zwcad.read.layers'). "
+                    "Add the connector name as the first part."
                 )
             else:
-                result_var = str(arguments.get("result_var", "")).strip()
-                if result_var:
-                    _var_pattern = _re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-                    if not _var_pattern.match(result_var):
-                        error_msg = (
-                            f"icc_exec: result_var {result_var!r} is invalid. "
-                            "Must be a Python identifier, e.g. '__result' or 'output_rows'."
-                        )
+                # Must be <connector>.(read|write).<name> — middle segment must be read or write
+                _sig_pattern = _re.compile(r'^[a-z][a-z0-9_-]*\.(read|write)\.[a-z][a-z0-9_./-]*$')
+                if not _sig_pattern.match(intent_signature):
+                    error_msg = (
+                        f"icc_exec: intent_signature {intent_signature!r} is invalid. "
+                        "Must be <connector>.(read|write).<name> — e.g. 'zwcad.read.state', "
+                        "'hypermesh.write.apply-change'. Middle segment must be 'read' or 'write'. "
+                        "Check connector://notes to see existing intents for this connector."
+                    )
+                else:
+                    result_var = str(arguments.get("result_var", "")).strip()
+                    if result_var:
+                        _var_pattern = _re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+                        if not _var_pattern.match(result_var):
+                            error_msg = (
+                                f"icc_exec: result_var {result_var!r} is invalid. "
+                                "Must be a Python identifier, e.g. '__result' or 'output_rows'."
+                            )
 
     if tool_name.endswith("__icc_reconcile"):
         delta_id = str(arguments.get("delta_id", "")).strip()
