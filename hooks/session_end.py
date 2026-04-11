@@ -41,6 +41,11 @@ def main() -> None:
         "hookSpecificOutput": {
             "hookEventName": "SessionEnd",
             "cleanup_performed": cleanup_performed,
+            "additionalContext": (
+                f"session_end: cleanup_performed={','.join(cleanup_performed)}"
+                if cleanup_performed
+                else "session_end: no cleanup needed"
+            ),
         }
     }
     print(json.dumps(out))

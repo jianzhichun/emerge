@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.policy_config import default_hook_state_root  # noqa: E402
+from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
 from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
 
 
@@ -21,11 +21,14 @@ def main() -> None:
 
     tool_name = payload.get("tool_name", "unknown")
     error_text = str(payload.get("error", "unknown error"))
+    is_interrupt = bool(payload.get("is_interrupt", False))
+    pin_plugin_data_path_if_present()
     state_path = Path(default_hook_state_root()) / "state.json"
 
     try:
         tracker = load_tracker(state_path)
-        tracker.mark_degraded(f"Tool failure: {tool_name} — {error_text[:120]}")
+        if not is_interrupt:
+            tracker.mark_degraded(f"Tool failure: {tool_name} — {error_text[:120]}")
         save_tracker(state_path, tracker)
     except Exception as exc:
         print(f"post_tool_use_failure: tracker update failed: {exc}", file=sys.stderr)

@@ -152,3 +152,17 @@ def test_icc_goal_rollback_missing_target_blocks():
     hook_out = out.get("hookSpecificOutput", {})
     assert hook_out.get("permissionDecision") == "deny"
     assert "target_event_id" in hook_out.get("permissionDecisionReason", "").lower()
+
+
+def test_icc_span_approve_invalid_intent_signature_blocks():
+    """icc_span_approve must enforce connector.read|write.name format."""
+    payload = {
+        "tool_name": "mcp__plugin_emerge_emerge__icc_span_approve",
+        "tool_input": {"intent_signature": "lark.read"},
+    }
+    out = _run_hook(payload)
+    hook_out = out.get("hookSpecificOutput", {})
+    assert hook_out.get("permissionDecision") == "deny"
+    reason = hook_out.get("permissionDecisionReason", "")
+    assert "icc_span_approve" in reason
+    assert "invalid" in reason

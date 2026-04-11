@@ -79,7 +79,7 @@ def main() -> None:
                                 "Must be a Python identifier, e.g. '__result' or 'output_rows'."
                             )
 
-    if tool_name.endswith("__icc_reconcile"):
+    elif tool_name.endswith("__icc_reconcile"):
         delta_id = str(arguments.get("delta_id", "")).strip()
         outcome = str(arguments.get("outcome", "")).strip()
         if not delta_id:
@@ -87,7 +87,7 @@ def main() -> None:
         elif outcome not in ("confirm", "correct", "retract"):
             error_msg = f"icc_reconcile: 'outcome' must be confirm/correct/retract, got {outcome!r}"
 
-    if tool_name.endswith("__icc_crystallize"):
+    elif tool_name.endswith("__icc_crystallize"):
         _sig_raw = str(arguments.get("intent_signature", "")).strip()
         intent_signature = _sig_raw.lower()
         if intent_signature != _sig_raw:
@@ -110,7 +110,7 @@ def main() -> None:
         elif mode not in ("read", "write"):
             error_msg = f"icc_crystallize: 'mode' must be read or write, got {mode!r}"
 
-    if tool_name.endswith("__icc_span_open"):
+    elif tool_name.endswith("__icc_span_open"):
         import re as _re
         _sig_raw = str(arguments.get("intent_signature", "")).strip()
         intent_signature = _sig_raw.lower()
@@ -129,14 +129,15 @@ def main() -> None:
                 "Must be <connector>.(read|write).<name> — e.g. 'lark.read.get-doc'."
             )
 
-    if tool_name.endswith("__icc_span_close"):
+    elif tool_name.endswith("__icc_span_close"):
         outcome = str(arguments.get("outcome", "")).strip()
         if outcome not in ("success", "failure", "aborted"):
             error_msg = (
                 f"icc_span_close: 'outcome' must be success/failure/aborted, got {outcome!r}"
             )
 
-    if tool_name.endswith("__icc_span_approve"):
+    elif tool_name.endswith("__icc_span_approve"):
+        import re as _re
         _sig_raw = str(arguments.get("intent_signature", "")).strip()
         intent_signature = _sig_raw.lower()
         if intent_signature != _sig_raw:
@@ -144,8 +145,13 @@ def main() -> None:
             _sig_normalized_to = intent_signature
         if not intent_signature:
             error_msg = "icc_span_approve: 'intent_signature' is required"
+        elif not _re.compile(r'^[a-z][a-z0-9_-]*\.(read|write)\.[a-z][a-z0-9_./-]*$').match(intent_signature):
+            error_msg = (
+                f"icc_span_approve: intent_signature {intent_signature!r} is invalid. "
+                "Must be <connector>.(read|write).<name> — e.g. 'lark.read.get-doc'."
+            )
 
-    if tool_name.endswith("__icc_goal_rollback"):
+    elif tool_name.endswith("__icc_goal_rollback"):
         target_event_id = str(arguments.get("target_event_id", "")).strip()
         if not target_event_id:
             error_msg = "icc_goal_rollback: 'target_event_id' is required"

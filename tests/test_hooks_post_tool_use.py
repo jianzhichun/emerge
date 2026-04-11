@@ -76,3 +76,26 @@ def test_non_exec_tool_never_injects():
     out = _run_post_hook(payload, state=state)
     hook_out = out.get("hookSpecificOutput", {})
     assert "updatedMCPToolOutput" not in hook_out
+
+
+def test_verification_state_reads_tool_response_not_tool_result():
+    """Hook must read verification_state from payload.tool_response."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        env = {**os.environ, "EMERGE_DATA_ROOT": tmpdir}
+        payload = {
+            "tool_name": "mcp__plugin_emerge_emerge__icc_span_close",
+            "tool_input": {"outcome": "failure"},
+            "tool_response": {
+                "content": [{"type": "text", "text": '{"verification_state":"degraded"}'}]
+            },
+        }
+        result = subprocess.run(
+            [sys.executable, str(POST_HOOK)],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, f"post_tool_use.py stderr: {result.stderr}"
+        state = json.loads((Path(tmpdir) / "state.json").read_text(encoding="utf-8"))
+        assert state.get("verification_state") == "degraded"

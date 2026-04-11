@@ -157,7 +157,7 @@ def main() -> None:
             # Delta with intent — makes in-span work visible in State tab
             _write_span_delta(tool_name, tool_input, state_path, active_span_intent)
 
-    print(json.dumps({}))
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse"}}))
 
 
 if __name__ == "__main__":
