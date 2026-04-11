@@ -104,6 +104,9 @@ Integration tests go in `test_mcp_tools_integration.py` and call `EmergeDaemon.c
 - **MCP protocol version**: daemon advertises `2025-03-26` with `elicitation: {}` capability. `_elicit()` must only be called from worker threads (ThreadPoolExecutor), never from the main stdin loop.
 - **Unified notification meta schema**: All channel notifications go through `_notify()` in `emerge_daemon.py`. Required meta fields: `source` (bridge|cockpit|operator_monitor|span_synthesizer), `severity` (info|warning|high), `category` (informational|action_needed|warning), `requires_action` (bool). `extra_meta` is applied first; required fields always override. Bridge failures use `severity=high`; skeleton-ready and pending-actions use `requires_action=True`.
 - **SessionEnd hook** (`hooks/session_end.py`): clears stale `active_span_id` and `active_span_intent` from `state.json`. Registered in `.claude-plugin/plugin.json`. Complements `SessionStart` which also clears stale span state. Belt-and-suspenders cleanup for unresolvable open spans.
+- **Resource subscriptions**: daemon advertises `resources.subscribe=True` (MCP 2025-03-26). After every `_update_pipeline_registry` write, daemon emits `notifications/resources/list_changed` so CC can re-read `policy://current` without polling.
+- **Context injection budgeting**: `format_context(budget_chars=N)` in `StateTracker` allocates at most 1/3 of `budget_chars` to the risk list, sorted by recency (newest first). Risks beyond the budget are collapsed to a count with a pointer to `state://deltas`. This prevents context inflation in high-risk-count sessions.
+- **PreToolUse 2-part intent**: `pre_tool_use.py` provides a specific error message when `intent_signature` has exactly 2 parts, explaining the required `connector.mode.name` format and prompting the user to add the connector name.
 
 ## Documentation Update Rules
 
