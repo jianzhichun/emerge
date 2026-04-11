@@ -1455,7 +1455,7 @@ class EmergeDaemon:
                         {
                             "name": "icc_exec",
                             "title": "Execute Intent",
-                            "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+                            "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
                             "description": "Execute Python in a persistent session with flywheel tracking. intent_signature is required (enforced). Read tasks set __result=[{...}]; write tasks set __action={'ok':True,...}; side effects use no_replay=True.",
                             "inputSchema": {
                                 "type": "object",
@@ -1569,7 +1569,7 @@ class EmergeDaemon:
                         {
                             "name": "icc_hub",
                             "title": "Memory Hub",
-                            "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+                            "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
                             "description": (
                                 "Manage Memory Hub — bidirectional connector asset sync via a self-hosted git repo. "
                                 "Actions: configure (first-time setup — saves config and initialises git worktree), "

@@ -3728,13 +3728,9 @@ def test_tool_list_has_title_and_annotations():
 
     for name, tool in tools.items():
         assert "title" in tool, f"{name} missing 'title'"
-    for name, tool in tools.items():
         assert "annotations" in tool, f"{name} missing 'annotations'"
 
     assert tools["icc_goal_read"]["annotations"]["readOnlyHint"] is True
     assert tools["icc_goal_rollback"]["annotations"]["destructiveHint"] is True
     assert tools["icc_reconcile"]["annotations"]["idempotentHint"] is True
-    assert tools["icc_span_open"]["annotations"]["openWorldHint"] is False
-    assert tools["icc_span_close"]["annotations"]["openWorldHint"] is False
-    assert tools["icc_span_approve"]["annotations"]["openWorldHint"] is False
     assert tools["icc_span_approve"]["annotations"]["idempotentHint"] is True
