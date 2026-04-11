@@ -76,3 +76,15 @@ def test_sse_broadcast_pending_on_submit(tmp_path, monkeypatch):
     assert line.startswith("data:")
     data = json.loads(line[5:])
     assert data["pending"] is True
+
+
+def test_sse_initial_event_has_status_online(tmp_path, monkeypatch):
+    """Initial SSE event must have status=online with pid and ts_ms."""
+    url = _start_cockpit_server(tmp_path, monkeypatch)
+    resp = urllib.request.urlopen(f"{url}/api/sse/status", timeout=3)
+    line = resp.readline().decode().strip()
+    assert line.startswith("data:")
+    data = json.loads(line[5:])
+    assert data["status"] == "online"
+    assert isinstance(data["pid"], int)
+    assert isinstance(data["ts_ms"], int)
