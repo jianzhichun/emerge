@@ -3640,3 +3640,33 @@ def test_registry_write_emits_list_changed_notification(tmp_path, monkeypatch):
 
     list_changed = [p for p in pushed if p.get("method") == "notifications/resources/list_changed"]
     assert len(list_changed) >= 1
+
+
+def test_resource_read_policy_current_has_no_extra_fields():
+    """resources/read policy://current must return exactly uri+mimeType+text, no extras."""
+    from scripts.emerge_daemon import EmergeDaemon
+    daemon = EmergeDaemon()
+    req = {
+        "jsonrpc": "2.0", "id": 1,
+        "method": "resources/read",
+        "params": {"uri": "policy://current"},
+    }
+    resp = daemon.handle_jsonrpc(req)
+    resource = resp["result"]["resource"]
+    # Only these three keys allowed; no structuredContent, no blob alongside text
+    allowed = {"uri", "mimeType", "text"}
+    extra = set(resource.keys()) - allowed
+    assert not extra, f"Unexpected fields in resource response: {extra}"
+    json.loads(resource["text"])  # must be valid JSON
+
+
+def test_resource_read_state_deltas_is_valid_json():
+    """resources/read state://deltas text field must be parseable JSON."""
+    from scripts.emerge_daemon import EmergeDaemon
+    daemon = EmergeDaemon()
+    req = {"jsonrpc": "2.0", "id": 1, "method": "resources/read",
+           "params": {"uri": "state://deltas"}}
+    resp = daemon.handle_jsonrpc(req)
+    resource = resp["result"]["resource"]
+    data = json.loads(resource["text"])
+    assert "open_risks" in data or "deltas" in data or "goal" in data
