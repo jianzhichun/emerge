@@ -30,9 +30,10 @@ def test_icc_crystallize_generates_pipeline_files(tmp_path):
             "mode": "read",
         })
         assert result.get("isError") is not True, result
-        assert result.get("ok") is True
-        py_path = Path(result["py_path"])
-        yaml_path = Path(result["yaml_path"])
+        body = result.get("structuredContent", {})
+        assert body.get("ok") is True
+        py_path = Path(body["py_path"])
+        yaml_path = Path(body["yaml_path"])
         assert py_path.exists(), f"expected {py_path}"
         assert yaml_path.exists(), f"expected {yaml_path}"
         py_src = py_path.read_text()
@@ -42,7 +43,7 @@ def test_icc_crystallize_generates_pipeline_files(tmp_path):
         import yaml
         meta = yaml.safe_load(yaml_path.read_text())
         assert meta["intent_signature"] == "myconn.read.mydata"
-        assert meta.get("synthesized") is True
+        assert meta.get("synthesized") is True  # yaml meta field, not envelope
         assert "read_steps" in meta
         assert "verify_steps" in meta
     finally:
@@ -70,8 +71,9 @@ def test_icc_crystallize_write_pipeline(tmp_path):
             "pipeline_name": "dowork",
             "mode": "write",
         })
-        assert result.get("ok") is True
-        py_src = Path(result["py_path"]).read_text()
+        body = result.get("structuredContent", {})
+        assert body.get("ok") is True
+        py_src = Path(body["py_path"]).read_text()
         assert "def run_write" in py_src
         assert "def verify_write" in py_src
     finally:
@@ -120,9 +122,10 @@ def test_icc_crystallize_always_writes_locally_even_with_runner(tmp_path):
         })
 
         # Must succeed locally — runner not called for crystallize
-        assert result.get("ok") is True, result
+        body = result.get("structuredContent", {})
+        assert body.get("ok") is True, result
         assert "icc_crystallize" not in routed_calls
-        assert Path(result["py_path"]).exists()
+        assert Path(body["py_path"]).exists()
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)

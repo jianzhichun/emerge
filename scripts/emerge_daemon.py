@@ -443,18 +443,17 @@ class EmergeDaemon:
             f"  icc_{'read' if mode == 'read' else 'write'} connector={connector!r} pipeline={pipeline_name!r}\n"
             f"Do NOT call icc_exec for this intent again — the pipeline handles it."
         )
-        return {
+        _cryst_payload = {
             "ok": True,
             "py_path": str(py_path),
             "yaml_path": str(yaml_path),
             "code_preview": code_preview,
             "next_step": next_step,
-            "content": [{"type": "text", "text": json.dumps({
-                "ok": True,
-                "py_path": str(py_path),
-                "yaml_path": str(yaml_path),
-                "next_step": next_step,
-            })}],
+        }
+        return {
+            "isError": False,
+            "structuredContent": _cryst_payload,
+            "content": [{"type": "text", "text": json.dumps(_cryst_payload)}],
         }
 
     def _auto_crystallize(
@@ -581,10 +580,13 @@ class EmergeDaemon:
 
     @staticmethod
     def _tool_ok_json(payload: Any) -> dict[str, Any]:
-        base: dict[str, Any] = {"isError": False, "content": [{"type": "text", "text": json.dumps(payload)}]}
+        result: dict[str, Any] = {
+            "isError": False,
+            "content": [{"type": "text", "text": json.dumps(payload)}],
+        }
         if isinstance(payload, dict):
-            base.update(payload)
-        return base
+            result["structuredContent"] = payload
+        return result
 
     @staticmethod
     def _as_float(value: Any, default: float) -> float:
@@ -635,14 +637,17 @@ class EmergeDaemon:
                 f"no pipeline registered yet — use icc_exec with "
                 f"intent_signature='{connector}.{mode}.{pipeline}' to explore"
             )
-            return {
-                "isError": False,
+            _payload = {
                 "pipeline_missing": True,
                 "connector": connector,
                 "pipeline": pipeline,
                 "mode": mode,
                 "fallback": "icc_exec",
                 "fallback_hint": hint,
+            }
+            return {
+                "isError": False,
+                "structuredContent": _payload,
                 "content": [{"type": "text", "text": f"Pipeline not found. {hint}"}],
             }
         except Exception as exc:
@@ -2907,47 +2912,52 @@ def run_stdio() -> None:
     atexit.register(lambda: executor.shutdown(wait=False))
 
     for line in sys.stdin:
-        text = line.strip()
-        if not text:
-            continue
         try:
-            req = json.loads(text)
-        except json.JSONDecodeError as exc:  # pragma: no cover
-            _write_response({"jsonrpc": "2.0", "id": None,
-                             "error": {"code": -32700, "message": f"Parse error: {exc}"}})
-            continue
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                req = json.loads(text)
+            except json.JSONDecodeError as exc:  # pragma: no cover
+                _write_response({"jsonrpc": "2.0", "id": None,
+                                 "error": {"code": -32700, "message": f"Parse error: {exc}"}})
+                continue
 
-        req_id = req.get("id")
-        method = req.get("method", "")
+            req_id = req.get("id")
+            method = req.get("method", "")
 
-        # Elicitation responses: wake waiting worker thread, never dispatch as a request
-        if req_id and req_id in daemon._elicit_events:
-            daemon._elicit_results[req_id] = req.get("result") or {}
-            daemon._elicit_events.pop(req_id).set()
-            continue
+            # Elicitation responses: wake waiting worker thread, never dispatch as a request
+            if req_id and req_id in daemon._elicit_events:
+                daemon._elicit_results[req_id] = req.get("result") or {}
+                ev = daemon._elicit_events.pop(req_id, None)
+                if ev is not None:
+                    ev.set()
+                continue
 
-        # Tool calls run in thread pool so _elicit() can block a worker
-        # while the main loop continues routing
-        if method == "tools/call":
-            def _run(_req=req, _id=req_id):
-                try:
-                    resp = daemon.handle_jsonrpc(_req)
-                except Exception as exc:  # pragma: no cover
-                    resp = {"jsonrpc": "2.0", "id": _id,
-                            "error": {"code": -32603, "message": str(exc)}}
-                if resp is not None:
-                    _write_response(resp)
-            executor.submit(_run)
-            continue
+            # Tool calls run in thread pool so _elicit() can block a worker
+            # while the main loop continues routing
+            if method == "tools/call":
+                def _run(_req=req, _id=req_id):
+                    try:
+                        resp = daemon.handle_jsonrpc(_req)
+                    except Exception as exc:  # pragma: no cover
+                        resp = {"jsonrpc": "2.0", "id": _id,
+                                "error": {"code": -32603, "message": str(exc)}}
+                    if resp is not None:
+                        _write_response(resp)
+                executor.submit(_run)
+                continue
 
-        # All other methods (initialize, ping, tools/list, resources/*) are synchronous
-        try:
-            resp = daemon.handle_jsonrpc(req)
-        except Exception as exc:  # pragma: no cover
-            resp = {"jsonrpc": "2.0", "id": req_id,
-                    "error": {"code": -32603, "message": str(exc)}}
-        if resp is not None:
-            _write_response(resp)
+            # All other methods (initialize, ping, tools/list, resources/*) are synchronous
+            try:
+                resp = daemon.handle_jsonrpc(req)
+            except Exception as exc:  # pragma: no cover
+                resp = {"jsonrpc": "2.0", "id": req_id,
+                        "error": {"code": -32603, "message": str(exc)}}
+            if resp is not None:
+                _write_response(resp)
+        except Exception:  # pragma: no cover
+            pass  # never let a single bad message kill the main loop
 
 
 if __name__ == "__main__":

@@ -128,6 +128,10 @@ if _WATCHDOG_AVAILABLE:
         def on_created(self, event: "FileSystemEvent") -> None:
             if not event.is_directory:
                 self._try_dispatch(event.src_path)
+
+        def on_moved(self, event: "FileSystemEvent") -> None:
+            if not event.is_directory:
+                self._try_dispatch(event.dest_path)
 else:
     class _RouterHandler:  # type: ignore[no-redef]
         pass

@@ -122,8 +122,8 @@ def test_tools_call_returns_error_payload_for_missing_pipeline_and_script(tmp_pa
     )
     # A missing pipeline is now a structured guidance response (not an error)
     assert bad_read["result"]["isError"] is not True
-    assert bad_read["result"]["pipeline_missing"] is True
-    assert bad_read["result"]["fallback"] == "icc_exec"
+    assert bad_read["result"]["structuredContent"]["pipeline_missing"] is True
+    assert bad_read["result"]["structuredContent"]["fallback"] == "icc_exec"
 
     bad_script = daemon.handle_jsonrpc(
         {
@@ -922,12 +922,13 @@ def test_icc_read_pipeline_missing_returns_structured_fallback(tmp_path):
         })
         # Must NOT be an error — it's a guidance response
         assert result.get("isError") is not True
-        assert result.get("pipeline_missing") is True
-        assert result.get("connector") == "nonexistent"
-        assert result.get("pipeline") == "nope"
-        assert result.get("mode") == "read"
-        assert result.get("fallback") == "icc_exec"
-        assert "icc_exec" in result.get("fallback_hint", "")
+        body = result.get("structuredContent", {})
+        assert body.get("pipeline_missing") is True
+        assert body.get("connector") == "nonexistent"
+        assert body.get("pipeline") == "nope"
+        assert body.get("mode") == "read"
+        assert body.get("fallback") == "icc_exec"
+        assert "icc_exec" in body.get("fallback_hint", "")
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
@@ -1033,9 +1034,10 @@ def test_icc_write_pipeline_missing_returns_structured_fallback(tmp_path):
             "pipeline": "nope",
         })
         assert result.get("isError") is not True
-        assert result.get("pipeline_missing") is True
-        assert result.get("mode") == "write"
-        assert result.get("fallback") == "icc_exec"
+        body = result.get("structuredContent", {})
+        assert body.get("pipeline_missing") is True
+        assert body.get("mode") == "write"
+        assert body.get("fallback") == "icc_exec"
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
@@ -1793,9 +1795,9 @@ def test_crystallize_yaml_includes_description(tmp_path: Path):
             pipeline_name="layers",
             mode="read",
         )
-        assert result.get("ok"), f"crystallize failed: {result}"
+        assert result.get("structuredContent", {}).get("ok"), f"crystallize failed: {result}"
 
-        yaml_path = Path(result["yaml_path"])
+        yaml_path = Path(result["structuredContent"]["yaml_path"])
         yaml_text = yaml_path.read_text(encoding="utf-8")
         assert "description: Read all layers" in yaml_text
         assert "intent_signature: myconn.read.layers" in yaml_text
@@ -1836,7 +1838,7 @@ def test_crystallize_clears_synthesis_ready(tmp_path: Path):
             pipeline_name="state",
             mode="read",
         )
-        assert result.get("ok"), f"crystallize failed: {result}"
+        assert result.get("structuredContent", {}).get("ok"), f"crystallize failed: {result}"
 
         reg_after = json.loads(reg_path.read_text())
         assert "synthesis_ready" not in reg_after["pipelines"].get("myconn.read.state", {})
@@ -1870,11 +1872,12 @@ def test_crystallize_return_includes_next_step(tmp_path: Path):
             pipeline_name="data",
             mode="read",
         )
-        assert result.get("ok"), f"crystallize failed: {result}"
-        assert "next_step" in result
-        assert "icc_read" in result["next_step"]
-        assert "connector='myconn'" in result["next_step"]
-        assert "pipeline='data'" in result["next_step"]
+        sc = result.get("structuredContent", {})
+        assert sc.get("ok"), f"crystallize failed: {result}"
+        assert "next_step" in sc
+        assert "icc_read" in sc["next_step"]
+        assert "connector='myconn'" in sc["next_step"]
+        assert "pipeline='data'" in sc["next_step"]
     finally:
         if old_env is None:
             os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
@@ -2131,7 +2134,7 @@ def test_crystallize_scans_all_session_dirs(tmp_path: Path):
             pipeline_name="data",
             mode="read",
         )
-        assert result.get("ok"), (
+        assert result.get("structuredContent", {}).get("ok"), (
             f"crystallize must find WAL from previous session: {result}"
         )
     finally:
@@ -3052,7 +3055,7 @@ def test_span_approve_elicitation_confirmed(tmp_path):
         with patch.object(daemon, "_elicit", return_value={"confirmed": True}) as mock_elicit:
             result = daemon.call_tool("icc_span_approve", {"intent_signature": f"{conn}.{mode}.{name}"})
 
-    assert result.get("approved") is True
+    assert result.get("structuredContent", {}).get("approved") is True
     mock_elicit.assert_called_once()
     os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
 
@@ -3076,7 +3079,7 @@ def test_span_approve_elicitation_cancelled(tmp_path):
         with patch.object(daemon, "_elicit", return_value={"confirmed": False}):
             result = daemon.call_tool("icc_span_approve", {"intent_signature": f"{conn}.{mode}.{name}"})
 
-    assert result.get("approved") is not True
+    assert result.get("structuredContent", {}).get("approved") is not True
     assert "cancel" in str(result).lower()
     os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
 
@@ -3120,7 +3123,7 @@ def test_reconcile_elicitation_used_when_outcome_not_provided():
     with patch.object(daemon, "_elicit", return_value={"outcome": "confirm"}) as mock_elicit:
         result = daemon.call_tool("icc_reconcile", {"delta_id": delta_id})
 
-    assert result.get("outcome") == "confirm"
+    assert result.get("structuredContent", {}).get("outcome") == "confirm"
     mock_elicit.assert_called_once()
 
 
@@ -3140,7 +3143,7 @@ def test_hub_resolve_elicitation_used_when_resolution_not_provided():
             "action": "resolve", "conflict_id": "c1"
         })
 
-    assert result.get("ok") is True
+    assert result.get("structuredContent", {}).get("ok") is True
     mock_elicit.assert_called_once()
 
 

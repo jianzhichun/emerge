@@ -82,3 +82,29 @@ def test_event_router_drains_existing_file_on_start(tmp_path):
     router.start()
     router.stop()
     assert len(called) >= 1
+
+
+def test_event_router_watchdog_fires_on_atomic_rename(tmp_path):
+    """on_moved must fire callback when a file is atomically renamed into place."""
+    import os
+    from scripts.event_router import EventRouter
+    try:
+        import watchdog  # noqa: F401
+    except ImportError:
+        pytest.skip("watchdog not installed — polling fallback doesn't catch rename")
+    fired = []
+    target = tmp_path / "pending-actions.json"
+    router = EventRouter({target: lambda p: fired.append(p)})
+    router.start()
+    # Small delay to let watchdog register
+    time.sleep(0.2)
+    # Atomic write (the same pattern used by cockpit submit)
+    tmp = tmp_path / "pending-actions.json.tmp"
+    tmp.write_text('{"submitted_at": 1, "actions": []}')
+    os.rename(str(tmp), str(target))
+    # Wait for event
+    deadline = time.time() + 3.0
+    while time.time() < deadline and not fired:
+        time.sleep(0.05)
+    router.stop()
+    assert len(fired) >= 1, "on_moved callback never fired for atomic rename"
