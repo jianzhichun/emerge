@@ -37,17 +37,12 @@ def main() -> None:
     except Exception:
         pass
 
-    out = {
-        "hookSpecificOutput": {
-            "hookEventName": "SessionEnd",
-            "cleanup_performed": cleanup_performed,
-            "additionalContext": (
-                f"session_end: cleanup_performed={','.join(cleanup_performed)}"
-                if cleanup_performed
-                else "session_end: no cleanup needed"
-            ),
-        }
-    }
+    # SessionEnd does not accept `hookSpecificOutput` —
+    # use top-level `systemMessage` (or empty object when nothing to report).
+    if cleanup_performed:
+        out = {"systemMessage": f"session_end: cleanup_performed={','.join(cleanup_performed)}"}
+    else:
+        out = {}
     print(json.dumps(out))
 
 

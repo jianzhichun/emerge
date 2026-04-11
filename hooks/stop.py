@@ -49,12 +49,10 @@ def main() -> None:
             ),
         }
     else:
-        out = {
-            "hookSpecificOutput": {
-                "hookEventName": payload.get("hook_event_name", "Stop"),
-                "additionalContext": "emerge: no active span — safe to stop",
-            }
-        }
+        # Stop / SubagentStop do not accept `hookSpecificOutput` —
+        # the CC schema validator only allows it for PreToolUse / UserPromptSubmit /
+        # PostToolUse / SessionStart. Safe path: emit an empty object.
+        out = {}
     print(json.dumps(out))
 
 

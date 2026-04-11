@@ -51,12 +51,10 @@ def main() -> None:
     fresh = StateTracker()
     save_tracker(state_path, fresh)
 
-    out = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreCompact",
-            "additionalContext": context_text,
-        }
-    }
+    # PreCompact does not accept `hookSpecificOutput` —
+    # use top-level `systemMessage` so the recovery token survives compaction.
+    # The next UserPromptSubmit hook will re-inject the FLYWHEEL_TOKEN as a safety net.
+    out = {"systemMessage": context_text}
     print(json.dumps(out))
 
 

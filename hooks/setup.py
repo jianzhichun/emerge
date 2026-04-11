@@ -29,12 +29,9 @@ def main() -> None:
     pin_plugin_data_path_if_present()
     GoalControlPlane().ensure_initialized()
 
-    out = {
-        "hookSpecificOutput": {
-            "hookEventName": "Setup",
-            "additionalContext": f"emerge plugin ready. Home: {emerge_home}",
-        }
-    }
+    # Setup does not accept `hookSpecificOutput` —
+    # use top-level `systemMessage` for the readiness notice.
+    out = {"systemMessage": f"emerge plugin ready. Home: {emerge_home}"}
     print(json.dumps(out))
 
 

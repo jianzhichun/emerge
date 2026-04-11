@@ -33,12 +33,9 @@ def main() -> None:
     except Exception as exc:
         print(f"post_tool_use_failure: tracker update failed: {exc}", file=sys.stderr)
 
-    out = {
-        "hookSpecificOutput": {
-            "hookEventName": "PostToolUseFailure",
-            "additionalContext": f"Tool {tool_name} failed: {error_text[:200]}",
-        }
-    }
+    # PostToolUseFailure does not accept `hookSpecificOutput` —
+    # use top-level `systemMessage` for context injection.
+    out = {"systemMessage": f"Tool {tool_name} failed: {error_text[:200]}"}
     print(json.dumps(out))
 
 

@@ -3033,11 +3033,15 @@ class EmergeDaemon:
         })
         if intent_signature:
             meta["intent_signature"] = intent_signature
+        # Match the params shape used by official chat plugins
+        # (fakechat / discord / telegram / imessage). CC's MCP client
+        # validates `params` strictly — an extra unknown `serverName`
+        # field caused the notification to be silently dropped instead
+        # of surfaced to the running session.
         self._write_mcp_push({
             "jsonrpc": "2.0",
             "method": "notifications/claude/channel",
             "params": {
-                "serverName": "emerge",
                 "content": content,
                 "meta": meta,
             },
