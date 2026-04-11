@@ -66,6 +66,11 @@ def test_tool_audit_does_not_match_emerge_tools():
         matched = any(re.search(m, tool_name) for m in audit_matchers)
         assert not matched, f"tool_audit.py must not match emerge tool {tool_name!r}"
 
+    # Positive half: standard CC tools MUST be matched by tool_audit.py
+    for tool in ("Bash", "Read", "Write", "Grep"):
+        matched = any(re.search(m, tool) for m in audit_matchers)
+        assert matched, f"tool_audit.py must match non-emerge tool {tool!r}"
+
 
 def test_hooks_json_has_session_end():
     """SessionEnd must be registered in hooks.json."""
@@ -88,7 +93,19 @@ def test_hooks_json_has_stop():
         for e in hooks["Stop"]
         for h in e.get("hooks", [])
     ]
-    assert any("stop.py" in c for c in commands)
+    assert any("stop.py" in c for c in commands), "Stop must point to stop.py"
+
+
+def test_hooks_json_has_subagent_stop():
+    """SubagentStop must be registered in hooks.json and point to stop.py."""
+    hooks = _load()["hooks"]
+    assert "SubagentStop" in hooks, "SubagentStop missing from hooks.json"
+    commands = [
+        h.get("command", "")
+        for e in hooks["SubagentStop"]
+        for h in e.get("hooks", [])
+    ]
+    assert any("stop.py" in c for c in commands), "SubagentStop must point to stop.py"
 
 
 def test_plugin_json_no_session_end():
