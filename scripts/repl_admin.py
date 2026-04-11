@@ -1697,17 +1697,7 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/status":
             state_root = _resolve_repl_root()
             pending = (state_root / "pending-actions.json").exists()
-            cc_listening = False
-            try:
-                lp = _cc_listening_path()
-                if lp.exists():
-                    d = json.loads(lp.read_text(encoding="utf-8"))
-                    # Stale if last_ping more than 6 s ago or deadline passed
-                    age = time.time() - d.get("last_ping_ms", 0) / 1000
-                    cc_listening = age < 6 and time.time() < d.get("deadline", 0)
-            except Exception:
-                pass
-            self._json({"ok": True, "pending": pending, "cc_listening": cc_listening})
+            self._json({"ok": True, "pending": pending, "cc_listening": False})
         elif path == "/api/settings":
             from scripts.policy_config import load_settings, default_settings_path
             s = load_settings()
@@ -1917,36 +1907,6 @@ def _cockpit_pid_path() -> "Path":
     return _resolve_repl_root() / "cockpit.pid"
 
 
-def _wait_for_submit_pid_path() -> "Path":
-    return _resolve_repl_root() / "wait-for-submit.pid"
-
-
-def _wait_for_submit_acquire() -> None:
-    """Kill any existing wait-for-submit process, then write our own pid."""
-    import signal as _signal
-    pid_path = _wait_for_submit_pid_path()
-    pid_path.parent.mkdir(parents=True, exist_ok=True)
-    if pid_path.exists():
-        try:
-            existing_pid = int(pid_path.read_text(encoding="utf-8").strip())
-            if existing_pid != os.getpid():
-                os.kill(existing_pid, _signal.SIGTERM)
-        except (OSError, ValueError):
-            pass
-        pid_path.unlink(missing_ok=True)
-    pid_path.write_text(str(os.getpid()), encoding="utf-8")
-
-
-def _wait_for_submit_release() -> None:
-    pid_path = _wait_for_submit_pid_path()
-    try:
-        existing = pid_path.read_text(encoding="utf-8").strip()
-        if existing == str(os.getpid()):
-            pid_path.unlink(missing_ok=True)
-    except OSError:
-        pass
-
-
 def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
     """Start the cockpit HTTP server. Idempotent — returns existing instance if already
     running FOR THE SAME PROJECT. If a server is running for a different project (cwd
@@ -2084,80 +2044,6 @@ def _enrich_actions(actions: list) -> list:
     return enriched
 
 
-def _cc_listening_path() -> "Path":
-    return _resolve_repl_root() / "cc-listening.json"
-
-
-def _write_cc_listening(deadline: float) -> None:
-    """Write/refresh the CC-listening heartbeat file (atomic)."""
-    body = {
-        "pid": os.getpid(),
-        "deadline": deadline,
-        "last_ping_ms": int(time.time() * 1000),
-    }
-    p = _cc_listening_path()
-    _atomic_write_json(
-        p,
-        body,
-        prefix="cc-listening-",
-        suffix=".json",
-        ensure_ascii=True,
-        indent=None,
-    )
-
-
-
-
-def cmd_wait_for_submit(timeout_seconds: int = 600) -> dict:
-    """Block until pending-actions.json appears, then return its actions.
-
-    Used by the /cockpit command's dispatch loop: CC calls this, blocks until
-    the user submits from the browser, then CC executes the returned actions.
-    Renames the file to .processed.json before returning so the next call
-    starts fresh.
-
-    Actions are enriched before return: ``notes-comment`` actions receive the
-    connector's current NOTES.md content so CC can edit intelligently rather
-    than appending blindly.
-
-    While waiting, writes/refreshes ``cc-listening.json`` every poll cycle so
-    the cockpit UI can show a live "CC ready" indicator and disable the submit
-    button when CC is not listening.
-    """
-    _wait_for_submit_acquire()  # kill stale instance, write our pid
-    state_root = _resolve_repl_root()
-    state_root.mkdir(parents=True, exist_ok=True)
-    pending_path = state_root / "pending-actions.json"
-    deadline = time.time() + timeout_seconds
-    _write_cc_listening(deadline)
-    _last_ping = time.time()
-    try:
-        while time.time() < deadline:
-            if pending_path.exists():
-                try:
-                    data = json.loads(pending_path.read_text(encoding="utf-8"))
-                    actions = _enrich_actions(data.get("actions", []))
-                    submitted_at = data.get("submitted_at", 0)
-                    processed = pending_path.with_name("pending-actions.processed.json")
-                    pending_path.rename(processed)
-                    processed.unlink(missing_ok=True)  # consumed; no need to keep on disk
-                    return {"ok": True, "actions": actions, "submitted_at": submitted_at, "action_count": len(actions)}
-                except (json.JSONDecodeError, OSError):
-                    pass
-            time.sleep(0.5)
-            # Refresh heartbeat every 2 s so the page sees a live signal.
-            if time.time() - _last_ping >= 2:
-                _write_cc_listening(deadline)
-                _last_ping = time.time()
-    finally:
-        _wait_for_submit_release()
-        # Write a grace-period heartbeat (5 min) instead of deleting, so the
-        # cockpit UI stays "CC ready" while CC processes the action and re-arms.
-        # 5 min covers typical CC processing time; re-arm overwrites this anyway.
-        _write_cc_listening(time.time() + 300)
-    return {"ok": False, "timeout": True, "actions": []}
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Local REPL state admin utility")
     parser.add_argument(
@@ -2179,7 +2065,6 @@ def main() -> None:
             "normalize-intents",
             "serve",
             "serve-stop",
-            "wait-for-submit",
         ],
     )
     parser.add_argument("--pretty", action="store_true", help="Render human-readable output")
@@ -2298,11 +2183,6 @@ def main() -> None:
     elif args.command == "serve-stop":
         out = cmd_serve_stop()
         print(json.dumps(out))
-        sys.exit(0)
-    elif args.command == "wait-for-submit":
-        timeout = int(getattr(args, "runner_port", None) or 600)  # reuse --runner-port as timeout if needed
-        out = cmd_wait_for_submit(timeout_seconds=timeout)
-        print(json.dumps(out, ensure_ascii=False))
         sys.exit(0)
     else:
         out = cmd_clear()

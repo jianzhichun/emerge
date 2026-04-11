@@ -1606,38 +1606,6 @@ def test_server_info_version_matches_plugin_json():
     assert reported == plugin_version, f"serverInfo.version={reported!r} != plugin.json version={plugin_version!r}"
 
 
-def test_pending_action_monitor_detects_and_notifies(tmp_path: Path):
-    from scripts.emerge_daemon import PendingActionMonitor, _format_pending_actions_message
-    import time
-
-    notifications = []
-
-    def capture_push(payload: dict):
-        notifications.append(payload)
-
-    monitor = PendingActionMonitor(state_root=tmp_path, write_push_fn=capture_push)
-    monitor.start()
-
-    actions = [{"type": "pipeline-delete", "key": "mock.read.does-not-exist"}]
-    pending = {"submitted_at": int(time.time() * 1000) + 1000, "actions": actions}
-    (tmp_path / "pending-actions.json").write_text(
-        json.dumps(pending), encoding="utf-8"
-    )
-
-    time.sleep(0.5)
-    monitor.stop()
-    monitor.join(timeout=3.0)
-
-    assert len(notifications) == 1
-    n = notifications[0]
-    assert n["method"] == "notifications/claude/channel"
-    assert n["params"]["meta"]["source"] == "cockpit"
-    assert n["params"]["meta"]["action_count"] == 1
-    assert "pipeline-delete" in n["params"]["content"]
-    assert not (tmp_path / "pending-actions.json").exists()
-    assert (tmp_path / "pending-actions.processed.json").exists()
-
-
 # ── Description + connector://notes intent injection ──────────────────────────
 
 def test_description_stored_on_icc_exec(tmp_path: Path):

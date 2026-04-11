@@ -132,7 +132,6 @@ class EmergeDaemon:
         except Exception:
             self._version = "0.0.0"
         self._operator_monitor: "OperatorMonitor | None" = None
-        self._pending_monitor: "PendingActionMonitor | None" = None
         self._event_router = None
         self._last_seen_pending_ts: int = 0
         self._elicit_events: dict[str, threading.Event] = {}
@@ -2718,21 +2717,6 @@ class EmergeDaemon:
         if self._operator_monitor is not None:
             self._operator_monitor.stop()
 
-    def start_pending_monitor(self) -> None:
-        if os.environ.get("EMERGE_COCKPIT_DISABLE", "0") == "1":
-            return
-        if self._pending_monitor is not None and self._pending_monitor.is_alive():
-            return
-        self._pending_monitor = PendingActionMonitor(
-            state_root=self._state_root,
-            write_push_fn=self._write_mcp_push,
-        )
-        self._pending_monitor.start()
-
-    def stop_pending_monitor(self) -> None:
-        if self._pending_monitor is not None:
-            self._pending_monitor.stop()
-
     def start_event_router(self) -> None:
         """Start EventRouter to watch pending-actions.json and local operator events."""
         from scripts.event_router import EventRouter
@@ -2903,76 +2887,6 @@ def _format_pending_actions_message(actions: list) -> str:
     return "\n".join(lines)
 
 
-class PendingActionMonitor(threading.Thread):
-    """Polls `<state_root>/pending-actions.json` every 2s.
-    When a new submission is detected, fires a notifications/claude/channel
-    push so CC processes the pending actions via subagents.
-    """
-
-    def __init__(self, state_root: Path, write_push_fn) -> None:
-        super().__init__(daemon=True, name="PendingActionMonitor")
-        self._state_root = state_root
-        self._write_push_fn = write_push_fn
-        self._stop_event = threading.Event()
-        self._last_seen_ts: int = 0
-
-    def _check_once(self, pending_path: Path) -> None:
-        if not pending_path.exists():
-            return
-        try:
-            text = pending_path.read_text(encoding="utf-8")
-        except OSError:
-            return
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            import sys
-            print(f"[PendingActionMonitor] malformed JSON in {pending_path}; quarantining", file=sys.stderr)
-            try:
-                pending_path.rename(self._state_root / "pending-actions.invalid.json")
-            except OSError:
-                pass
-            return
-        ts = int(data.get("submitted_at", 0))
-        if ts <= self._last_seen_ts:
-            return
-        actions = data.get("actions", [])
-        try:
-            self._write_push_fn({
-                "jsonrpc": "2.0",
-                "method": "notifications/claude/channel",
-                "params": {
-                    "serverName": "emerge",
-                    "content": _format_pending_actions_message(actions),
-                    "meta": {
-                        "source": "cockpit",
-                        "action_count": len(actions),
-                        "action_types": list({a.get("type") for a in actions}),
-                    },
-                },
-            })
-        except Exception:
-            import sys, traceback
-            traceback.print_exc(file=sys.stderr)
-            return  # don't advance _last_seen_ts — allow retry
-        try:
-            processed = self._state_root / "pending-actions.processed.json"
-            pending_path.rename(processed)
-            self._last_seen_ts = ts  # advance only after successful rename
-        except OSError:
-            import sys
-            print(f"[PendingActionMonitor] failed to rename {pending_path}", file=sys.stderr)
-
-    def run(self) -> None:
-        pending_path = self._state_root / "pending-actions.json"
-        while not self._stop_event.wait(2.0):
-            self._check_once(pending_path)
-        self._check_once(pending_path)  # drain on stop
-
-    def stop(self) -> None:
-        self._stop_event.set()
-
-
 def _write_response(payload: dict) -> None:
     """Write a JSON-RPC response to stdout, thread-safe."""
     with _stdout_lock:
@@ -2988,10 +2902,8 @@ def run_stdio() -> None:
     executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="emerge-worker")
 
     daemon.start_operator_monitor()
-    daemon.start_pending_monitor()
     daemon.start_event_router()
     atexit.register(daemon.stop_operator_monitor)
-    atexit.register(daemon.stop_pending_monitor)
     atexit.register(daemon.stop_event_router)
     atexit.register(lambda: executor.shutdown(wait=False))
 

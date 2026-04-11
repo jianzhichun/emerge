@@ -50,59 +50,7 @@ class OperatorMonitor(threading.Thread):
                     self._poll_machine(machine_id, client)
                 except Exception:
                     pass
-            # Poll local event_root (used when no runner is configured)
-            if self._event_root.exists():
-                try:
-                    self._poll_local()
-                except Exception:
-                    pass
-
-    def _poll_local(self) -> None:
-        """Read events directly from local EventBus files (no-runner mode)."""
-        import json as _json
-        for machine_dir in self._event_root.iterdir():
-            if not machine_dir.is_dir():
-                continue
-            machine_id = machine_dir.name
-            events_path = machine_dir / "events.jsonl"
-            if not events_path.exists():
-                continue
-            since_ms = self._last_poll_ms.get(f"local:{machine_id}", 0)
-            events: list[dict] = []
-            with events_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        e = _json.loads(line)
-                    except _json.JSONDecodeError:
-                        continue
-                    if e.get("ts_ms", 0) > since_ms:
-                        events.append(e)
-            if events:
-                latest_ts = max(e.get("ts_ms", 0) for e in events)
-                self._last_poll_ms[f"local:{machine_id}"] = latest_ts
-                buf = self._event_buffers.setdefault(f"local:{machine_id}", deque())
-                buf.extend(events)
-            buf = self._event_buffers.get(f"local:{machine_id}")
-            if not buf:
-                continue
-            now_ms = int(time.time() * 1000)
-            window_ms = self._detector.FREQ_WINDOW_MS
-            while buf and now_ms - buf[0].get("ts_ms", 0) > window_ms:
-                buf.popleft()
-            if not buf:
-                continue
-            summaries = self._detector.ingest(list(buf))
-            for summary in summaries:
-                app = summary.context_hint.get("app", machine_id)
-                plugin = self._adapter_registry.get_plugin(app)
-                try:
-                    context = plugin.get_context(summary.context_hint)
-                except Exception:
-                    context = summary.context_hint.copy()
-                self._push_fn(summary.policy_stage, context, summary)
+            # Local operator events handled by EventRouter in emerge_daemon
 
     def _poll_machine(self, machine_id: str, client: Any) -> None:
         since_ms = self._last_poll_ms.get(machine_id, 0)
