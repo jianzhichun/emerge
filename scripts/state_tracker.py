@@ -184,14 +184,34 @@ class StateTracker:
                 delta_text = "\n".join([f"- {d['message']}" for d in critical]) or "- No changes."
 
         risks = self.state["open_risks"]
-        risk_texts = []
-        for r in risks:
-            if isinstance(r, dict):
-                if r.get("status") == "open":
-                    risk_texts.append(f"- {r['text']}")
-            elif isinstance(r, str):
-                risk_texts.append(f"- {r}")
-        risks_text = "\n".join(risk_texts) if risk_texts else "- None."
+        open_risks = [
+            r for r in risks
+            if (isinstance(r, dict) and r.get("status") == "open") or isinstance(r, str)
+        ]
+        # Sort by recency (created_at_ms desc) so most recent risks survive trimming
+        open_risks.sort(
+            key=lambda r: int(r.get("created_at_ms", 0)) if isinstance(r, dict) else 0,
+            reverse=True,
+        )
+
+        def _risk_line(r) -> str:
+            return f"- {r['text']}" if isinstance(r, dict) else f"- {r}"
+
+        risk_lines = [_risk_line(r) for r in open_risks]
+        risks_text = "\n".join(risk_lines) if risk_lines else "- None."
+
+        if budget_chars and len(risks_text) > budget_chars // 3:
+            # Give risks at most 1/3 of the budget; keep most-recent, truncate rest
+            allowed = budget_chars // 3
+            kept, total = [], 0
+            for line in risk_lines:
+                if total + len(line) + 1 > allowed:
+                    remaining = len(risk_lines) - len(kept)
+                    kept.append(f"- … {remaining} more risks (read state://deltas for full list)")
+                    break
+                kept.append(line)
+                total += len(line) + 1
+            risks_text = "\n".join(kept) if kept else "- None."
 
         goal_text = (
             str(goal_override).strip()

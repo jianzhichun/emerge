@@ -3670,3 +3670,52 @@ def test_resource_read_state_deltas_is_valid_json():
     resource = resp["result"]["resource"]
     data = json.loads(resource["text"])
     assert "open_risks" in data or "deltas" in data or "goal" in data
+
+
+def test_format_context_trims_risks_when_over_budget():
+    """format_context must trim risk list when budget_chars is exceeded."""
+    from scripts.state_tracker import StateTracker
+
+    tracker = StateTracker.__new__(StateTracker)
+    # Build 50 risks — all open
+    tracker.state = {
+        "deltas": [],
+        "open_risks": [
+            {"risk_id": f"r{i}", "text": f"Risk item {i} " * 10, "status": "open",
+             "created_at_ms": i, "snoozed_until_ms": 0, "handled_reason": "",
+             "source_delta_id": "", "intent_signature": ""}
+            for i in range(50)
+        ],
+        "goal": "test goal",
+        "goal_source": "test",
+    }
+
+    # Tiny budget that can't hold all 50 risks
+    ctx = tracker.format_context(budget_chars=500)
+    risks_text = ctx["Open Risks"]
+    # Must be truncated — either has truncation message or has fewer than 50 items
+    lines_with_dash = [l for l in risks_text.splitlines() if l.startswith("- ")]
+    assert len(lines_with_dash) < 50, f"Expected truncation, got {len(lines_with_dash)} lines"
+    # And must include a hint about more risks
+    assert "more" in risks_text.lower() or len(risks_text) <= 600
+
+
+def test_format_context_does_not_trim_risks_under_budget():
+    """format_context must not trim risks when budget_chars is large enough."""
+    from scripts.state_tracker import StateTracker
+
+    tracker = StateTracker.__new__(StateTracker)
+    tracker.state = {
+        "deltas": [],
+        "open_risks": [
+            {"risk_id": "r1", "text": "Short risk", "status": "open",
+             "created_at_ms": 1, "snoozed_until_ms": 0, "handled_reason": "",
+             "source_delta_id": "", "intent_signature": ""}
+        ],
+        "goal": "",
+        "goal_source": "unset",
+    }
+
+    ctx = tracker.format_context(budget_chars=10000)  # large budget
+    assert "Short risk" in ctx["Open Risks"]
+    assert "more" not in ctx["Open Risks"].lower()
