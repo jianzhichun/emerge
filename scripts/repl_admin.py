@@ -1697,7 +1697,7 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/status":
             state_root = _resolve_repl_root()
             pending = (state_root / "pending-actions.json").exists()
-            self._json({"ok": True, "pending": pending, "cc_listening": False})
+            self._json({"ok": True, "pending": pending, "server_online": True})
         elif path == "/api/settings":
             from scripts.policy_config import load_settings, default_settings_path
             s = load_settings()

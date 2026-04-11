@@ -159,8 +159,9 @@ def test_serve_get_status_returns_ok(tmp_path, monkeypatch):
     with urllib.request.urlopen(f"{url}/api/status") as resp:
         data = json.loads(resp.read())
     assert data["ok"] is True
-    assert "cc_listening" in data
-    assert isinstance(data["cc_listening"], bool)
+    assert "cc_listening" not in data, "cc_listening removed — use server_online"
+    assert data["server_online"] is True
+    assert isinstance(data["pending"], bool)
 
 
 def test_serve_status_and_submit_prefer_repl_root(tmp_path, monkeypatch):
