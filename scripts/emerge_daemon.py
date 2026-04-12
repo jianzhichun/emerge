@@ -2914,7 +2914,16 @@ class EmergeDaemon:
             self._event_router.stop()
 
     def _on_pending_actions(self) -> None:
-        """Called by EventRouter when pending-actions.json is created/modified."""
+        """Called by EventRouter when pending-actions.json is created/modified.
+
+        Primary delivery: watch_pending.py (Monitor tool) prints actions to
+        stdout → CC conversation.  Fallback: UserPromptSubmit hook drains
+        .processed.json into additionalContext on the next user message.
+
+        This handler only renames the file so the fallback path can find it.
+        watch_pending.py may have already consumed the file; in that case
+        this is a no-op.
+        """
         pending_path = self._state_root / "pending-actions.json"
         if not pending_path.exists():
             return
@@ -2933,21 +2942,6 @@ class EmergeDaemon:
         ts = int(data.get("submitted_at", 0))
         if ts <= self._last_seen_pending_ts:
             return
-        actions = data.get("actions", [])
-        try:
-            self._notify(
-                content=_format_pending_actions_message(actions),
-                source="cockpit",
-                severity="info",
-                category="action_needed",
-                requires_action=True,
-                extra_meta={
-                    "action_count": len(actions),
-                    "action_types": list({a.get("type") for a in actions}),
-                },
-            )
-        except Exception:
-            return  # don't advance _last_seen_pending_ts — allow retry
         try:
             processed = self._state_root / "pending-actions.processed.json"
             pending_path.rename(processed)

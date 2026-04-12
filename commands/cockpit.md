@@ -40,19 +40,29 @@ Steps:
 
    Only skip injection if a connector has zero pipelines AND no NOTES.md.
 
-4. **Event-driven dispatch contract** (no polling loop, no `wait-for-submit`):
+4. **Event-driven dispatch** — start a Monitor for cockpit submissions:
 
-   - Cockpit submissions are written to `pending-actions.json` by `/api/submit`.
-   - `EmergeDaemon` `EventRouter` watches that file and pushes a channel notification to CC (`source=cockpit`, `requires_action=true`) with a formatted action list.
-   - Process actions when that notification arrives. Do not run polling/sleep loops for submissions.
-   - Execute actions sequentially and deterministically:
+   Use the **Monitor tool** to watch for operator actions:
+   ```
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/watch_pending.py"
+   ```
+   Set `persistent: true` and `description: "cockpit action watcher"`.
+
+   The script watches `pending-actions.json` (written by cockpit `/api/submit`).
+   When the operator submits, each action list prints to stdout and streams into
+   this conversation as a Monitor notification — no polling, no sleep loops.
+
+   When a `[Cockpit]` notification arrives, execute actions sequentially and deterministically:
      - `pipeline-set` → `repl_admin.py pipeline-set --pipeline-key <key> --set <field>=<value>` (one `--set` per field)
      - `pipeline-delete` → `repl_admin.py pipeline-delete --pipeline-key <key>`
      - `notes-comment` → append `\n\n<!-- <ISO timestamp> -->\n<comment>` to `~/.emerge/connectors/<connector>/NOTES.md`
      - `notes-edit` → overwrite `~/.emerge/connectors/<connector>/NOTES.md` entirely
      - `tool-call` → execute exactly `call.tool` + `call.arguments` (deterministic, no free-form reinterpretation)
      - `crystallize-component` → write to `~/.emerge/connectors/<connector>/cockpit/<filename>.html` and `<filename>.context.md`
-   - Briefly report results after processing.
+   Briefly report results after processing.
+
+   **Fallback (CC < 2.1.98 / no Monitor tool):** the `UserPromptSubmit` hook also drains
+   `pending-actions.processed.json` into `additionalContext` on the next user message.
 
 5. **Close the cockpit**: when the user says close/exit:
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" serve-stop`

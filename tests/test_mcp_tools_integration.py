@@ -3157,15 +3157,12 @@ def test_hub_resolve_elicitation_used_when_resolution_not_provided():
 
 
 def test_event_router_replaces_pending_monitor(tmp_path):
-    """EventRouter must fire MCP push when pending-actions.json is created."""
+    """EventRouter must rename pending-actions.json to .processed.json."""
     import threading, json, time, os
     from scripts.emerge_daemon import EmergeDaemon
 
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
     daemon = EmergeDaemon()
-
-    pushed = []
-    daemon._write_mcp_push = lambda p: pushed.append(p)
     daemon.start_event_router()
     time.sleep(0.1)
 
@@ -3175,17 +3172,16 @@ def test_event_router_replaces_pending_monitor(tmp_path):
         "actions": [{"type": "prompt", "prompt": "hello"}]
     }))
 
-    # Wait for EventRouter to pick it up
+    # Wait for EventRouter to pick it up and rename
     deadline = time.time() + 3.0
-    while time.time() < deadline and not pushed:
+    while time.time() < deadline and pending.exists():
         time.sleep(0.05)
 
     daemon.stop_event_router()
     os.environ.pop("EMERGE_STATE_ROOT", None)
 
-    assert len(pushed) == 1
-    assert pushed[0]["method"] == "notifications/claude/channel"
-    assert pushed[0]["params"]["meta"]["source"] == "cockpit"
+    assert not pending.exists()
+    assert (tmp_path / "pending-actions.processed.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -3563,15 +3559,13 @@ def test_push_pattern_uses_unified_meta_schema():
     assert "occurrences" in meta
 
 
-def test_on_pending_actions_uses_unified_meta_schema(tmp_path, monkeypatch):
-    """_on_pending_actions notification must use unified meta schema."""
+def test_on_pending_actions_renames_to_processed(tmp_path, monkeypatch):
+    """_on_pending_actions renames to .processed.json for hook/monitor pickup."""
     import json
     import time
     from scripts.emerge_daemon import EmergeDaemon
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     daemon = EmergeDaemon()
-    pushed = []
-    daemon._write_mcp_push = lambda p: pushed.append(p)
 
     pending = tmp_path / "pending-actions.json"
     pending.write_text(json.dumps({
@@ -3580,12 +3574,8 @@ def test_on_pending_actions_uses_unified_meta_schema(tmp_path, monkeypatch):
     }))
     daemon._on_pending_actions()
 
-    assert len(pushed) == 1
-    meta = pushed[0]["params"]["meta"]
-    assert meta["source"] == "cockpit"
-    assert meta["severity"] == "info"
-    assert meta["category"] == "action_needed"
-    assert meta["requires_action"] is True
+    assert not pending.exists()
+    assert (tmp_path / "pending-actions.processed.json").exists()
 
 
 def test_all_notifications_use_unified_meta_fields():

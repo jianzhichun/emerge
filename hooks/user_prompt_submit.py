@@ -13,6 +13,51 @@ from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_
 from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
 
 
+def _drain_pending_actions(state_root: Path) -> str:
+    """Read and consume pending cockpit actions. Returns formatted text or ''."""
+    for name in ("pending-actions.processed.json", "pending-actions.json"):
+        p = state_root / name
+        if not p.exists():
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        actions = data.get("actions", [])
+        if not actions:
+            continue
+        delivered = state_root / "pending-actions.delivered.json"
+        try:
+            p.rename(delivered)
+        except OSError:
+            pass
+        lines = ["[Cockpit] The operator submitted the following actions — execute in order:"]
+        for i, a in enumerate(actions, 1):
+            t = a.get("type", "unknown")
+            if t == "tool-call":
+                call = a.get("call", {}) if isinstance(a.get("call"), dict) else {}
+                tool = call.get("tool", "?")
+                call_args = call.get("arguments", {})
+                meta = a.get("meta", {}) if isinstance(a.get("meta"), dict) else {}
+                scope = str(meta.get("scope", "")).strip()
+                scope_suffix = f" scope={scope}" if scope else ""
+                lines.append(f"{i}. Execute tool-call {tool} args={call_args}{scope_suffix}")
+            elif t == "pipeline-set":
+                lines.append(f"{i}. pipeline-set {a.get('key')} fields={a.get('fields', {})}")
+            elif t == "pipeline-delete":
+                lines.append(f"{i}. pipeline-delete {a.get('key')}")
+            elif t == "notes-edit":
+                lines.append(f"{i}. Update {a.get('connector')} NOTES.md (full replace)")
+            elif t == "notes-comment":
+                lines.append(f"{i}. Append comment to {a.get('connector')} NOTES.md: {str(a.get('comment', ''))[:80]}")
+            elif t == "crystallize-component":
+                lines.append(f"{i}. Crystallize component {a.get('filename')} -> {a.get('connector')}/cockpit/")
+            else:
+                lines.append(f"{i}. {t}: {a}")
+        return "\n".join(lines)
+    return ""
+
+
 def main() -> None:
     payload_text = sys.stdin.read().strip()
     try:
@@ -57,6 +102,10 @@ def main() -> None:
     )
     if _mutated:
         save_tracker(state_path, tracker)
+
+    pending_text = _drain_pending_actions(state_root)
+    if pending_text:
+        context_text = pending_text + "\n\n" + context_text
 
     out = {
         "hookSpecificOutput": {

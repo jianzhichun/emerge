@@ -424,3 +424,64 @@ def test_pre_hook_allows_valid_span_approve():
                          "tool_input": {"intent_signature": "lark.write.create-doc"}})
     hook_out = out.get("hookSpecificOutput", {})
     assert hook_out.get("permissionDecision") != "deny"
+
+
+def test_user_prompt_submit_drains_pending_actions(tmp_path: Path):
+    """UserPromptSubmit injects cockpit pending actions into additionalContext."""
+    processed = tmp_path / "pending-actions.processed.json"
+    processed.write_text(json.dumps({
+        "submitted_at": 1000,
+        "actions": [
+            {"type": "tool-call", "call": {"tool": "icc_exec", "arguments": {"intent_signature": "a.read.b"}}, "meta": {}},
+            {"type": "notes-comment", "connector": "myconn", "comment": "operator note"},
+        ],
+    }))
+    out = _run("user_prompt_submit.py", {}, tmp_path)
+    parsed = json.loads(out)
+    ctx = parsed["hookSpecificOutput"]["additionalContext"]
+    assert "[Cockpit]" in ctx
+    assert "icc_exec" in ctx
+    assert "Append comment" in ctx
+    # File renamed to .delivered.json
+    assert not processed.exists()
+    assert (tmp_path / "pending-actions.delivered.json").exists()
+
+
+def test_user_prompt_submit_drains_unprocessed_pending_actions(tmp_path: Path):
+    """UserPromptSubmit also picks up pending-actions.json (not yet processed by daemon)."""
+    pending = tmp_path / "pending-actions.json"
+    pending.write_text(json.dumps({
+        "submitted_at": 2000,
+        "actions": [{"type": "pipeline-delete", "key": "x.read.y"}],
+    }))
+    out = _run("user_prompt_submit.py", {}, tmp_path)
+    parsed = json.loads(out)
+    ctx = parsed["hookSpecificOutput"]["additionalContext"]
+    assert "pipeline-delete" in ctx
+    assert not pending.exists()
+    assert (tmp_path / "pending-actions.delivered.json").exists()
+
+
+def test_watch_pending_emits_and_renames(tmp_path: Path):
+    """watch_pending.py prints actions to stdout and renames file."""
+    import subprocess, time, signal
+    pending = tmp_path / "pending-actions.json"
+    pending.write_text(json.dumps({
+        "submitted_at": int(time.time() * 1000),
+        "actions": [{"type": "tool-call", "call": {"tool": "icc_exec", "arguments": {"intent_signature": "a.read.b"}}, "meta": {}}],
+    }))
+    env = os.environ.copy()
+    env["EMERGE_STATE_ROOT"] = str(tmp_path)
+    proc = subprocess.Popen(
+        ["python3", str(ROOT / "scripts" / "watch_pending.py")],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+    )
+    deadline = time.time() + 3.0
+    while time.time() < deadline and pending.exists():
+        time.sleep(0.1)
+    proc.send_signal(signal.SIGTERM)
+    stdout, _ = proc.communicate(timeout=3)
+    assert "[Cockpit]" in stdout
+    assert "icc_exec" in stdout
+    assert (tmp_path / "pending-actions.processed.json").exists()
+    assert not pending.exists()
