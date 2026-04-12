@@ -623,6 +623,29 @@ def test_task_completed_passes_when_no_span(tmp_path: Path):
     assert json.loads(out) == {}
 
 
+def test_subagent_start_injects_span_guardrail(tmp_path: Path):
+    """SubagentStart must emit systemMessage with span ID and ownership rule."""
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps({
+            "active_span_id": "span-parent-1",
+            "active_span_intent": "cad.read.layers",
+        }),
+        encoding="utf-8",
+    )
+    out = _run("subagent_start.py", {}, tmp_path)
+    result = json.loads(out)
+    assert "systemMessage" in result
+    assert "span-parent-1" in result["systemMessage"]
+    assert "icc_span_close" in result["systemMessage"]
+
+
+def test_subagent_start_no_span_emits_empty(tmp_path: Path):
+    """SubagentStart must emit {} when no active span."""
+    out = _run("subagent_start.py", {}, tmp_path)
+    assert json.loads(out) == {}
+
+
 def test_init_goal_control_plane_helper(tmp_path):
     from scripts.goal_control_plane import GoalControlPlane, init_goal_control_plane
     from scripts.state_tracker import StateTracker
