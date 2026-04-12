@@ -59,7 +59,7 @@ flowchart TB
 | **StateTracker**    | Maintains `Delta` / `Open Risks` session state and recovery token budgeting. Goal text is injected from GoalControlPlane snapshot.                                                                                                                                                |
 | **RunnerRouter**    | Selects a `RunnerClient` by `target_profile` / `runner_id` (map), consistent hash (pool), or default URL. Returns `None` when no runner is configured → local execution.                                                                                                             |
 | **Flywheel bridge** | Short-circuit inside `icc_exec`: when the matching candidate is `stable`, execution is redirected to the pipeline result without LLM inference. Zero overhead path once a pattern is trusted.                                                                                        |
-| **Hooks**           | Inject minimal context at session/prompt boundaries; record `Delta` after each `icc_`* call; preserve critical state across **PreCompact**; guard stop/exit with active-span safety checks. `PreToolUse` enforces `intent_signature` conventions, auto-normalizes uppercase signatures via `updatedInput`, and returns `ask` for irreversible `icc_goal_rollback`. Not a second MCP server. |
+| **Hooks**           | Inject minimal context at session/prompt boundaries (including Span Protocol plus bounded muscle-memory reflection with cache fallback); record `Delta` after each `icc_`* call; preserve critical state across **PreCompact**; guard stop/exit with active-span safety checks. `PreToolUse` enforces `intent_signature` conventions, auto-normalizes uppercase signatures via `updatedInput`, and returns `ask` for irreversible `icc_goal_rollback`. Not a second MCP server. |
 | **`emerge_sync.py`** | Memory Hub sync agent. Bidirectional connector asset sync via orphan-branch git repo; event-driven push on stable promotion, periodic pull, AI-assisted conflict resolution via `icc_hub` MCP tool. |
 
 
@@ -160,7 +160,7 @@ The runner is a **stateless Python executor** — it accepts `icc_exec` only. Al
 | `EMERGE_OPERATOR_MONITOR` | Enable OperatorMonitor thread in daemon         | `0`            |
 | `EMERGE_MONITOR_POLL_S`   | EventBus poll interval (seconds)                | `5`            |
 | `EMERGE_MONITOR_MACHINES` | Comma-separated runner profile names to monitor | `default` |
-| `EMERGE_STATE_ROOT`         | Override where session state (WAL, checkpoints, registry) is written | `~/.emerge/sessions` |
+| `EMERGE_STATE_ROOT`         | Override where session state (WAL, checkpoints, registry) is written | `~/.emerge/repl` |
 | `EMERGE_SESSION_ID`         | Override the derived session identifier                               | derived from cwd+git  |
 | `EMERGE_RUNNER_CONFIG_PATH` | Path to `runner-map.json` (overrides default location)               | `~/.emerge/runner-map.json` |
 | `EMERGE_SETTINGS_PATH`      | Override settings file path                                           | `~/.emerge/settings.json` |
@@ -168,7 +168,7 @@ The runner is a **stateless Python executor** — it accepts `icc_exec` only. Al
 | `EMERGE_TARGET_PROFILE`     | Default runner target profile for `repl_admin` commands              | `default` |
 | `EMERGE_COCKPIT_DISABLE`    | `1` to disable the `EventRouter` watchdog in the daemon              | enabled   |
 | `EMERGE_REPL_ROOT`          | Override the repl state root directory                               | `~/.emerge/repl` |
-| `CLAUDE_PLUGIN_DATA`        | Hook + Goal Control state root (state tracker + goal snapshot/ledger) | `~/.claude/plugin-data` |
+| `CLAUDE_PLUGIN_DATA`        | Hook + Goal Control state root (state tracker + goal snapshot/ledger) | `~/.emerge/hook-state` |
 
 
 Persisted route map (`~/.emerge/runner-map.json`):
@@ -209,10 +209,10 @@ python3 scripts/repl_admin.py runner-bootstrap \
 ```mermaid
 flowchart LR
   subgraph session [Session lifecycle]
-    SS[SessionStart — inject Goal + open risks]
-    UPS[UserPromptSubmit — inject Delta summary]
+    SS[SessionStart — inject Span Protocol + Goal]
+    UPS[UserPromptSubmit — inject Delta summary + optional reflection]
     SE[SessionEnd — clear stale active span fields]
-    PC[PreCompact — serialize recovery token]
+    PC[PreCompact — inject reflection + serialize recovery token]
   end
 
   subgraph percall [Per tool call]
@@ -229,7 +229,7 @@ flowchart LR
   SS -->|additionalContext| Agent
   UPS -->|additionalContext| Agent
   SE -->|cleanup| Agent
-  PC -->|additionalContext| Agent
+  PC -->|systemMessage| Agent
   Agent --> PTU --> EX --> POTU
   EX --> PTF
   Agent --> ST
@@ -258,11 +258,11 @@ flowchart LR
 > `icc_read` / `icc_write` are deprecated and removed from schema. Use `icc_span_open` instead — the span bridge executes the pipeline automatically when stable.
 
 
-**Resources:** `policy://current` · `runner://status` · `state://deltas` · `state://goal` · `state://goal-ledger` · `pipeline://{connector}/{mode}/{name}` · `connector://{vertical}/notes` · `connector://{vertical}/spans`
+**Resources:** `policy://current` · `runner://status` · `state://deltas` · `state://goal` · `state://goal-ledger` · `pipeline://{connector}/{mode}/{name}` · `connector://{vertical}/notes` · `connector://{vertical}/intents` · `connector://{vertical}/spans`
 
 **Prompts:** `icc_explore`
 
-**Hooks** (`hooks/hooks.json`): `Setup` · `SessionStart` · `SessionEnd` · `UserPromptSubmit` · `PreToolUse` · `PostToolUse` · `PostToolUseFailure` · `PreCompact` · `Stop` · `SubagentStop`
+**Hooks** (`hooks/hooks.json`): `Setup` · `SessionStart` · `SessionEnd` · `UserPromptSubmit` · `PreToolUse` · `PostToolUse` · `PostToolUseFailure` · `PreCompact` · `Stop` · `SubagentStop` · `StopFailure` · `TaskCompleted` · `SubagentStart`
 
 ### MCP protocol compliance (2025-11-25)
 
@@ -349,7 +349,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 python -m pytest tests -q
 ```
 
-Current baseline: **482** tests passing.
+Current baseline: **508** tests passing.
 
 Documentation release checklist: `docs/doc-consistency-checklist.md`
 
