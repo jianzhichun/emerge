@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.goal_control_plane import GoalControlPlane  # noqa: E402
+from scripts.goal_control_plane import GoalControlPlane, init_goal_control_plane  # noqa: E402
 from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
 from scripts.span_tracker import is_read_only_tool  # noqa: E402
 from scripts.state_tracker import (  # noqa: E402
@@ -127,12 +127,7 @@ def main() -> None:
         state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
     tracker = load_tracker(state_path)
-    goal_cp = GoalControlPlane(state_root)
-    goal_cp.ensure_initialized()
-    goal_cp.migrate_legacy_goal(
-        legacy_goal=str(tracker.to_dict().get("goal", "")),
-        legacy_source=str(tracker.to_dict().get("goal_source", "legacy")),
-    )
+    goal_cp = init_goal_control_plane(state_root, tracker)
 
     tool_input = payload.get("tool_input", {}) or {}
     if not isinstance(tool_input, dict):
@@ -145,6 +140,7 @@ def main() -> None:
     # verification_state lives inside content[0]["text"] (serialized JSON), not in the
     # outer MCP wrapper. Parse it out; fall back to "verified" if absent or unparseable.
     verification_state = "verified"
+    inner = {}
     try:
         content = result.get("content", [])
         if content and isinstance(content[0], dict):
@@ -189,6 +185,16 @@ def main() -> None:
         goal_source_override=str(snap.get("source", "unset")),
     )
 
+    # Detect span skeleton ready — inject reminder so CC reviews it
+    _short = _short_tool_name(tool_name)
+    if _short == "icc_span_close" and isinstance(inner, dict) and inner.get("skeleton_path"):
+        sk_path = inner["skeleton_path"]
+        context_text = (
+            f"[Span] Pipeline skeleton ready at {sk_path}. "
+            "Review and call icc_span_approve to activate the bridge.\n\n"
+            + context_text
+        )
+
     _active_span_id, _active_span_intent = _record_span_action(
         tool_name, payload, state_root, state_path
     )
@@ -227,8 +233,7 @@ def main() -> None:
     # For icc_exec with an active span: inject _span_id/_span_intent into
     # structuredContent so CC can correlate the exec result with the flywheel
     # span without a separate state read.
-    _short_name = _short_tool_name(payload.get("tool_name", ""))
-    if _short_name == "icc_exec" and _active_span_id:
+    if _short == "icc_exec" and _active_span_id:
         _tool_resp = payload.get("tool_response") or {}
         _sc = dict(_tool_resp.get("structuredContent") or {})
         _sc["_span_id"] = _active_span_id

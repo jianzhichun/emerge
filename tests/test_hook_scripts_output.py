@@ -534,3 +534,14 @@ def test_format_pending_actions_notes_edit():
     result = format_pending_actions(actions)
     assert "gmail" in result
     assert "NOTES.md" in result
+
+
+def test_init_goal_control_plane_helper(tmp_path):
+    from scripts.goal_control_plane import GoalControlPlane, init_goal_control_plane
+    from scripts.state_tracker import StateTracker
+    tracker = StateTracker()
+    tracker.set_goal("my goal", "test_source")
+    gcp = init_goal_control_plane(tmp_path, tracker)
+    assert isinstance(gcp, GoalControlPlane)
+    snap = gcp.read_snapshot()
+    assert snap["text"] == "my goal"

@@ -3,7 +3,6 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -99,22 +98,7 @@ def _file_lock(lock_path: Path, timeout_ms: int = 3000):
             except FileNotFoundError:
                 pass
 
-
-def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix=f"{path.stem}-", suffix=".json", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
-            json.dump(data, tmp, ensure_ascii=True, indent=2)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-        os.replace(tmp_path, path)
-        tmp_path = ""
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-
-
+from scripts.policy_config import atomic_write_json  # noqa: E402
 def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
@@ -201,7 +185,7 @@ class GoalControlPlane:
     def ensure_initialized(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         if not self.snapshot_path.exists():
-            _atomic_write_json(self.snapshot_path, _default_snapshot())
+            atomic_write_json(self.snapshot_path, _default_snapshot())
         if not self.ledger_path.exists():
             self.ledger_path.touch()
 
@@ -358,7 +342,7 @@ class GoalControlPlane:
                         ),
                         "last_event_id": event_id,
                     }
-                    _atomic_write_json(self.snapshot_path, snapshot_after)
+                    atomic_write_json(self.snapshot_path, snapshot_after)
                 else:
                     snapshot_after = current
                     reason = "lower_priority_than_current_goal"
@@ -419,3 +403,18 @@ class GoalControlPlane:
             if str(row.get("event_id", "")) == event_id:
                 return _normalize_text(row.get("text", ""))
         return ""
+
+
+def init_goal_control_plane(state_root: Path, tracker: Any) -> GoalControlPlane:
+    """Initialize GoalControlPlane and migrate legacy goal from tracker state.
+
+    Convenience factory used by all hooks that need a ready GoalControlPlane.
+    """
+    goal_cp = GoalControlPlane(state_root)
+    goal_cp.ensure_initialized()
+    d = tracker.to_dict()
+    goal_cp.migrate_legacy_goal(
+        legacy_goal=str(d.get("goal", "")),
+        legacy_source=str(d.get("goal_source", "legacy")),
+    )
+    return goal_cp
