@@ -37,3 +37,24 @@ def format_pending_actions(actions: list) -> str:
         else:
             lines.append(f"{i}. {t}: {a}")
     return "\n".join(lines)
+
+
+def format_pattern_alert(data: dict) -> str:
+    """Format a pattern-alerts.json payload into a human-readable Monitor line.
+
+    Used by watch_patterns.py (operator-monitor alert path).
+    """
+    stage = data.get("stage", "?")
+    sig = data.get("intent_signature", "?")
+    message = data.get("message", "")
+    meta = data.get("meta", {})
+    lines = [f"[OperatorMonitor] Pattern alert (stage={stage}, intent={sig}):"]
+    if message:
+        lines.append(message)
+    if meta:
+        lines.append(
+            f"  occurrences={meta.get('occurrences', '?')} "
+            f"window={meta.get('window_minutes', '?')}min "
+            f"machines={meta.get('machine_ids', [])}"
+        )
+    return "\n".join(lines)

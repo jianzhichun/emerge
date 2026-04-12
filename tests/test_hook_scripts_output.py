@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -644,6 +645,67 @@ def test_subagent_start_no_span_emits_empty(tmp_path: Path):
     """SubagentStart must emit {} when no active span."""
     out = _run("subagent_start.py", {}, tmp_path)
     assert json.loads(out) == {}
+
+
+def test_process_once_formats_and_renames(tmp_path: Path):
+    """process_once must call formatter, print output, rename file, return new ts."""
+    from scripts.watch_file import process_once
+    from io import StringIO
+
+    pending = tmp_path / "alerts.json"
+    pending.write_text(
+        json.dumps({"submitted_at": 5000, "val": "hello"}),
+        encoding="utf-8",
+    )
+
+    calls = []
+    def fmt(data):
+        calls.append(data)
+        return f"msg:{data['val']}"
+
+    buf = StringIO()
+    old_stdout = sys.stdout
+    sys.stdout = buf
+    try:
+        new_ts = process_once(pending, fmt, ".processed.json", last_ts=0)
+    finally:
+        sys.stdout = old_stdout
+
+    assert new_ts == 5000
+    assert calls[0]["val"] == "hello"
+    assert "msg:hello" in buf.getvalue()
+    assert (tmp_path / "alerts.processed.json").exists()
+    assert not pending.exists()
+
+
+def test_process_once_skips_stale_timestamp(tmp_path: Path):
+    """process_once must not re-process a file whose submitted_at <= last_ts."""
+    from scripts.watch_file import process_once
+
+    pending = tmp_path / "alerts.json"
+    pending.write_text(json.dumps({"submitted_at": 100}), encoding="utf-8")
+
+    calls = []
+    new_ts = process_once(pending, lambda d: calls.append(d) or "x", ".processed.json", last_ts=100)
+
+    assert new_ts == 100
+    assert not calls
+    assert pending.exists()
+
+
+def test_format_pattern_alert_includes_key_fields():
+    from scripts.pending_actions import format_pattern_alert
+    data = {
+        "stage": "canary",
+        "intent_signature": "hm.node_create",
+        "message": "Repeated pattern detected",
+        "meta": {"occurrences": 5, "window_minutes": 10, "machine_ids": ["local"]},
+    }
+    result = format_pattern_alert(data)
+    assert "[OperatorMonitor]" in result
+    assert "canary" in result
+    assert "hm.node_create" in result
+    assert "occurrences=5" in result
 
 
 def test_init_goal_control_plane_helper(tmp_path):
