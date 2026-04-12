@@ -231,21 +231,12 @@ class EmergeDaemon:
                 "flywheel bridge failed for %s (%s), falling back to LLM: %s",
                 base_pipeline_id, mode, _bridge_exc,
             )
-            # Notify CC so it can intervene, retrigger, or log the degradation
-            try:
-                self._notify(
-                    content=(
-                        f"⚠️ Flywheel bridge failed for `{base_pipeline_id}` ({mode}): "
-                        f"{_bridge_exc}. Falling back to LLM inference."
-                    ),
-                    source="bridge",
-                    severity="high",
-                    category="warning",
-                    intent_signature=base_pipeline_id,
-                    extra_meta={"failure_reason": str(_bridge_exc)},
-                )
-            except Exception:
-                pass
+            # Store failure info for icc_exec to inject into the response
+            self._last_bridge_failure = {
+                "pipeline_id": base_pipeline_id,
+                "mode": mode,
+                "reason": str(_bridge_exc),
+            }
             # Increment consecutive_failures directly in the registry so the policy engine
             # can downgrade stable→explore if the bridge keeps failing, without polluting
             # the recent_outcomes window (which would cause spurious window-failure downgrades).
@@ -257,7 +248,7 @@ class EmergeDaemon:
                     if isinstance(_pe, dict):
                         _pe["consecutive_failures"] = int(_pe.get("consecutive_failures", 0)) + 1
                         _reg["pipelines"][base_pipeline_id] = _pe
-                        self._atomic_write_json(_reg_path, _reg)
+                        self._write_json(_reg_path, _reg)
             except Exception:
                 pass
             return None
@@ -450,7 +441,7 @@ class EmergeDaemon:
         # Clear synthesis_ready — pipeline is now on disk, no need to re-crystallize
         if intent_signature in _registry["pipelines"]:
             _registry["pipelines"][intent_signature].pop("synthesis_ready", None)
-            self._atomic_write_json(_registry_path, _registry)
+            self._write_json(_registry_path, _registry)
 
         preview_lines = py_src.splitlines()[:20]
         code_preview = "\n".join(preview_lines)
@@ -844,23 +835,8 @@ class EmergeDaemon:
                             })
                         except Exception:
                             pass
-                        # Notify CC so it can review and call icc_span_approve
-                        try:
-                            self._notify(
-                                content=(
-                                    f"✅ Pipeline skeleton ready for `{closed.intent_signature}`. "
-                                    f"Review `{skeleton_path}`, complete any TODOs, "
-                                    "then call `icc_span_approve` to activate the bridge."
-                                ),
-                                source="span_synthesizer",
-                                severity="info",
-                                category="action_needed",
-                                intent_signature=closed.intent_signature,
-                                requires_action=True,
-                                extra_meta={"skeleton_path": skeleton_path},
-                            )
-                        except Exception:
-                            pass
+                        # Skeleton info is already in the response (skeleton_path + next_step).
+                        # PostToolUse hook injects a reminder into additionalContext.
             response: dict[str, Any] = {
                 "span_id": closed.span_id,
                 "intent_signature": closed.intent_signature,
@@ -1049,6 +1025,15 @@ class EmergeDaemon:
                     self._append_warning_text(result, f"policy bookkeeping failed: {exc}")
                 if "isError" not in result:
                     result["isError"] = False
+                # Inject bridge fallback warning if the flywheel bridge failed
+                _bf = getattr(self, '_last_bridge_failure', None)
+                if _bf:
+                    self._last_bridge_failure = None
+                    self._append_warning_text(
+                        result,
+                        f"bridge fallback: {_bf['pipeline_id']} ({_bf['mode']}) failed: "
+                        f"{_bf['reason']}. Falling back to LLM inference.",
+                    )
                 return result
             except Exception as exc:
                 return {
@@ -2184,7 +2169,7 @@ class EmergeDaemon:
                 ts_ms=event["ts_ms"],
             )
             registry["candidates"][key] = entry
-            self._atomic_write_json(registry_path, registry)
+            self._write_json(registry_path, registry)
             self._update_pipeline_registry(candidate_key=key, entry=entry)
 
     def _record_pipeline_event(
@@ -2321,7 +2306,7 @@ class EmergeDaemon:
                 ts_ms=event["ts_ms"],
             )
             registry["candidates"][key] = entry
-            self._atomic_write_json(registry_path, registry)
+            self._write_json(registry_path, registry)
             self._update_pipeline_registry(candidate_key=key, entry=entry)
 
     def _update_pipeline_registry(
@@ -2381,7 +2366,7 @@ class EmergeDaemon:
             pipeline["last_execution_path"] = str(entry.get("last_execution_path", "unknown"))
             pipeline["updated_at_ms"] = int(time.time() * 1000)
             registry["pipelines"][candidate_key] = pipeline
-            self._atomic_write_json(registry_path, registry)
+            self._write_json(registry_path, registry)
             return
 
         status = str(pipeline.get("status", "explore"))
@@ -2503,7 +2488,7 @@ class EmergeDaemon:
                     pass
 
         registry["pipelines"][candidate_key] = pipeline
-        self._atomic_write_json(registry_path, registry)
+        self._write_json(registry_path, registry)
         # Notify CC that the resource list has changed (MCP 2025-03-26 subscriptions)
         try:
             self._write_mcp_push({
@@ -2632,18 +2617,9 @@ class EmergeDaemon:
             )
 
     @staticmethod
-    def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
-        fd, tmp_path = tempfile.mkstemp(prefix=f"{path.stem}-", suffix=".json", dir=str(path.parent))
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
-                json.dump(data, tmp, ensure_ascii=True, indent=2)
-                tmp.flush()
-                os.fsync(tmp.fileno())
-            os.replace(tmp_path, path)
-            tmp_path = ""
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+    def _write_json(path: Path, data: dict[str, Any]) -> None:
+        from scripts.policy_config import atomic_write_json
+        atomic_write_json(path, data)
 
     def _increment_human_fix(self, intent_signature: str) -> None:
         """Increment human_fixes for the candidate keyed by intent_signature.
@@ -2661,7 +2637,7 @@ class EmergeDaemon:
                 return
             entry["human_fixes"] = int(entry.get("human_fixes", 0)) + 1
             registry["candidates"][intent_signature] = entry
-            self._atomic_write_json(candidates_path, registry)
+            self._write_json(candidates_path, registry)
             try:
                 self._update_pipeline_registry(candidate_key=intent_signature, entry=entry)
             except Exception:
@@ -2966,26 +2942,31 @@ class EmergeDaemon:
             pass
 
     def _push_pattern(self, stage: str, context: dict, summary: Any) -> None:
-        """Push pattern detection result to CC via MCP channel notification.
+        """Push pattern detection result via file-based alert (watch_patterns.py Monitor).
 
+        Writes pattern-alerts.json to state root. The watch_patterns.py script
+        (launched as a persistent Monitor by /emerge:cockpit) picks it up and
+        streams the formatted alert into the CC conversation.
         CC reads policy_stage from meta and decides whether to engage the operator
         (via icc_exec → show_notify) or crystallize directly. Daemon never pops up.
         """
+        import time as _time
         message = self._build_explore_message(context, summary)
-        self._notify(
-            content=message,
-            source="operator_monitor",
-            severity="info",
-            category="action_needed",
-            intent_signature=summary.intent_signature,
-            requires_action=True,
-            extra_meta={
-                "policy_stage": stage,
+        alert_data = {
+            "submitted_at": int(_time.time() * 1000),
+            "stage": stage,
+            "intent_signature": summary.intent_signature,
+            "message": message,
+            "meta": {
                 "occurrences": summary.occurrences,
                 "window_minutes": summary.window_minutes,
                 "machine_ids": summary.machine_ids,
             },
-        )
+        }
+        try:
+            self._write_json(self._state_root / "pattern-alerts.json", alert_data)
+        except Exception:
+            pass
 
     def _build_explore_message(self, context: dict, summary: Any) -> str:
         app = context.get("app", "unknown")
@@ -3004,42 +2985,6 @@ class EmergeDaemon:
         with _stdout_lock:
             sys.stdout.write(line)
             sys.stdout.flush()
-
-    def _notify(
-        self,
-        content: str,
-        source: str,
-        severity: str = "info",        # info | warning | high
-        category: str = "informational",  # informational | action_needed | warning
-        intent_signature: str = "",
-        requires_action: bool = False,
-        extra_meta: dict | None = None,
-    ) -> None:
-        """Push a channel notification to CC with unified meta schema."""
-        meta: dict = {}
-        if extra_meta is not None:
-            meta.update(extra_meta)   # extra_meta applied first
-        meta.update({                  # required fields always override
-            "source": source,
-            "severity": severity,
-            "category": category,
-            "requires_action": requires_action,
-        })
-        if intent_signature:
-            meta["intent_signature"] = intent_signature
-        # Match the params shape used by official chat plugins
-        # (fakechat / discord / telegram / imessage). CC's MCP client
-        # validates `params` strictly — an extra unknown `serverName`
-        # field caused the notification to be silently dropped instead
-        # of surfaced to the running session.
-        self._write_mcp_push({
-            "jsonrpc": "2.0",
-            "method": "notifications/claude/channel",
-            "params": {
-                "content": content,
-                "meta": meta,
-            },
-        })
 
     def _elicit(
         self,
@@ -3068,33 +3013,6 @@ class EmergeDaemon:
             self._elicit_results.pop(elicit_id, None)
             return None
         return self._elicit_results.pop(elicit_id, None)
-
-
-def _format_pending_actions_message(actions: list) -> str:
-    lines = ["[Cockpit] The operator submitted the following actions — execute in order:"]
-    for i, a in enumerate(actions, 1):
-        t = a.get("type", "unknown")
-        if t == "pipeline-set":
-            lines.append(f"{i}. pipeline-set {a.get('key')} fields={a.get('fields', {})}")
-        elif t == "pipeline-delete":
-            lines.append(f"{i}. pipeline-delete {a.get('key')}")
-        elif t == "notes-edit":
-            lines.append(f"{i}. Update {a.get('connector')} NOTES.md (full replace)")
-        elif t == "notes-comment":
-            lines.append(f"{i}. Append comment to {a.get('connector')} NOTES.md: {str(a.get('comment', ''))[:80]}")
-        elif t == "tool-call":
-            call = a.get("call", {}) if isinstance(a.get("call"), dict) else {}
-            tool = call.get("tool", "?")
-            call_args = call.get("arguments", {})
-            meta = a.get("meta", {}) if isinstance(a.get("meta"), dict) else {}
-            scope = str(meta.get("scope", "")).strip()
-            scope_suffix = f" scope={scope}" if scope else ""
-            lines.append(f"{i}. Execute tool-call {tool} args={call_args}{scope_suffix}")
-        elif t == "crystallize-component":
-            lines.append(f"{i}. Crystallize component {a.get('filename')} -> {a.get('connector')}/cockpit/")
-        else:
-            lines.append(f"{i}. {t}: {a}")
-    return "\n".join(lines)
 
 
 def _write_response(payload: dict) -> None:

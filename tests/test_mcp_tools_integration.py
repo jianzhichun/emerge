@@ -1409,17 +1409,15 @@ def test_hypermesh_icc_write_participates_in_pipeline_lifecycle_registry(tmp_pat
         os.environ.pop("EMERGE_SESSION_ID", None)
 
 
-def test_push_pattern_sends_channel_notification_for_all_stages(monkeypatch, tmp_path):
-    """_push_pattern sends a single channel notification carrying policy_stage in meta."""
+def test_push_pattern_writes_alert_for_all_stages(monkeypatch, tmp_path):
+    """_push_pattern writes pattern-alerts.json for each policy stage."""
     from scripts.pattern_detector import PatternSummary
     from scripts.emerge_daemon import EmergeDaemon
 
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     daemon = EmergeDaemon(root=ROOT)
-    mcp_calls = []
-    monkeypatch.setattr(daemon, "_write_mcp_push", lambda payload: mcp_calls.append(payload))
 
     for stage in ("explore", "canary", "stable"):
-        mcp_calls.clear()
         summary = PatternSummary(
             machine_ids=["local"],
             intent_signature="hypermesh.node_create",
@@ -1431,13 +1429,12 @@ def test_push_pattern_sends_channel_notification_for_all_stages(monkeypatch, tmp
         )
         daemon._push_pattern(stage, {"app": "hypermesh"}, summary)
 
-        assert len(mcp_calls) == 1, f"stage={stage}: expected 1 MCP call, got {len(mcp_calls)}"
-        payload = mcp_calls[0]
-        assert payload["method"] == "notifications/claude/channel", f"stage={stage}: wrong method"
-        meta = payload["params"]["meta"]
-        assert meta["policy_stage"] == stage
-        assert meta["intent_signature"] == "hypermesh.node_create"
-        assert "machine_ids" in meta
+        alert_path = tmp_path / "pattern-alerts.json"
+        assert alert_path.exists(), f"stage={stage}: pattern-alerts.json not written"
+        data = json.loads(alert_path.read_text())
+        assert data["stage"] == stage
+        assert data["intent_signature"] == "hypermesh.node_create"
+        assert data["meta"]["machine_ids"] == ["local"]
 
 
 def test_runner_client_notify_posts_ui_spec(tmp_path):
@@ -2547,6 +2544,7 @@ def test_concurrent_exec_events_do_not_lose_attempts(tmp_path, monkeypatch):
 def test_bridge_failure_records_consecutive_failure(tmp_path, monkeypatch):
     """When the flywheel bridge raises, consecutive_failures must increment in the registry."""
     import json
+    from scripts.policy_config import atomic_write_json
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     from scripts.emerge_daemon import EmergeDaemon
     daemon = EmergeDaemon()
@@ -2554,7 +2552,7 @@ def test_bridge_failure_records_consecutive_failure(tmp_path, monkeypatch):
     # Seed pipelines-registry with a stable pipeline
     registry_path = tmp_path / "pipelines-registry.json"
     from scripts.emerge_daemon import EmergeDaemon as _D
-    _D._atomic_write_json(registry_path, {
+    atomic_write_json(registry_path, {
         "pipelines": {
             "zwcad.read.state": {
                 "status": "stable",
@@ -2571,7 +2569,7 @@ def test_bridge_failure_records_consecutive_failure(tmp_path, monkeypatch):
     # Also seed candidates.json so _record_pipeline_event can update it
     session_dir = tmp_path / daemon._base_session_id
     session_dir.mkdir(parents=True, exist_ok=True)
-    _D._atomic_write_json(session_dir / "candidates.json", {
+    atomic_write_json(session_dir / "candidates.json", {
         "candidates": {
             "zwcad.read.state": {
                 "source": "pipeline",
@@ -2607,7 +2605,49 @@ def test_bridge_failure_records_consecutive_failure(tmp_path, monkeypatch):
         f"Expected consecutive_failures=1, got {updated['pipelines']['zwcad.read.state']['consecutive_failures']}"
 
 
-def test_runner_router_cached_between_calls(tmp_path, monkeypatch):
+def test_icc_exec_injects_bridge_fallback_warning(tmp_path, monkeypatch):
+    """When bridge fails, icc_exec must include a warning in the response."""
+    import json
+    from scripts.emerge_daemon import EmergeDaemon
+    from unittest.mock import patch
+
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon()
+
+    # Seed pipelines-registry with a stable pipeline
+    from scripts.emerge_daemon import EmergeDaemon as _D
+    from scripts.policy_config import atomic_write_json
+    atomic_write_json(tmp_path / "pipelines-registry.json", {
+        "pipelines": {
+            "mock.read.layers": {
+                "status": "stable",
+                "rollout_pct": 100,
+                "consecutive_failures": 0,
+                "attempts": 50,
+                "successes": 50,
+                "verify_passes": 50,
+                "human_fixes": 0,
+            }
+        }
+    })
+
+    # Patch pipeline.run_read to raise
+    monkeypatch.setattr(daemon.pipeline, "run_read", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("connection refused")))
+
+    # Call icc_exec — bridge will fail, normal exec will run
+    result = daemon.call_tool("icc_exec", {
+        "intent_signature": "mock.read.layers",
+        "code": "__result = {'layers': []}",
+        "mode": "inline_code",
+    })
+
+    assert not result.get("isError", True), f"icc_exec should succeed: {result}"
+    # Check for bridge fallback warning in content items
+    content = result.get("content", [])
+    warning_texts = [c["text"] for c in content if isinstance(c, dict) and "warning" in c.get("text", "").lower()]
+    assert len(warning_texts) >= 1, f"Expected bridge fallback warning in content, got: {content}"
+    assert "bridge fallback" in warning_texts[0]
+    assert "mock.read.layers" in warning_texts[0]
     """_get_runner_router() must cache and only rebuild when config changes."""
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     monkeypatch.delenv("EMERGE_RUNNER_URL", raising=False)
@@ -3390,77 +3430,8 @@ def test_process_local_file_skips_already_seen_events(tmp_path):
     assert buf[0]["ts_ms"] == now_ms + 500
 
 
-def test_notify_helper_builds_correct_meta():
-    """_notify() must produce a channel notification with unified meta schema."""
-    from scripts.emerge_daemon import EmergeDaemon
-    daemon = EmergeDaemon()
-    pushed = []
-    daemon._write_mcp_push = lambda p: pushed.append(p)
-
-    daemon._notify(
-        content="bridge failed for gmail.read.fetch",
-        source="bridge",
-        severity="high",
-        category="warning",
-        intent_signature="gmail.read.fetch",
-        requires_action=False,
-    )
-
-    assert len(pushed) == 1
-    p = pushed[0]
-    assert p["method"] == "notifications/claude/channel"
-    meta = p["params"]["meta"]
-    assert meta["source"] == "bridge"
-    assert meta["severity"] == "high"
-    assert meta["category"] == "warning"
-    assert meta["intent_signature"] == "gmail.read.fetch"
-    assert meta["requires_action"] is False
-    assert p["params"]["content"] == "bridge failed for gmail.read.fetch"
-
-
-def test_notify_extra_meta_cannot_overwrite_required_fields():
-    """extra_meta keys must NOT overwrite source/severity/category/requires_action."""
-    from scripts.emerge_daemon import EmergeDaemon
-    daemon = EmergeDaemon()
-    pushed = []
-    daemon._write_mcp_push = lambda p: pushed.append(p)
-
-    daemon._notify(
-        content="test",
-        source="bridge",
-        severity="high",
-        category="warning",
-        requires_action=False,
-        extra_meta={"source": "evil", "severity": "low", "requires_action": True},
-    )
-
-    meta = pushed[0]["params"]["meta"]
-    assert meta["source"] == "bridge"      # not overwritten by extra_meta
-    assert meta["severity"] == "high"      # not overwritten by extra_meta
-    assert meta["requires_action"] is False  # not overwritten by extra_meta
-
-
-def test_notify_extra_meta_fields_are_merged():
-    """extra_meta fields are present in the final notification meta."""
-    from scripts.emerge_daemon import EmergeDaemon
-    daemon = EmergeDaemon()
-    pushed = []
-    daemon._write_mcp_push = lambda p: pushed.append(p)
-
-    daemon._notify(
-        content="test",
-        source="cockpit",
-        extra_meta={"action_count": 3, "action_types": ["prompt"]},
-    )
-
-    meta = pushed[0]["params"]["meta"]
-    assert meta["action_count"] == 3
-    assert meta["action_types"] == ["prompt"]
-    assert meta["source"] == "cockpit"  # required field still present
-
-
-def test_bridge_failure_pushes_high_severity_notification(tmp_path, monkeypatch):
-    """When flywheel bridge raises, daemon must push severity=high notification."""
+def test_bridge_failure_stores_failure_info(tmp_path, monkeypatch):
+    """When flywheel bridge raises, daemon must store failure info for icc_exec."""
     import json
     from scripts.emerge_daemon import EmergeDaemon
     from unittest.mock import patch
@@ -3472,24 +3443,20 @@ def test_bridge_failure_pushes_high_severity_notification(tmp_path, monkeypatch)
     reg = {"pipelines": {"gmail.read.fetch": {"status": "stable", "consecutive_failures": 0}}}
     (tmp_path / "pipelines-registry.json").write_text(json.dumps(reg))
 
-    notified = []
-    daemon._notify = lambda **kw: notified.append(kw)
-
     # Patch pipeline.run_read to raise
     with patch.object(daemon.pipeline, "run_read", side_effect=RuntimeError("timeout")):
         result = daemon._try_flywheel_bridge({"intent_signature": "gmail.read.fetch"})
 
     assert result is None  # bridge fell through
-    assert len(notified) == 1
-    n = notified[0]
-    assert n["source"] == "bridge"
-    assert n["severity"] == "high"
-    assert n["intent_signature"] == "gmail.read.fetch"
-    assert "timeout" in n["content"]
+    assert daemon._last_bridge_failure is not None
+    bf = daemon._last_bridge_failure
+    assert bf["pipeline_id"] == "gmail.read.fetch"
+    assert bf["mode"] == "read"
+    assert "timeout" in bf["reason"]
 
 
-def test_span_close_stable_pushes_skeleton_ready_notification(tmp_path, monkeypatch):
-    """icc_span_close generating a skeleton must push a skeleton-ready notification to CC."""
+def test_span_close_stable_includes_skeleton_path(tmp_path, monkeypatch):
+    """icc_span_close generating a skeleton must include skeleton_path in response."""
     from scripts.emerge_daemon import EmergeDaemon
     from unittest.mock import patch, MagicMock
 
@@ -3498,9 +3465,6 @@ def test_span_close_stable_pushes_skeleton_ready_notification(tmp_path, monkeypa
 
     # Open a span first
     daemon.call_tool("icc_span_open", {"intent_signature": "gmail.read.fetch"})
-
-    notified = []
-    daemon._notify = lambda **kw: notified.append(kw)
 
     # Fake skeleton path
     fake_path = tmp_path / "gmail" / "pipelines" / "read" / "_pending" / "fetch.py"
@@ -3512,28 +3476,25 @@ def test_span_close_stable_pushes_skeleton_ready_notification(tmp_path, monkeypa
          patch.object(daemon._span_tracker, "skeleton_already_generated", return_value=False), \
          patch.object(daemon._span_tracker, "latest_successful_span", return_value=MagicMock()), \
          patch.object(daemon._span_tracker, "mark_skeleton_generated", return_value=None):
-        daemon.call_tool("icc_span_close", {
+        resp = daemon.call_tool("icc_span_close", {
             "intent_signature": "gmail.read.fetch",
             "outcome": "success",
         })
 
-    assert len(notified) == 1, f"Expected 1 notification, got {notified}"
-    n = notified[0]
-    assert n["source"] == "span_synthesizer"
-    assert n["severity"] == "info"
-    assert n["category"] == "action_needed"
-    assert n["requires_action"] is True
-    assert n["intent_signature"] == "gmail.read.fetch"
-    assert str(fake_path) in n["content"]
+    # Response must include skeleton_path and next_step
+    content = resp.get("content", [])
+    assert content and isinstance(content[0], dict)
+    inner = json.loads(content[0]["text"])
+    assert inner.get("skeleton_path") == str(fake_path)
+    assert "icc_span_approve" in inner.get("next_step", "")
 
 
-def test_push_pattern_uses_unified_meta_schema():
-    """_push_pattern must use unified meta schema with source/severity/category."""
+def test_push_pattern_writes_alert_file(tmp_path, monkeypatch):
+    """_push_pattern must write pattern-alerts.json to state root."""
     from scripts.emerge_daemon import EmergeDaemon
     from scripts.pattern_detector import PatternSummary
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     daemon = EmergeDaemon()
-    pushed = []
-    daemon._write_mcp_push = lambda p: pushed.append(p)
 
     summary = PatternSummary(
         intent_signature="zwcad.read.state",
@@ -3546,17 +3507,14 @@ def test_push_pattern_uses_unified_meta_schema():
     )
     daemon._push_pattern("explore", {"app": "ZWCAD"}, summary)
 
-    assert len(pushed) == 1
-    meta = pushed[0]["params"]["meta"]
-    # Unified schema fields must all be present
-    assert meta["source"] == "operator_monitor"
-    assert meta["severity"] == "info"
-    assert meta["category"] == "action_needed"
-    assert meta["intent_signature"] == "zwcad.read.state"
-    assert meta["requires_action"] is True
-    # Legacy fields still present via extra_meta
-    assert "policy_stage" in meta
-    assert "occurrences" in meta
+    alert_path = tmp_path / "pattern-alerts.json"
+    assert alert_path.exists()
+    data = json.loads(alert_path.read_text())
+    assert data["intent_signature"] == "zwcad.read.state"
+    assert data["stage"] == "explore"
+    assert data["meta"]["occurrences"] == 5
+    assert data["meta"]["machine_ids"] == ["m1"]
+    assert "[OperatorMonitor]" in data["message"]
 
 
 def test_on_pending_actions_renames_to_processed(tmp_path, monkeypatch):
@@ -3576,29 +3534,6 @@ def test_on_pending_actions_renames_to_processed(tmp_path, monkeypatch):
 
     assert not pending.exists()
     assert (tmp_path / "pending-actions.processed.json").exists()
-
-
-def test_all_notifications_use_unified_meta_fields():
-    """All _notify() calls must produce notifications with all required meta fields."""
-    from scripts.emerge_daemon import EmergeDaemon
-
-    daemon = EmergeDaemon()
-    all_pushed = []
-    daemon._write_mcp_push = lambda p: all_pushed.append(p)
-
-    # Trigger notification via _notify directly
-    daemon._notify(
-        content="test",
-        source="bridge",
-        severity="high",
-        category="warning",
-        intent_signature="x.read.y",
-    )
-
-    for p in all_pushed:
-        meta = p["params"]["meta"]
-        for required_field in ("source", "severity", "category", "requires_action"):
-            assert required_field in meta, f"Missing {required_field!r} in meta: {meta}"
 
 
 def test_initialize_declares_resource_subscribe_capability():

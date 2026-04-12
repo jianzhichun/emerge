@@ -225,33 +225,10 @@ def _load_registry(state_root: Path) -> tuple[Path, dict]:
     return registry_path, data
 
 
-def _atomic_write_json(
-    path: Path,
-    data: dict,
-    *,
-    prefix: str,
-    suffix: str = "",
-    ensure_ascii: bool,
-    indent: int | None,
-) -> None:
-    """Atomically write JSON to path (temp file + fsync + replace)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=ensure_ascii, indent=indent)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, path)
-        tmp_path = ""
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-
-
 def _save_registry(registry_path: Path, data: dict) -> None:
     """Atomic write: temp file + os.replace to prevent half-written state on crash."""
-    _atomic_write_json(
+    from scripts.policy_config import atomic_write_json
+    atomic_write_json(
         registry_path,
         data,
         prefix=".registry-",
@@ -561,7 +538,8 @@ def _load_runner_config() -> dict:
 
 def _save_runner_config(data: dict) -> None:
     path = RunnerRouter.persisted_config_path()
-    _atomic_write_json(
+    from scripts.policy_config import atomic_write_json
+    atomic_write_json(
         path,
         data,
         prefix="runner-map-",
@@ -1662,7 +1640,8 @@ def _cmd_save_settings(patch: dict) -> dict:
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
 
-    _atomic_write_json(
+    from scripts.policy_config import atomic_write_json
+    atomic_write_json(
         path,
         merged,
         prefix="settings-",

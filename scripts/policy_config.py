@@ -209,6 +209,38 @@ def load_settings() -> dict:
     return _SETTINGS_CACHE
 
 
+def atomic_write_json(
+    path: Path,
+    data: Any,
+    *,
+    prefix: str = "",
+    suffix: str = "",
+    ensure_ascii: bool = True,
+    indent: int | None = 2,
+) -> None:
+    """Atomically write JSON to *path* via temp file + fsync + os.replace.
+
+    All callers in the project should use this instead of rolling their own
+    tempfile/mkstemp/rename logic.
+    """
+    import tempfile as _tempfile
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pfx = prefix or f"{path.stem}-"
+    sfx = suffix or ".json"
+    fd, tmp_path = _tempfile.mkstemp(prefix=pfx, suffix=sfx, dir=str(path.parent))
+    _tmp = tmp_path
+    try:
+        with _os.fdopen(fd, "w", encoding="utf-8") as f:
+            _json.dump(data, f, ensure_ascii=ensure_ascii, indent=indent)
+            f.flush()
+            _os.fsync(f.fileno())
+        _os.replace(tmp_path, path)
+        _tmp = ""
+    finally:
+        if _tmp and _os.path.exists(_tmp):
+            _os.unlink(_tmp)
+
+
 def truncate_jsonl_if_needed(path: "Path", max_lines: int, trigger_ratio: float = 1.5) -> None:
     """Truncate a .jsonl file to *max_lines* when it exceeds max_lines * trigger_ratio.
 

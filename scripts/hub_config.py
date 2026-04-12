@@ -31,25 +31,7 @@ def sync_queue_path() -> Path:
 def pending_conflicts_path() -> Path:
     return _hub_home() / "pending-conflicts.json"
 
-
-# ── Atomic write helper ─────────────────────────────────────────────────────
-
-def _atomic_write_json(path: Path, data: Any) -> None:
-    """Write JSON to path atomically via tempfile + rename."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, str(path))
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+from scripts.policy_config import atomic_write_json  # noqa: E402
 
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -67,7 +49,7 @@ def load_hub_config() -> dict[str, Any]:
 
 def save_hub_config(config: dict[str, Any]) -> None:
     """Atomically write hub-config.json."""
-    _atomic_write_json(hub_config_path(), config)
+    atomic_write_json(hub_config_path(), config)
 
 
 def is_configured() -> bool:
@@ -159,7 +141,7 @@ def load_pending_conflicts() -> dict[str, Any]:
 
 def save_pending_conflicts(data: dict[str, Any]) -> None:
     """Atomically write pending-conflicts.json."""
-    _atomic_write_json(pending_conflicts_path(), data)
+    atomic_write_json(pending_conflicts_path(), data)
 
 
 def new_conflict_id() -> str:

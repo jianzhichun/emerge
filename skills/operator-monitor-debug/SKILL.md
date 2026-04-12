@@ -55,23 +55,17 @@ If `summaries` is empty but events exist: thresholds not met yet.
 Set `EMERGE_MONITOR_POLL_S=5` to ensure polling is active.
 Check `EMERGE_MONITOR_MACHINES` matches the profile names configured in the runner map.
 
-### 6. Is the MCP push reaching CC?
+### 6. Is the pattern alert reaching CC?
 
-For explore-stage: a channel notification prompt should appear in the CC conversation.
-For canary/stable: the native elicitation dialog should appear.
+Pattern alerts are delivered via `watch_patterns.py` (Monitor tool, persistent).
+When a pattern is detected, the daemon writes `pattern-alerts.json` to the state root.
+The Monitor script polls this file, prints a formatted alert to stdout, and renames it
+to `.processed.json`. CC streams stdout into the conversation automatically.
 
-Test the push manually via `icc_exec`:
-
-```python
-import json, sys
-notification = {
-    "jsonrpc": "2.0",
-    "method": "notifications/claude/channel",
-    "params": {"serverName": "emerge", "content": "test monitor push", "meta": {}},
-}
-sys.stdout.write(json.dumps(notification) + "\n")
-sys.stdout.flush()
-```
+Check:
+1. Is `watch_patterns.py` running as a persistent Monitor? (launched by `/emerge:cockpit` step 4)
+2. Does `pattern-alerts.json` exist in the state root? If so, the daemon wrote it but the Monitor hasn't consumed it.
+3. Check Monitor logs for the formatted alert output.
 
 ### 7. Common fixes
 
@@ -79,6 +73,6 @@ sys.stdout.flush()
 |---------|-----|
 | EventBus empty | Verify `ObserverPlugin.start()` called; check OS accessibility permissions |
 | PatternDetector never fires | Lower `FREQ_THRESHOLD` or check event `session_role` field |
-| Elicitation never appears | Verify daemon has elicitation capability in MCP handshake |
-| Wrong machine polled | Check `EMERGE_MONITOR_MACHINES` matches runner profile keys in runner-map.json |
+| Elicitation never appears | Verify daemon has elicitation capability in MCP handshake; check thread is non-main |
+| Pattern alert not delivered | Verify `watch_patterns.py` Monitor is running; check `pattern-alerts.json` exists in state root |
 | OperatorMonitor not starting | Confirm `EMERGE_OPERATOR_MONITOR=1` in daemon env, not runner env |

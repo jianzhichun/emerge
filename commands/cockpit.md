@@ -40,9 +40,9 @@ Steps:
 
    Only skip injection if a connector has zero pipelines AND no NOTES.md.
 
-4. **Event-driven dispatch** — start a Monitor for cockpit submissions:
+4. **Event-driven dispatch** — start Monitors for cockpit submissions and operator alerts:
 
-   Use the **Monitor tool** to watch for operator actions:
+   **Monitor 1 — cockpit actions:**
    ```
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/watch_pending.py"
    ```
@@ -60,6 +60,17 @@ Steps:
      - `tool-call` → execute exactly `call.tool` + `call.arguments` (deterministic, no free-form reinterpretation)
      - `crystallize-component` → write to `~/.emerge/connectors/<connector>/cockpit/<filename>.html` and `<filename>.context.md`
    Briefly report results after processing.
+
+   **Monitor 2 — operator pattern alerts** (launch regardless; only fires when `EMERGE_OPERATOR_MONITOR=1`):
+   ```
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/watch_patterns.py"
+   ```
+   Set `persistent: true` and `description: "operator pattern alert watcher"`.
+
+   The script watches `pattern-alerts.json` (written by the daemon's OperatorMonitor
+   when a recurring pattern is detected). When an alert arrives, evaluate whether to
+   engage the operator or crystallize directly. Alerts include `stage`, `intent_signature`,
+   `occurrences`, `window_minutes`, and `machine_ids`.
 
    **Fallback (CC < 2.1.98 / no Monitor tool):** the `UserPromptSubmit` hook also drains
    `pending-actions.processed.json` into `additionalContext` on the next user message.
