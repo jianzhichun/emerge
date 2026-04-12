@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/version-v0.3.55-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-508%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-512%20passing-brightgreen?logo=pytest)
 
 **Emerge** solves a core problem: AI operators repeat the same work but do not learn from it, so every session re-reasons from scratch. It uses a **dual flywheel** to crystallize repeated work into deterministic pipelines: a **forward flywheel** (`icc_exec`/`icc_span_open` tracking → policy promotion explore→canary→stable → auto-crystallized `.py+.yaml` pipelines → zero-LLM execution), and a **reverse flywheel** (`OperatorMonitor` observes human operators → `PatternDetector` detects repetition → elicitation captures intent → AI takes over).
 
@@ -303,7 +303,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 | Command          | Description                                                                                      |
 | ---------------- | ------------------------------------------------------------------------------------------------ |
 | `/init`          | Initialize a vertical flywheel from natural language context                                     |
-| `/cockpit`       | Browser control plane — SSE real-time status, intent overview, delta/risk/span/exec panels, audit trail, session mgmt. Operator submits reach the agent via CC Monitor tool (`scripts/watch_pending.py`, CC ≥2.1.98) with `UserPromptSubmit` hook fallback. |
+| `/cockpit`       | Browser control plane — SSE real-time status, intent overview, delta/risk/span/exec panels, audit trail, session mgmt, and reflection-cache observability. Operator submits reach the agent via CC Monitor tool (`scripts/watch_pending.py`, CC ≥2.1.98) with `UserPromptSubmit` hook fallback. |
 | `/runner-status` | Show remote runner health status                                                                 |
 | `/import`        | Import a connector asset package zip into local connector/pipeline state                         |
 | `/export`        | Export a connector asset package zip (connector files + registry entries)                        |
@@ -349,7 +349,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 python -m pytest tests -q
 ```
 
-Current baseline: **508** tests passing.
+Current baseline: **512** tests passing.
 
 Documentation release checklist: `docs/doc-consistency-checklist.md`
 

@@ -70,6 +70,74 @@ def test_cmd_control_plane_session_reset_requires_confirm(tmp_path):
     assert "RESET" in result["error"]
 
 
+def test_cmd_control_plane_reflection_cache_missing(tmp_path):
+    from scripts.repl_admin import cmd_control_plane_reflection_cache
+    with patch("scripts.repl_admin._resolve_state_root", return_value=tmp_path):
+        result = cmd_control_plane_reflection_cache()
+    assert result["ok"] is True
+    assert result["exists"] is False
+    assert result["source"] == "lightweight"
+
+
+def test_cmd_control_plane_reflection_cache_fresh(tmp_path):
+    from scripts.repl_admin import cmd_control_plane_reflection_cache
+    cache_dir = tmp_path / "reflection-cache"
+    cache_dir.mkdir(parents=True)
+    now_ms = 1234567890000
+    (cache_dir / "global.json").write_text(
+        json.dumps(
+            {
+                "generated_at_ms": now_ms,
+                "summary_text": "Muscle memory (deep)\nHigh-confidence intents: lark.read.get-doc",
+                "meta": {"builder": "test"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with patch("scripts.repl_admin._resolve_state_root", return_value=tmp_path), \
+         patch("scripts.repl_admin.time.time", return_value=now_ms / 1000):
+        result = cmd_control_plane_reflection_cache(ttl_ms=900000)
+    assert result["ok"] is True
+    assert result["exists"] is True
+    assert result["is_fresh"] is True
+    assert result["source"] == "deep_cache"
+    assert "Muscle memory (deep)" in result["summary_preview"]
+
+
+def test_cmd_control_plane_reflection_cache_stale(tmp_path):
+    from scripts.repl_admin import cmd_control_plane_reflection_cache
+    cache_dir = tmp_path / "reflection-cache"
+    cache_dir.mkdir(parents=True)
+    generated_ms = 1000
+    now_ms = generated_ms + 901000
+    (cache_dir / "global.json").write_text(
+        json.dumps({"generated_at_ms": generated_ms, "summary_text": "stale cache"}),
+        encoding="utf-8",
+    )
+    with patch("scripts.repl_admin._resolve_state_root", return_value=tmp_path), \
+         patch("scripts.repl_admin.time.time", return_value=now_ms / 1000):
+        result = cmd_control_plane_reflection_cache(ttl_ms=900000)
+    assert result["ok"] is True
+    assert result["exists"] is True
+    assert result["is_fresh"] is False
+    assert result["source"] == "lightweight"
+    assert result["age_ms"] == 901000
+
+
+def test_cmd_control_plane_reflection_cache_invalid_json(tmp_path):
+    from scripts.repl_admin import cmd_control_plane_reflection_cache
+    cache_dir = tmp_path / "reflection-cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "global.json").write_text("{broken", encoding="utf-8")
+    with patch("scripts.repl_admin._resolve_state_root", return_value=tmp_path):
+        result = cmd_control_plane_reflection_cache()
+    assert result["ok"] is True
+    assert result["exists"] is True
+    assert result["is_fresh"] is False
+    assert result["source"] == "lightweight"
+    assert result["error"] == "invalid_cache_json"
+
+
 def test_cmd_control_plane_session_reset_full_clears_session_artifacts(tmp_path):
     from scripts.repl_admin import cmd_control_plane_session_reset
 

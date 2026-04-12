@@ -18,6 +18,10 @@ Steps:
 2. **Print status summary**:
    `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" policy-status --pretty`
    Report to the user: URL, total pipeline count (explore/canary/stable), any pipelines with consecutive_failures.
+   Also check reflection cache status for observability:
+   `curl -s "http://localhost:<PORT>/api/control-plane/reflection-cache" | jq`
+   If cache is missing/stale and operator wants deep reflection, run:
+   `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/build_reflection_cache.py"`
 
 3. **Sense vertical assets and inject controls** (CC-driven, framework-agnostic) — **do this before step 4**:
    - Read `~/.emerge/connectors/<connector>/NOTES.md` and any `scenarios/*.yaml` files for each connector.

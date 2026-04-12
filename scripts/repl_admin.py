@@ -1405,6 +1405,64 @@ def cmd_control_plane_span_candidates() -> dict:
         return {"ok": True, "candidates": {}}
 
 
+def cmd_control_plane_reflection_cache(ttl_ms: int = 15 * 60 * 1000) -> dict:
+    """Reflection cache status for cockpit observability."""
+    ttl_ms = max(0, int(ttl_ms or 0))
+    state_root = _resolve_state_root()
+    cache_path = state_root / "reflection-cache" / "global.json"
+    now_ms = int(time.time() * 1000)
+    if not cache_path.exists():
+        return {
+            "ok": True,
+            "exists": False,
+            "source": "lightweight",
+            "is_fresh": False,
+            "generated_at_ms": None,
+            "age_ms": None,
+            "ttl_ms": ttl_ms,
+            "summary_preview": "",
+            "meta": {},
+            "cache_path": str(cache_path),
+        }
+    try:
+        raw = json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {
+            "ok": True,
+            "exists": True,
+            "source": "lightweight",
+            "is_fresh": False,
+            "generated_at_ms": None,
+            "age_ms": None,
+            "ttl_ms": ttl_ms,
+            "summary_preview": "",
+            "meta": {},
+            "cache_path": str(cache_path),
+            "error": "invalid_cache_json",
+        }
+
+    generated_at_ms = int(raw.get("generated_at_ms", 0) or 0)
+    summary_text = str(raw.get("summary_text", "") or "")
+    age_ms = max(0, now_ms - generated_at_ms) if generated_at_ms > 0 else None
+    is_fresh = bool(
+        generated_at_ms > 0
+        and summary_text.strip()
+        and (ttl_ms <= 0 or now_ms - generated_at_ms <= ttl_ms)
+    )
+    return {
+        "ok": True,
+        "exists": True,
+        "source": "deep_cache" if is_fresh else "lightweight",
+        "is_fresh": is_fresh,
+        "generated_at_ms": generated_at_ms if generated_at_ms > 0 else None,
+        "age_ms": age_ms,
+        "ttl_ms": ttl_ms,
+        "summary_preview": summary_text[:200],
+        "meta": raw.get("meta", {}),
+        "cache_path": str(cache_path),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Control-plane write API
 # ---------------------------------------------------------------------------
@@ -1736,6 +1794,15 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             ))
         elif path == "/api/control-plane/span-candidates":
             self._json(cmd_control_plane_span_candidates())
+        elif path == "/api/control-plane/reflection-cache":
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try:
+                ttl_ms = int(qs.get("ttl_ms", ["900000"])[0])
+            except Exception:
+                ttl_ms = 900000
+            self._json(cmd_control_plane_reflection_cache(
+                ttl_ms=ttl_ms,
+            ))
         elif path.startswith("/api/control-plane/spans"):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             self._json(cmd_control_plane_spans(

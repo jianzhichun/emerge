@@ -140,20 +140,6 @@ def test_serve_inject_component_merged_into_assets_and_servable(tmp_path, monkey
     assert b"inj" in body and b"ok" in body
 
 
-def test_serve_post_submit_writes_pending(tmp_path, monkeypatch):
-    url = _start_test_server(tmp_path, monkeypatch)
-    actions = [{"type": "pipeline-delete", "key": "x"}]
-    body = json.dumps({"actions": actions}).encode()
-    req = urllib.request.Request(
-        f"{url}/api/submit", data=body,
-        headers={"Content-Type": "application/json"}, method="POST"
-    )
-    with urllib.request.urlopen(req) as resp:
-        data = json.loads(resp.read())
-    assert data["ok"] is True
-    assert (tmp_path / "pending-actions.json").exists()
-
-
 def test_serve_get_status_returns_ok(tmp_path, monkeypatch):
     url = _start_test_server(tmp_path, monkeypatch)
     with urllib.request.urlopen(f"{url}/api/status") as resp:
@@ -162,6 +148,15 @@ def test_serve_get_status_returns_ok(tmp_path, monkeypatch):
     assert "cc_listening" not in data, "cc_listening removed — use server_online"
     assert data["server_online"] is True
     assert isinstance(data["pending"], bool)
+
+
+def test_serve_get_reflection_cache_endpoint(tmp_path, monkeypatch):
+    url = _start_test_server(tmp_path, monkeypatch)
+    with urllib.request.urlopen(f"{url}/api/control-plane/reflection-cache") as resp:
+        data = json.loads(resp.read())
+    assert data["ok"] is True
+    assert "source" in data
+    assert "exists" in data
 
 
 def test_serve_status_and_submit_prefer_repl_root(tmp_path, monkeypatch):

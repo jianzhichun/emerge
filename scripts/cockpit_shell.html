@@ -676,6 +676,7 @@ let policyData = null;
 let assetsData = null;
 let stateData = null;
 let intentsData = null;
+let reflectionCacheData = null;
 let queue = [];
 let currentTab = 'overview';
 let connectorPanelByTab = {};
@@ -757,7 +758,7 @@ let _refreshCountdown = REFRESH_INTERVAL_S;
 let _lastRefreshAt = null;
 
 async function init() {
-  await Promise.all([refreshPolicy(), refreshAssets(), refreshStatus(), refreshGoal(), refreshGoalHistory(), refreshState(), refreshIntents()]);
+  await Promise.all([refreshPolicy(), refreshAssets(), refreshStatus(), refreshGoal(), refreshGoalHistory(), refreshState(), refreshIntents(), refreshReflectionCache()]);
   _lastRefreshAt = new Date();
   applyViewStateFromUrl();
   renderTabs();
@@ -779,7 +780,7 @@ async function init() {
   });
   _resetRefreshTimer();
   setInterval(async () => {
-    await Promise.all([refreshPolicy(), refreshAssets(), refreshState(), refreshIntents()]);
+    await Promise.all([refreshPolicy(), refreshAssets(), refreshState(), refreshIntents(), refreshReflectionCache()]);
     _lastRefreshAt = new Date();
     _resetRefreshTimer();
   }, REFRESH_INTERVAL_S * 1000);
@@ -918,6 +919,13 @@ async function refreshIntents() {
   try {
     const r = await fetch('/api/control-plane/intents');
     intentsData = await r.json();
+  } catch(e) {}
+}
+
+async function refreshReflectionCache() {
+  try {
+    const r = await fetch('/api/control-plane/reflection-cache');
+    reflectionCacheData = await r.json();
   } catch(e) {}
 }
 
@@ -2060,6 +2068,16 @@ function renderOverviewTab() {
   const totalRollbacks = pipelines.reduce((s, p) => s + (p.rollback_executed_count || 0), 0);
   const totalFailures = pipelines.reduce((s, p) => s + (p.consecutive_failures || 0), 0);
   const queueCount = queue.length;
+  const rc = reflectionCacheData || {};
+  const reflectionSource = rc.source === 'deep_cache' ? 'deep cache' : 'lightweight';
+  const reflectionFresh = rc.exists && rc.is_fresh;
+  const reflectionState = !rc.exists
+    ? 'missing'
+    : (reflectionFresh ? 'fresh' : 'stale');
+  const reflectionAgeMin = rc.age_ms != null
+    ? Math.max(0, Math.floor(rc.age_ms / 60000))
+    : null;
+  const reflectionPreview = (rc.summary_preview || '').trim();
 
   // ── Build HTML ──
   const critColor = '#f85149', canaryColor = '#d29922', stableColor = '#3fb950', exploreColor = '#484f58';
@@ -2135,6 +2153,12 @@ function renderOverviewTab() {
         <div class="stat-num ${queueCount > 0 ? 'canary' : 'neutral'}">${queueCount}</div>
         <div class="stat-label">Queued Actions</div>
         <div class="stat-sub">${queueCount ? 'pending submit' : 'queue empty'}</div>
+      </div>
+      <div class="stat-card span-2">
+        <div class="stat-label">Reflection Cache</div>
+        <div class="stat-sub">${escHtml(reflectionSource)} · ${escHtml(reflectionState)}</div>
+        <div class="stat-sub">${reflectionAgeMin != null ? ('age ' + reflectionAgeMin + 'm') : 'no age data'} · ttl ${Math.floor(((rc.ttl_ms || 0) / 60000) || 0)}m</div>
+        <div class="stat-sub" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(reflectionPreview || 'no cached summary')}</div>
       </div>
       <div class="stat-card span-2">
         <div class="stat-label">Status Distribution</div>
