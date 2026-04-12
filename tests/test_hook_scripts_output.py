@@ -593,6 +593,36 @@ def test_stop_failure_no_span_emits_empty(tmp_path: Path):
     assert json.loads(out) == {}
 
 
+def test_task_completed_blocks_when_span_open(tmp_path: Path):
+    """TaskCompleted hook must exit 2 with stderr message when active span is open."""
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps({
+            "active_span_id": "span-task-1",
+            "active_span_intent": "test.write.cmd",
+        }),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+    proc = subprocess.run(
+        ["python3", str(ROOT / "hooks" / "task_completed.py")],
+        input="{}",
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert proc.returncode == 2
+    assert "span-task-1" in proc.stderr
+    assert "icc_span_close" in proc.stderr
+
+
+def test_task_completed_passes_when_no_span(tmp_path: Path):
+    """TaskCompleted hook must exit 0 and print {} when no active span."""
+    out = _run("task_completed.py", {}, tmp_path)
+    assert json.loads(out) == {}
+
+
 def test_init_goal_control_plane_helper(tmp_path):
     from scripts.goal_control_plane import GoalControlPlane, init_goal_control_plane
     from scripts.state_tracker import StateTracker
