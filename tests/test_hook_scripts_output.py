@@ -567,6 +567,32 @@ def test_format_pending_actions_notes_edit():
     assert "NOTES.md" in result
 
 
+def test_stop_failure_clears_active_span(tmp_path: Path):
+    """StopFailure hook must clear active_span_id from state.json and emit systemMessage."""
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps({
+            "active_span_id": "span-err-1",
+            "active_span_intent": "test.read.op",
+            "goal": "",
+        }),
+        encoding="utf-8",
+    )
+    out = _run("stop_failure.py", {"error": "rate_limit"}, tmp_path)
+    result = json.loads(out)
+    assert "systemMessage" in result
+    assert "span-err-1" in result["systemMessage"]
+    assert "rate_limit" in result["systemMessage"]
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert "active_span_id" not in state or not state["active_span_id"]
+
+
+def test_stop_failure_no_span_emits_empty(tmp_path: Path):
+    """StopFailure hook must emit {} when no active span is present."""
+    out = _run("stop_failure.py", {"error": "rate_limit"}, tmp_path)
+    assert json.loads(out) == {}
+
+
 def test_init_goal_control_plane_helper(tmp_path):
     from scripts.goal_control_plane import GoalControlPlane, init_goal_control_plane
     from scripts.state_tracker import StateTracker
