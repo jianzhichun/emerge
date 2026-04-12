@@ -24,6 +24,10 @@ import sys
 import time
 from pathlib import Path
 
+# Add parent directory to path so relative imports work when script is executed directly
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.pending_actions import format_pending_actions as _format_actions
+
 _stop = False
 
 
@@ -41,33 +45,6 @@ def _state_root() -> Path:
     if env:
         return Path(env)
     return Path.home() / ".emerge" / "repl"
-
-
-def _format_actions(actions: list) -> str:
-    lines = ["[Cockpit] The operator submitted the following actions — execute in order:"]
-    for i, a in enumerate(actions, 1):
-        t = a.get("type", "unknown")
-        if t == "tool-call":
-            call = a.get("call", {}) if isinstance(a.get("call"), dict) else {}
-            tool = call.get("tool", "?")
-            call_args = call.get("arguments", {})
-            meta = a.get("meta", {}) if isinstance(a.get("meta"), dict) else {}
-            scope = str(meta.get("scope", "")).strip()
-            scope_suffix = f" scope={scope}" if scope else ""
-            lines.append(f"{i}. Execute tool-call {tool} args={call_args}{scope_suffix}")
-        elif t == "pipeline-set":
-            lines.append(f"{i}. pipeline-set {a.get('key')} fields={a.get('fields', {})}")
-        elif t == "pipeline-delete":
-            lines.append(f"{i}. pipeline-delete {a.get('key')}")
-        elif t == "notes-edit":
-            lines.append(f"{i}. Update {a.get('connector')} NOTES.md (full replace)")
-        elif t == "notes-comment":
-            lines.append(f"{i}. Append comment to {a.get('connector')} NOTES.md: {str(a.get('comment', ''))[:80]}")
-        elif t == "crystallize-component":
-            lines.append(f"{i}. Crystallize component {a.get('filename')} -> {a.get('connector')}/cockpit/")
-        else:
-            lines.append(f"{i}. {t}: {a}")
-    return "\n".join(lines)
 
 
 def main() -> None:

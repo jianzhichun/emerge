@@ -504,3 +504,33 @@ def test_save_tracker_preserves_span_fields(tmp_path):
     result = json.loads(state_path.read_text(encoding="utf-8"))
     assert result["active_span_id"] == "span-abc"
     assert result["active_span_intent"] == "test.read.pipe"
+
+
+def test_format_pending_actions_tool_call():
+    from scripts.pending_actions import format_pending_actions
+    actions = [
+        {
+            "type": "tool-call",
+            "call": {"tool": "icc_exec", "arguments": {"intent_signature": "test.read.pipe"}},
+            "meta": {"scope": "connector"},
+        }
+    ]
+    result = format_pending_actions(actions)
+    assert result.startswith("[Cockpit]")
+    assert "icc_exec" in result
+    assert "scope=connector" in result
+
+
+def test_format_pending_actions_pipeline_set():
+    from scripts.pending_actions import format_pending_actions
+    actions = [{"type": "pipeline-set", "key": "foo", "fields": {"stable": True}}]
+    result = format_pending_actions(actions)
+    assert "pipeline-set foo" in result
+
+
+def test_format_pending_actions_notes_edit():
+    from scripts.pending_actions import format_pending_actions
+    actions = [{"type": "notes-edit", "connector": "gmail"}]
+    result = format_pending_actions(actions)
+    assert "gmail" in result
+    assert "NOTES.md" in result
