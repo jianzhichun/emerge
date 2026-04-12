@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -9,8 +10,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.goal_control_plane import EVENT_HOOK_PAYLOAD, init_goal_control_plane  # noqa: E402
-from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
+from scripts.policy_config import default_exec_root, default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
+from scripts.span_tracker import SpanTracker  # noqa: E402
 from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
+
+_REFLECTION_TURN_THRESHOLD = 20
+_REFLECTION_CACHE_TTL_MS = 15 * 60 * 1000
 
 
 def _drain_pending_actions(state_root: Path) -> str:
@@ -59,6 +64,9 @@ def main() -> None:
             confidence=0.5,
         )
         _mutated = True
+    turn_count = int(tracker.state.get("turn_count", 0) or 0) + 1
+    tracker.state["turn_count"] = turn_count
+    _mutated = True
 
     raw_budget = payload.get("budget_chars", 0)
     try:
@@ -73,6 +81,14 @@ def main() -> None:
         goal_override=str(snap.get("text", "")),
         goal_source_override=str(snap.get("source", "unset")),
     )
+    if turn_count == _REFLECTION_TURN_THRESHOLD:
+        exec_root = Path(os.environ.get("EMERGE_STATE_ROOT", str(default_exec_root())))
+        reflection = SpanTracker(
+            state_root=exec_root,
+            hook_state_root=state_root,
+        ).format_reflection_with_cache(cache_ttl_ms=_REFLECTION_CACHE_TTL_MS)
+        if reflection:
+            context_text = reflection + "\n\n" + context_text
     if _mutated:
         save_tracker(state_path, tracker)
 

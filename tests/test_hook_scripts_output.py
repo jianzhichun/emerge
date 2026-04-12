@@ -717,3 +717,249 @@ def test_init_goal_control_plane_helper(tmp_path):
     assert isinstance(gcp, GoalControlPlane)
     snap = gcp.read_snapshot()
     assert snap["text"] == "my goal"
+
+
+# ── Span Protocol injection tests ────────────────────────────────────────────
+
+
+def test_session_start_includes_span_protocol(tmp_path, monkeypatch):
+    import json, subprocess, sys
+    hook_state = tmp_path / "hook-state"
+    hook_state.mkdir()
+    (hook_state / "state.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(hook_state))
+    result = subprocess.run(
+        [sys.executable, "hooks/session_start.py"],
+        input=json.dumps({}),
+        capture_output=True, text=True,
+        cwd=str(Path(__file__).parents[1]),
+    )
+    assert result.returncode == 0
+    out = json.loads(result.stdout.strip())
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "Span Protocol" in ctx
+    assert "icc_span_open" in ctx
+    assert "icc_span_close" in ctx
+
+
+def test_recovery_token_includes_active_span_fields():
+    from scripts.state_tracker import StateTracker
+    tracker = StateTracker()
+    tracker.state["active_span_id"] = "span-abc"
+    tracker.state["active_span_intent"] = "lark.read.get-doc"
+    token = tracker.format_recovery_token()
+    assert token["active_span_id"] == "span-abc"
+    assert token["active_span_intent"] == "lark.read.get-doc"
+
+
+def test_recovery_token_active_span_fields_null_when_no_span():
+    from scripts.state_tracker import StateTracker
+    tracker = StateTracker()
+    token = tracker.format_recovery_token()
+    assert token["active_span_id"] is None
+    assert token["active_span_intent"] is None
+
+
+def test_pre_compact_includes_span_protocol(tmp_path):
+    env = os.environ.copy()
+    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+    (tmp_path / "state.json").write_text("{}", encoding="utf-8")
+    proc = subprocess.run(
+        ["python3", str(ROOT / "hooks" / "pre_compact.py")],
+        input="{}",
+        capture_output=True, text=True, env=env, check=True,
+    )
+    out = json.loads(proc.stdout.strip())
+    ctx = out["systemMessage"]
+    assert "Span Protocol" in ctx
+    assert "icc_span_open" in ctx
+
+
+def test_pre_compact_includes_active_span_reminder(tmp_path):
+    env = os.environ.copy()
+    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+    state = {
+        "active_span_id": "span-xyz",
+        "active_span_intent": "zwcad.read.layers",
+    }
+    (tmp_path / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    proc = subprocess.run(
+        ["python3", str(ROOT / "hooks" / "pre_compact.py")],
+        input="{}",
+        capture_output=True, text=True, env=env, check=True,
+    )
+    out = json.loads(proc.stdout.strip())
+    ctx = out["systemMessage"]
+    assert "Active span: span-xyz (zwcad.read.layers)" in ctx
+    assert "icc_span_close" in ctx
+
+
+def _seed_span_reflection_data(exec_root: Path) -> None:
+    exec_root.mkdir(parents=True, exist_ok=True)
+    (exec_root / "span-candidates.json").write_text(
+        json.dumps(
+            {
+                "spans": {
+                    "lark.read.get-doc": {
+                        "attempts": 40,
+                        "successes": 40,
+                        "human_fixes": 0,
+                        "consecutive_failures": 0,
+                        "recent_outcomes": [1] * 20,
+                        "last_ts_ms": 1000,
+                    },
+                    "lark.read.list-records": {
+                        "attempts": 20,
+                        "successes": 19,
+                        "human_fixes": 0,
+                        "consecutive_failures": 0,
+                        "recent_outcomes": [1] * 20,
+                        "last_ts_ms": 2000,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    wal_dir = exec_root / "span-wal"
+    wal_dir.mkdir(parents=True, exist_ok=True)
+    (wal_dir / "spans.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"intent_signature": "lark.read.get-doc", "outcome": "success"}),
+                json.dumps({"intent_signature": "lark.read.list-records", "outcome": "failure"}),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_pre_compact_includes_muscle_memory(tmp_path):
+    hook_state = tmp_path / "hook-state"
+    hook_state.mkdir()
+    (hook_state / "state.json").write_text("{}", encoding="utf-8")
+    exec_root = tmp_path / "exec-state"
+    _seed_span_reflection_data(exec_root)
+    env = os.environ.copy()
+    env["CLAUDE_PLUGIN_DATA"] = str(hook_state)
+    env["EMERGE_STATE_ROOT"] = str(exec_root)
+    proc = subprocess.run(
+        ["python3", str(ROOT / "hooks" / "pre_compact.py")],
+        input="{}",
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    out = json.loads(proc.stdout.strip())
+    ctx = out["systemMessage"]
+    assert "Muscle memory" in ctx
+    assert "Stable (auto-bridge): lark.read.get-doc" in ctx
+    assert "Canary: lark.read.list-records" in ctx
+    assert "Recent: lark.read.get-doc 1ok/0fail" in ctx
+
+
+def test_pre_compact_prefers_cached_deep_reflection(tmp_path):
+    hook_state = tmp_path / "hook-state"
+    hook_state.mkdir()
+    (hook_state / "state.json").write_text("{}", encoding="utf-8")
+    exec_root = tmp_path / "exec-state"
+    _seed_span_reflection_data(exec_root)
+    cache_dir = exec_root / "reflection-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / "global.json").write_text(
+        json.dumps(
+            {
+                "generated_at_ms": 9999999999999,
+                "summary_text": "Muscle memory (deep)\nHigh-confidence intents: cached.intent",
+                "meta": {"builder": "test"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["CLAUDE_PLUGIN_DATA"] = str(hook_state)
+    env["EMERGE_STATE_ROOT"] = str(exec_root)
+    proc = subprocess.run(
+        ["python3", str(ROOT / "hooks" / "pre_compact.py")],
+        input="{}",
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    out = json.loads(proc.stdout.strip())
+    ctx = out["systemMessage"]
+    assert "Muscle memory (deep)" in ctx
+    assert "cached.intent" in ctx
+
+
+def test_user_prompt_submit_reflection_at_turn_threshold(tmp_path):
+    hook_state = tmp_path / "hook-state"
+    hook_state.mkdir()
+    (hook_state / "state.json").write_text(json.dumps({"turn_count": 19}), encoding="utf-8")
+    exec_root = tmp_path / "exec-state"
+    _seed_span_reflection_data(exec_root)
+    env = os.environ.copy()
+    env["CLAUDE_PLUGIN_DATA"] = str(hook_state)
+    env["EMERGE_STATE_ROOT"] = str(exec_root)
+    proc = subprocess.run(
+        ["python3", str(ROOT / "hooks" / "user_prompt_submit.py")],
+        input=json.dumps({}),
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    out = json.loads(proc.stdout.strip())
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "Muscle memory" in ctx
+    state_after = json.loads((hook_state / "state.json").read_text(encoding="utf-8"))
+    assert state_after.get("turn_count") == 20
+
+
+def test_user_prompt_submit_no_reflection_before_threshold(tmp_path):
+    hook_state = tmp_path / "hook-state"
+    hook_state.mkdir()
+    (hook_state / "state.json").write_text(json.dumps({"turn_count": 18}), encoding="utf-8")
+    exec_root = tmp_path / "exec-state"
+    _seed_span_reflection_data(exec_root)
+    env = os.environ.copy()
+    env["CLAUDE_PLUGIN_DATA"] = str(hook_state)
+    env["EMERGE_STATE_ROOT"] = str(exec_root)
+    proc = subprocess.run(
+        ["python3", str(ROOT / "hooks" / "user_prompt_submit.py")],
+        input=json.dumps({}),
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    out = json.loads(proc.stdout.strip())
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "Muscle memory" not in ctx
+    state_after = json.loads((hook_state / "state.json").read_text(encoding="utf-8"))
+    assert state_after.get("turn_count") == 19
+
+
+def test_build_reflection_cache_script_writes_cache(tmp_path):
+    hook_state = tmp_path / "hook-state"
+    hook_state.mkdir()
+    exec_root = tmp_path / "exec-state"
+    _seed_span_reflection_data(exec_root)
+    env = os.environ.copy()
+    env["CLAUDE_PLUGIN_DATA"] = str(hook_state)
+    env["EMERGE_STATE_ROOT"] = str(exec_root)
+    proc = subprocess.run(
+        ["python3", str(ROOT / "scripts" / "build_reflection_cache.py")],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    assert "Reflection cache written." in proc.stdout
+    cache_file = exec_root / "reflection-cache" / "global.json"
+    assert cache_file.exists()
+    data = json.loads(cache_file.read_text(encoding="utf-8"))
+    assert "summary_text" in data
+    assert "Muscle memory (deep)" in data["summary_text"]

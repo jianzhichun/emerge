@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/version-v0.3.53-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-482%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-508%20passing-brightgreen?logo=pytest)
 
 **Emerge** solves a core problem: AI operators repeat the same work but do not learn from it, so every session re-reasons from scratch. It uses a **dual flywheel** to crystallize repeated work into deterministic pipelines: a **forward flywheel** (`icc_exec`/`icc_span_open` tracking → policy promotion explore→canary→stable → auto-crystallized `.py+.yaml` pipelines → zero-LLM execution), and a **reverse flywheel** (`OperatorMonitor` observes human operators → `PatternDetector` detects repetition → elicitation captures intent → AI takes over).
 
@@ -293,7 +293,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 | Memory Hub sync agent    | `scripts/emerge_sync.py`, `scripts/hub_config.py` — bidirectional connector asset sync via orphan-branch git repo; `icc_hub` MCP tool in daemon |
 | Test connector (mock)    | `tests/connectors/mock/pipelines/`                                                                                                             |
 | Slash commands           | `commands/` (`init`, `cockpit`, `runner-status`, `import`, `export`, `hub`)                                                                     |
-| Skills                   | `skills/` (`initializing-vertical-flywheel`, `remote-runner-dev`, `writing-vertical-adapter`, `operator-monitor-debug`, `policy-optimization`) |
+| Skills                   | `skills/` (`initializing-vertical-flywheel`, `remote-runner-dev`, `writing-vertical-adapter`, `operator-monitor-debug`, `policy-optimization`, `reflection-deep-dive`) |
 | Reference (submodule)    | `references/claude-code`                                                                                                                       |
 
 

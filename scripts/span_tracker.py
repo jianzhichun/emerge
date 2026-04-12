@@ -124,6 +124,16 @@ class SpanTracker:
     def _state_path(self) -> Path:
         return self._hook_state_root / "state.json"
 
+    def _reflection_cache_path(self) -> Path:
+        return self._state_root / "reflection-cache" / "global.json"
+
+    @staticmethod
+    def _cap_reflection_text(text: str, max_chars: int = 700) -> str:
+        trimmed = str(text or "").strip()
+        if len(trimmed) <= max_chars:
+            return trimmed
+        return trimmed[: max_chars - 3].rstrip() + "..."
+
     # ── helpers ────────────────────────────────────────────────────────────
 
     def _atomic_write(self, path: Path, data: dict) -> None:
@@ -343,3 +353,102 @@ class SpanTracker:
                     best = rec
                     best_ts = int(rec["closed_at_ms"])
         return best
+
+    def format_reflection(self, max_intents: int = 8) -> str:
+        """Build a compact muscle-memory summary for hook context injection."""
+        candidates = self._load_candidates().get("spans", {})
+        if not candidates:
+            return ""
+
+        stable: list[str] = []
+        canary: list[str] = []
+        for sig in candidates:
+            status = self.get_policy_status(sig)
+            if status == "stable":
+                stable.append(sig)
+            elif status == "canary":
+                canary.append(sig)
+
+        recent: dict[str, dict[str, int]] = {}
+        wal = self._wal_path()
+        if wal.exists():
+            try:
+                rows = wal.read_text(encoding="utf-8").splitlines()[-20:]
+            except OSError:
+                rows = []
+            for line in rows:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                sig = str(rec.get("intent_signature", "")).strip()
+                if not sig:
+                    continue
+                entry = recent.setdefault(sig, {"ok": 0, "fail": 0})
+                if rec.get("outcome") == "success":
+                    entry["ok"] += 1
+                else:
+                    entry["fail"] += 1
+
+        parts: list[str] = []
+        if stable:
+            parts.append(
+                "Stable (auto-bridge): " + ", ".join(sorted(stable)[:max_intents])
+            )
+        if canary:
+            parts.append("Canary: " + ", ".join(sorted(canary)[:3]))
+        if recent:
+            recent_rows: list[str] = []
+            for sig in sorted(recent)[:5]:
+                entry = recent[sig]
+                recent_rows.append(f"{sig} {entry['ok']}ok/{entry['fail']}fail")
+            parts.append("Recent: " + ", ".join(recent_rows))
+        if not parts:
+            return ""
+        return self._cap_reflection_text("Muscle memory\n" + "\n".join(parts))
+
+    def load_reflection_cache(self, ttl_ms: int = 15 * 60 * 1000) -> str:
+        """Return cached deep reflection if present and fresh; otherwise empty."""
+        cache_path = self._reflection_cache_path()
+        if not cache_path.exists():
+            return ""
+        try:
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+        except Exception:
+            return ""
+        generated_at = int(data.get("generated_at_ms", 0) or 0)
+        summary = self._cap_reflection_text(str(data.get("summary_text", "") or ""))
+        if not summary:
+            return ""
+        now_ms = int(time.time() * 1000)
+        if ttl_ms > 0 and generated_at > 0 and now_ms - generated_at > ttl_ms:
+            return ""
+        return summary
+
+    def write_reflection_cache(self, summary_text: str, meta: dict | None = None) -> None:
+        """Write deep reflection cache for hook-side fast reads."""
+        summary = self._cap_reflection_text(summary_text)
+        if not summary:
+            return
+        cache_path = self._reflection_cache_path()
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "generated_at_ms": int(time.time() * 1000),
+            "summary_text": summary,
+            "meta": meta or {},
+        }
+        self._atomic_write(cache_path, payload)
+
+    def format_reflection_with_cache(
+        self,
+        max_intents: int = 8,
+        cache_ttl_ms: int = 15 * 60 * 1000,
+    ) -> str:
+        """Prefer fresh deep cache; fallback to local lightweight reflection."""
+        cached = self.load_reflection_cache(ttl_ms=cache_ttl_ms)
+        if cached:
+            return cached
+        return self.format_reflection(max_intents=max_intents)

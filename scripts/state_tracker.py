@@ -305,6 +305,8 @@ class StateTracker:
                 if (isinstance(r, dict) and r.get("status") == "open") or isinstance(r, str)
             ],
             "deltas": token_deltas,
+            "active_span_id": self.state.get("active_span_id") or None,
+            "active_span_intent": self.state.get("active_span_intent") or None,
         }
         if budget_chars:
             encoded = json.dumps(token, ensure_ascii=True, separators=(",", ":"))
@@ -481,8 +483,8 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
         "verification_state": verification_state,
         "consistency_window_ms": consistency_window_ms,
     }
-    # Preserve flywheel span fields (written by SpanTracker / hooks as raw JSON keys).
-    for _k in ("active_span_id", "active_span_intent"):
+    # Preserve flywheel span/session fields (written by SpanTracker / hooks as raw JSON keys).
+    for _k in ("active_span_id", "active_span_intent", "turn_count"):
         if _k in raw:
             out[_k] = raw[_k]
     return out

@@ -2290,6 +2290,75 @@ def test_span_open_errors_on_missing_intent(tmp_path, monkeypatch):
     assert result.get("isError") is True
 
 
+# ── icc_span_open intent gate ─────────────────────────────────────────────────
+
+
+def _seed_span_candidates(state_root, entries: dict):
+    """Write span-candidates.json with pre-seeded entries."""
+    import json
+    p = state_root / "span-candidates.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"spans": entries}), encoding="utf-8")
+
+
+def test_span_open_confirm_needed_new_intent_existing_connector(tmp_path, monkeypatch):
+    import json
+    daemon, _ = _make_span_daemon(tmp_path, monkeypatch)
+    state_root = tmp_path / "state"
+    _seed_span_candidates(state_root, {
+        "lark.read.get-doc": {"attempts": 5, "successes": 5, "last_ts_ms": 100},
+    })
+    result = daemon.call_tool("icc_span_open", {"intent_signature": "lark.read.fetch-doc"})
+    assert result.get("isError") is not True
+    body = json.loads(result["content"][0]["text"])
+    assert body["status"] == "confirm_needed"
+    assert "lark.read.get-doc" in body["message"]
+    assert body["existing_intents"]
+
+
+def test_span_open_confirm_needed_retry_opens_span(tmp_path, monkeypatch):
+    import json
+    daemon, _ = _make_span_daemon(tmp_path, monkeypatch)
+    state_root = tmp_path / "state"
+    _seed_span_candidates(state_root, {
+        "lark.read.get-doc": {"attempts": 5, "successes": 5, "last_ts_ms": 100},
+    })
+    r1 = daemon.call_tool("icc_span_open", {"intent_signature": "lark.read.fetch-doc"})
+    body1 = json.loads(r1["content"][0]["text"])
+    assert body1["status"] == "confirm_needed"
+    r2 = daemon.call_tool("icc_span_open", {"intent_signature": "lark.read.fetch-doc"})
+    assert r2.get("isError") is not True
+    body2 = json.loads(r2["content"][0]["text"])
+    assert body2["status"] == "opened"
+    assert "span_id" in body2
+
+
+def test_span_open_no_gate_for_new_connector(tmp_path, monkeypatch):
+    import json
+    daemon, _ = _make_span_daemon(tmp_path, monkeypatch)
+    state_root = tmp_path / "state"
+    _seed_span_candidates(state_root, {
+        "lark.read.get-doc": {"attempts": 5, "successes": 5, "last_ts_ms": 100},
+    })
+    result = daemon.call_tool("icc_span_open", {"intent_signature": "zwcad.read.layers"})
+    assert result.get("isError") is not True
+    body = json.loads(result["content"][0]["text"])
+    assert body["status"] == "opened"
+
+
+def test_span_open_no_gate_for_existing_intent(tmp_path, monkeypatch):
+    import json
+    daemon, _ = _make_span_daemon(tmp_path, monkeypatch)
+    state_root = tmp_path / "state"
+    _seed_span_candidates(state_root, {
+        "lark.read.get-doc": {"attempts": 5, "successes": 5, "last_ts_ms": 100},
+    })
+    result = daemon.call_tool("icc_span_open", {"intent_signature": "lark.read.get-doc"})
+    assert result.get("isError") is not True
+    body = json.loads(result["content"][0]["text"])
+    assert body["status"] == "opened"
+
+
 # ── icc_span_close ────────────────────────────────────────────────────────────
 
 def test_span_close_writes_to_wal(tmp_path, monkeypatch):

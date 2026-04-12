@@ -36,12 +36,22 @@ def main() -> None:
     # Always save on SessionStart: clear stale flywheel span from the previous session.
     tracker.state.pop("active_span_id", None)
     tracker.state.pop("active_span_intent", None)
+    tracker.state.pop("turn_count", None)
     save_tracker(state_path, tracker)
     snap = goal_cp.read_snapshot()
     context_text = tracker.format_additional_context(
         goal_override=str(snap.get("text", "")),
         goal_source_override=str(snap.get("source", "unset")),
     )
+
+    _SPAN_PROTOCOL = (
+        "Span Protocol\n"
+        "Before any reusable multi-step tool sequence, "
+        'call icc_span_open(intent_signature="connector.mode.name"). '
+        "Call icc_span_close(outcome=...) when done. "
+        "Stable intents bridge to pipelines automatically."
+    )
+    context_text = _SPAN_PROTOCOL + "\n\n" + context_text
 
     conflicts_path = Path.home() / ".emerge" / "pending-conflicts.json"
     try:

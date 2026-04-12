@@ -155,6 +155,77 @@ def test_latest_successful_span_ignores_failures(tracker):
     assert tracker.latest_successful_span("lark.read.get-doc") is None
 
 
+def test_span_reflection_empty_when_no_data(tracker):
+    assert tracker.format_reflection() == ""
+
+
+def test_span_reflection_with_stable_intents(tracker, monkeypatch):
+    monkeypatch.setattr("scripts.span_tracker.STABLE_MIN_ATTEMPTS", 1)
+    monkeypatch.setattr("scripts.span_tracker.STABLE_MIN_SUCCESS_RATE", 1.0)
+    s = tracker.open_span("lark.read.get-doc")
+    tracker.close_span(s, outcome="success")
+    reflection = tracker.format_reflection()
+    assert "Muscle memory" in reflection
+    assert "Stable (auto-bridge): lark.read.get-doc" in reflection
+
+
+def test_span_reflection_includes_recent_wal(tracker):
+    s1 = tracker.open_span("lark.read.get-doc")
+    tracker.close_span(s1, outcome="success")
+    s2 = tracker.open_span("lark.write.create-doc")
+    tracker.close_span(s2, outcome="failure")
+    reflection = tracker.format_reflection()
+    assert "Recent:" in reflection
+    assert "lark.read.get-doc 1ok/0fail" in reflection
+    assert "lark.write.create-doc 0ok/1fail" in reflection
+
+
+def test_format_reflection_uses_policy_status(tracker, monkeypatch):
+    monkeypatch.setattr("scripts.span_tracker.PROMOTE_MIN_ATTEMPTS", 1)
+    monkeypatch.setattr("scripts.span_tracker.PROMOTE_MIN_SUCCESS_RATE", 1.0)
+    monkeypatch.setattr("scripts.span_tracker.PROMOTE_MAX_HUMAN_FIX_RATE", 1.0)
+    monkeypatch.setattr("scripts.span_tracker.STABLE_MIN_ATTEMPTS", 2)
+    monkeypatch.setattr("scripts.span_tracker.STABLE_MIN_SUCCESS_RATE", 1.0)
+    # canary intent: 1/1 success (meets promote, not stable)
+    s1 = tracker.open_span("lark.read.list-records")
+    tracker.close_span(s1, outcome="success")
+    # stable intent: 2/2 success
+    s2 = tracker.open_span("lark.read.get-doc")
+    tracker.close_span(s2, outcome="success")
+    s3 = tracker.open_span("lark.read.get-doc")
+    tracker.close_span(s3, outcome="success")
+    reflection = tracker.format_reflection()
+    assert "Stable (auto-bridge): lark.read.get-doc" in reflection
+    assert "Canary: lark.read.list-records" in reflection
+
+
+def test_reflection_cache_roundtrip(tracker):
+    tracker.write_reflection_cache("Muscle memory (deep)\nHigh-confidence intents: a.b.c")
+    cached = tracker.load_reflection_cache()
+    assert "Muscle memory (deep)" in cached
+
+
+def test_reflection_cache_expired_returns_empty(tracker, monkeypatch):
+    tracker.write_reflection_cache("Muscle memory (deep)\nHigh-confidence intents: a.b.c")
+    monkeypatch.setattr("scripts.span_tracker.time.time", lambda: 10**12)
+    assert tracker.load_reflection_cache(ttl_ms=1) == ""
+
+
+def test_format_reflection_with_cache_prefers_cached(tracker):
+    tracker.write_reflection_cache("Muscle memory (deep)\nHigh-confidence intents: cached.intent")
+    # No candidates/WAL needed — fresh cache should be returned directly.
+    result = tracker.format_reflection_with_cache()
+    assert "cached.intent" in result
+
+
+def test_reflection_cache_text_is_capped(tracker):
+    very_long = "Muscle memory (deep)\n" + ("x" * 2000)
+    tracker.write_reflection_cache(very_long)
+    cached = tracker.load_reflection_cache()
+    assert len(cached) <= 700
+    assert cached.endswith("...")
+
+
 # ── _atomic_write ─────────────────────────────────────────────────────────────
 
 def test_atomic_write_leaves_no_stray_tmp_file(tmp_path):

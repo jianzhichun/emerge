@@ -148,6 +148,7 @@ class EmergeDaemon:
             hook_state_root=_hook_state_root,
         )
         self._open_spans: dict[str, Any] = {}  # span_id → SpanRecord; in-process cache
+        self._intent_gate: set[str] = set()  # intents confirmed as genuinely new
 
     def _hook_state_path(self) -> Path:
         return Path(default_hook_state_root()) / "state.json"
@@ -773,7 +774,33 @@ class EmergeDaemon:
                         })
                     except Exception:
                         pass  # PipelineMissingError or any failure → fall through to explore
-            # No bridge: open a new span
+            # Intent gate: new intent for existing connector → confirm_needed
+            _candidates = self._span_tracker._load_candidates()["spans"]
+            if intent_signature not in _candidates:
+                _connector = intent_signature.split(".", 1)[0]
+                _same_connector = {
+                    k: v for k, v in _candidates.items()
+                    if k.startswith(f"{_connector}.")
+                }
+                if _same_connector and intent_signature not in self._intent_gate:
+                    self._intent_gate.add(intent_signature)
+                    _items = []
+                    for _k, _v in sorted(
+                        _same_connector.items(),
+                        key=lambda x: -x[1].get("attempts", 0),
+                    )[:5]:
+                        _items.append(f"{_k} ({_v.get('successes', 0)}/{_v.get('attempts', 0)})")
+                    return self._tool_ok_json({
+                        "status": "confirm_needed",
+                        "intent_signature": intent_signature,
+                        "existing_intents": _items,
+                        "message": (
+                            f"New intent for {_connector}. "
+                            f"Existing: {', '.join(_items)}. "
+                            "Re-call with this intent to confirm, or use an existing one."
+                        ),
+                    })
+            # Open a new span
             try:
                 span = self._span_tracker.open_span(
                     intent_signature=intent_signature,
