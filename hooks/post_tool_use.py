@@ -212,19 +212,6 @@ def main() -> None:
 
     save_tracker(state_path, tracker)
 
-    # Belt-and-suspenders: _normalize_state now preserves span fields, but
-    # re-persist them explicitly in case of any round-trip edge case.
-    if _active_span_id:
-        try:
-            _state_now = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
-            _state_now["active_span_id"] = _active_span_id
-            _state_now["active_span_intent"] = _active_span_intent
-            _tmp_state = state_path.with_suffix(".tmp")
-            _tmp_state.write_text(json.dumps(_state_now, ensure_ascii=False), encoding="utf-8")
-            os.replace(_tmp_state, state_path)
-        except Exception:
-            pass
-
     hook_specific: dict = {
         "hookEventName": "PostToolUse",
         "additionalContext": context_text,

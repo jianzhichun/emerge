@@ -506,6 +506,37 @@ def test_save_tracker_preserves_span_fields(tmp_path):
     assert result["active_span_intent"] == "test.read.pipe"
 
 
+def test_post_tool_use_preserves_span_id(tmp_path):
+    """post_tool_use hook must preserve active_span_id and active_span_intent via save_tracker alone."""
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps({
+            "active_span_id": "span-xyz",
+            "active_span_intent": "test.read.op",
+            "goal": "",
+        }),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+    payload = {
+        "tool_name": "mcp__plugin_emerge__icc_exec",
+        "tool_response": {"content": [{"type": "text", "text": "{}"}]},
+        "tool_input": {"intent_signature": "test.read.op"},
+    }
+    proc = subprocess.run(
+        ["python3", str(ROOT / "hooks" / "post_tool_use.py")],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    result = json.loads(state_path.read_text(encoding="utf-8"))
+    assert result.get("active_span_id") == "span-xyz"
+    assert result.get("active_span_intent") == "test.read.op"
+
+
 def test_format_pending_actions_tool_call():
     from scripts.pending_actions import format_pending_actions
     actions = [
