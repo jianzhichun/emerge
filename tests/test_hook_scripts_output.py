@@ -485,3 +485,22 @@ def test_watch_pending_emits_and_renames(tmp_path: Path):
     assert "icc_exec" in stdout
     assert (tmp_path / "pending-actions.processed.json").exists()
     assert not pending.exists()
+
+
+def test_save_tracker_preserves_span_fields(tmp_path):
+    """save_tracker must preserve active_span_id and active_span_intent fields."""
+    from scripts.state_tracker import load_tracker, save_tracker
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps({
+            "active_span_id": "span-abc",
+            "active_span_intent": "test.read.pipe",
+            "goal": "test goal",
+        }),
+        encoding="utf-8",
+    )
+    tracker = load_tracker(state_path)
+    save_tracker(state_path, tracker)
+    result = json.loads(state_path.read_text(encoding="utf-8"))
+    assert result["active_span_id"] == "span-abc"
+    assert result["active_span_intent"] == "test.read.pipe"

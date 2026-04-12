@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -501,14 +499,5 @@ def load_tracker(path: Path) -> StateTracker:
 
 
 def save_tracker(path: Path, tracker: StateTracker) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix="state-", suffix=".json", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
-            json.dump(_normalize_state(tracker.to_dict()), tmp, ensure_ascii=True, indent=2)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-        os.replace(tmp_path, path)
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+    from scripts.policy_config import atomic_write_json
+    atomic_write_json(path, _normalize_state(tracker.to_dict()))
