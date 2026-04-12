@@ -1,9 +1,9 @@
 # Emerge
 
-![Version](https://img.shields.io/badge/version-v0.3.52-blue)
+![Version](https://img.shields.io/badge/version-v0.3.53-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-479%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-482%20passing-brightgreen?logo=pytest)
 
 **Emerge** solves a core problem: AI operators repeat the same work but do not learn from it, so every session re-reasons from scratch. It uses a **dual flywheel** to crystallize repeated work into deterministic pipelines: a **forward flywheel** (`icc_exec`/`icc_span_open` tracking → policy promotion explore→canary→stable → auto-crystallized `.py+.yaml` pipelines → zero-LLM execution), and a **reverse flywheel** (`OperatorMonitor` observes human operators → `PatternDetector` detects repetition → elicitation captures intent → AI takes over).
 
@@ -289,7 +289,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 | Pattern detector         | `scripts/pattern_detector.py`                                                                                                                  |
 | Distiller                | `scripts/distiller.py`                                                                                                                         |
 | Operator monitor         | `scripts/operator_monitor.py`                                                                                                                  |
-| Ops / bootstrap / cockpit | `scripts/repl_admin.py` — HTTP cockpit with SSE real-time status, `cockpit_shell.html` SPA frontend                                           |
+| Ops / bootstrap / cockpit | `scripts/repl_admin.py` — HTTP cockpit with SSE real-time status, `cockpit_shell.html` SPA frontend; `scripts/watch_pending.py` — cockpit submit → CC Monitor stream |
 | Memory Hub sync agent    | `scripts/emerge_sync.py`, `scripts/hub_config.py` — bidirectional connector asset sync via orphan-branch git repo; `icc_hub` MCP tool in daemon |
 | Test connector (mock)    | `tests/connectors/mock/pipelines/`                                                                                                             |
 | Slash commands           | `commands/` (`init`, `cockpit`, `runner-status`, `import`, `export`, `hub`)                                                                     |
@@ -303,7 +303,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 | Command          | Description                                                                                      |
 | ---------------- | ------------------------------------------------------------------------------------------------ |
 | `/init`          | Initialize a vertical flywheel from natural language context                                     |
-| `/cockpit`       | Browser control plane — SSE real-time status, intent overview, delta/risk/span/exec panels, audit trail, session mgmt |
+| `/cockpit`       | Browser control plane — SSE real-time status, intent overview, delta/risk/span/exec panels, audit trail, session mgmt. Operator submits reach the agent via CC Monitor tool (`scripts/watch_pending.py`, CC ≥2.1.98) with `UserPromptSubmit` hook fallback. |
 | `/runner-status` | Show remote runner health status                                                                 |
 | `/import`        | Import a connector asset package zip into local connector/pipeline state                         |
 | `/export`        | Export a connector asset package zip (connector files + registry entries)                        |
@@ -349,7 +349,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 python -m pytest tests -q
 ```
 
-Current baseline: **479** tests passing.
+Current baseline: **482** tests passing.
 
 Documentation release checklist: `docs/doc-consistency-checklist.md`
 
