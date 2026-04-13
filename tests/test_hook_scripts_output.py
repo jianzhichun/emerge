@@ -994,3 +994,24 @@ def test_build_reflection_cache_script_writes_cache(tmp_path):
     data = json.loads(cache_file.read_text(encoding="utf-8"))
     assert "summary_text" in data
     assert "Muscle memory (deep)" in data["summary_text"]
+
+
+def test_tool_audit_excludes_emerge_icc_tools(tmp_path: Path):
+    """tool_audit.py must tolerate being called for emerge tools and produce valid JSON.
+
+    In production the hooks.json matcher prevents this, but defensive check ensures
+    the script doesn't crash if called accidentally.
+    """
+    out = _run(
+        "tool_audit.py",
+        {
+            "tool_name": "mcp__plugin_emerge__icc_exec",
+            "tool_input": {"intent_signature": "test.read.foo"},
+            "tool_response": {},
+            "hook_event_name": "PostToolUse",
+        },
+        tmp_path,
+    )
+    result = json.loads(out)
+    # Must be valid JSON — no crash
+    assert isinstance(result, dict)

@@ -142,7 +142,8 @@
           {
             "type": "command",
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/tool_audit.py",
-            "statusMessage": "Flywheel auditing tool..."
+            "statusMessage": "Flywheel auditing tool...",
+            "if": "!mcp__plugin_emerge_emerge__icc_*"
           }
         ]
       }
