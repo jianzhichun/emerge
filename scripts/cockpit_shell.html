@@ -1321,8 +1321,12 @@ async function _loadSessionData() {
   _captureJsonTreeOpen('session-recovery');
 
   try {
-    const r = await fetch('/api/control-plane/session');
+    const [r, rh] = await Promise.all([
+      fetch('/api/control-plane/session'),
+      fetch('/api/control-plane/hook-state'),
+    ]);
     const data = await r.json();
+    const hookData = rh.ok ? await rh.json() : null;
 
     let html = `<div class="cp-stat-strip" style="margin-bottom:16px">
       <div class="cp-stat-card">
@@ -1334,6 +1338,53 @@ async function _loadSessionData() {
         <div class="cp-stat-label">WAL Entries</div>
       </div>
     </div>`;
+
+    // Hook State panel
+    if (hookData && hookData.ok) {
+      const hf = hookData.hook_fields || {};
+      const spanColor = hf.active_span_id ? '#3fb950' : '#6e7681';
+      const nudgeColor = hf.span_nudge_sent ? '#d29922' : '#6e7681';
+      const goalText = hf.goal ? escHtml(hf.goal.slice(0, 80)) + (hf.goal.length > 80 ? '…' : '') : '—';
+      html += `<div style="margin-bottom:16px;border:1px solid #21262d;border-radius:6px;padding:12px">
+        <div style="font-size:12px;color:#e6edf3;margin-bottom:10px;font-weight:600">Hook State</div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">
+          <div class="cp-stat-card" style="padding:8px">
+            <div class="cp-stat-num" style="font-size:18px">${hf.turn_count || 0}</div>
+            <div class="cp-stat-label">Turn</div>
+          </div>
+          <div class="cp-stat-card" style="padding:8px">
+            <div class="cp-stat-num" style="font-size:12px;color:${spanColor}">${hf.active_span_id ? '● ' + escHtml(String(hf.active_span_id).slice(-8)) : '○ none'}</div>
+            <div class="cp-stat-label">Active Span</div>
+          </div>
+          <div class="cp-stat-card" style="padding:8px">
+            <div class="cp-stat-num" style="font-size:12px;color:${nudgeColor}">${hf.span_nudge_sent ? '✓ sent' : '✗ not sent'}</div>
+            <div class="cp-stat-label">Span Nudge</div>
+          </div>
+          <div class="cp-stat-card" style="padding:8px">
+            <div class="cp-stat-num" style="font-size:11px;color:#8b949e">${escHtml(hf.goal_source || 'unset')}</div>
+            <div class="cp-stat-label">Goal Source</div>
+          </div>
+        </div>
+        ${hf.active_span_intent ? `<div style="font-size:11px;color:#8b949e;margin-bottom:6px">Intent: <span style="color:#58a6ff">${escHtml(hf.active_span_intent)}</span></div>` : ''}
+        ${hf.goal ? `<div style="font-size:11px;color:#8b949e">Goal: <span style="color:#e6edf3">${goalText}</span></div>` : ''}
+        ${(hookData.registered_hooks || []).length > 0 ? `
+        <div style="margin-top:10px;border-top:1px solid #21262d;padding-top:8px">
+          <div style="font-size:11px;color:#6e7681;margin-bottom:4px">Registered Hooks</div>
+          ${hookData.registered_hooks.map(h => `<div style="font-size:10px;color:#8b949e;font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span style="color:#58a6ff;margin-right:6px">${escHtml(h.event)}</span>${escHtml(h.command.replace(/.*emerge[^\s]*/,'…emerge').slice(0,80))}</div>`).join('')}
+        </div>` : ''}
+      </div>`;
+
+      // Context Injection Preview
+      if (hookData.context_preview) {
+        html += `<div style="margin-bottom:16px;border:1px solid #21262d;border-radius:6px;padding:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <div style="font-size:12px;color:#e6edf3;font-weight:600">Context Injection Preview</div>
+            <span style="font-size:10px;color:#6e7681">UserPromptSubmit turn ${hf.turn_count || 0} + 1</span>
+          </div>
+          <pre style="font-size:10px;color:#8b949e;background:#0d1117;border:1px solid #21262d;border-radius:4px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto;margin:0">${escHtml(hookData.context_preview)}</pre>
+        </div>`;
+      }
+    }
 
     if (data.checkpoint) {
       html += `<div style="margin-bottom:12px">

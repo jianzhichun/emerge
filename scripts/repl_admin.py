@@ -1282,6 +1282,87 @@ def cmd_control_plane_session() -> dict:
     }
 
 
+def cmd_control_plane_hook_state() -> dict:
+    """Hook state: fields tracked by hooks in state.json + goal snapshot + context injection preview."""
+    hook_state_root = Path(default_hook_state_root())
+    state_path = hook_state_root / "state.json"
+    from scripts.state_tracker import load_tracker
+    from scripts.goal_control_plane import init_goal_control_plane
+    from scripts.span_tracker import SpanTracker
+    tracker = load_tracker(state_path)
+    goal_cp = init_goal_control_plane(hook_state_root, tracker)
+    snap = goal_cp.read_snapshot()
+
+    # Read raw state.json so we can see hook-private fields like _span_nudge_sent
+    # that _normalize_state intentionally strips from StateTracker.state.
+    raw_state: dict = {}
+    if state_path.exists():
+        try:
+            raw_state = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    # Hook-tracked fields
+    state = tracker.state
+    hook_fields = {
+        "turn_count": int(state.get("turn_count", 0) or 0),
+        "active_span_id": state.get("active_span_id") or None,
+        "active_span_intent": state.get("active_span_intent") or None,
+        "span_nudge_sent": bool(raw_state.get("_span_nudge_sent")),
+        "goal": str(snap.get("text", "") or ""),
+        "goal_source": str(snap.get("source", "unset")),
+    }
+
+    # Context injection preview — what UserPromptSubmit would inject this turn
+    try:
+        exec_root = Path(os.environ.get("EMERGE_STATE_ROOT", str(default_exec_root())))
+        reflection = SpanTracker(
+            state_root=exec_root,
+            hook_state_root=hook_state_root,
+        ).format_reflection_with_cache(cache_ttl_ms=15 * 60 * 1000)
+        context_preview = tracker.format_additional_context(
+            goal_override=hook_fields["goal"],
+            goal_source_override=hook_fields["goal_source"],
+        )
+        if reflection:
+            context_preview = reflection + "\n\n" + context_preview
+        active_span = hook_fields["active_span_id"]
+        if not active_span and hook_fields["turn_count"] > 1 and hook_fields["turn_count"] % 5 == 0:
+            context_preview = (
+                "[Span] No active span. "
+                "If this turn involves tool use, open one first: "
+                'icc_span_open(intent_signature="connector.mode.name").'
+                "\n\n" + context_preview
+            )
+    except Exception as e:
+        context_preview = f"(preview unavailable: {e})"
+
+    # Registered hooks from hooks.json
+    hooks_path = hook_state_root.parent.parent / ".claude" / "plugins" / "cache" / "emerge" / "emerge"
+    hook_list: list[dict] = []
+    try:
+        _hooks_json = Path.home() / ".claude" / "hooks.json"
+        if _hooks_json.exists():
+            _hdata = json.loads(_hooks_json.read_text(encoding="utf-8"))
+            for event, entries in (_hdata if isinstance(_hdata, dict) else {}).items():
+                if not isinstance(entries, list):
+                    continue
+                for entry in entries:
+                    for h in (entry.get("hooks") or []):
+                        cmd = str(h.get("command", ""))
+                        if "emerge" in cmd.lower():
+                            hook_list.append({"event": event, "command": cmd})
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "hook_fields": hook_fields,
+        "context_preview": context_preview,
+        "registered_hooks": hook_list,
+    }
+
+
 def cmd_control_plane_exec_events(
     limit: int = 100,
     since_ms: int = 0,
@@ -1770,6 +1851,8 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self._json(cmd_control_plane_intents())
         elif path == "/api/control-plane/session":
             self._json(cmd_control_plane_session())
+        elif path == "/api/control-plane/hook-state":
+            self._json(cmd_control_plane_hook_state())
         elif path.startswith("/api/control-plane/exec-events"):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             self._json(cmd_control_plane_exec_events(

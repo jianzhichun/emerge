@@ -868,3 +868,51 @@ def test_enrich_actions_marks_invalid_tool_call_payload():
     assert len(result) == 1
     assert "instruction" in result[0]
     assert "Invalid cockpit tool-call payload" in result[0]["instruction"]
+
+
+# ---------------------------------------------------------------------------
+# Hook state endpoint
+# ---------------------------------------------------------------------------
+
+def test_hook_state_returns_expected_fields(tmp_path, monkeypatch):
+    """cmd_control_plane_hook_state returns turn_count, active_span_id, goal, context_preview."""
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+
+    # Seed state.json with hook-tracked fields (written directly, like hooks do)
+    state_data = {
+        "turn_count": 7,
+        "active_span_id": "span-abc123",
+        "active_span_intent": "zwcad.write.apply-change",
+        "_span_nudge_sent": True,
+        "open_risks": [],
+        "deltas": [],
+        "verification_state": "verified",
+        "consistency_window_ms": 0,
+    }
+    (tmp_path / "state.json").write_text(json.dumps(state_data), encoding="utf-8")
+
+    result = repl_admin.cmd_control_plane_hook_state()
+    assert result["ok"] is True
+    hf = result["hook_fields"]
+    assert hf["turn_count"] == 7
+    assert hf["active_span_id"] == "span-abc123"
+    assert hf["active_span_intent"] == "zwcad.write.apply-change"
+    assert hf["span_nudge_sent"] is True
+    assert "context_preview" in result
+    assert isinstance(result["context_preview"], str)
+    assert "registered_hooks" in result
+
+
+def test_hook_state_empty_state(tmp_path, monkeypatch):
+    """cmd_control_plane_hook_state handles clean state gracefully."""
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+
+    result = repl_admin.cmd_control_plane_hook_state()
+    assert result["ok"] is True
+    hf = result["hook_fields"]
+    assert hf["turn_count"] == 0
+    assert hf["active_span_id"] is None
+    assert hf["span_nudge_sent"] is False
+    assert isinstance(result["context_preview"], str)
