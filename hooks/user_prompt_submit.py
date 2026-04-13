@@ -96,11 +96,16 @@ def main() -> None:
     if pending_text:
         context_text = pending_text + "\n\n" + context_text
 
+    # Re-register watchPaths on every user message so the FileChanged hook fires
+    # autonomously for cockpit actions dispatched after this turn.
+    watch_paths = [str(state_root / "pending-actions.json")]
+
     out = {
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
             "additionalContext": context_text,
-        }
+        },
+        "watchPaths": watch_paths,
     }
     print(json.dumps(out))
 
