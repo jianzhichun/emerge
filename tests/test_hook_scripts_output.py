@@ -1015,3 +1015,38 @@ def test_tool_audit_excludes_emerge_icc_tools(tmp_path: Path):
     result = json.loads(out)
     # Must be valid JSON — no crash
     assert isinstance(result, dict)
+
+
+def test_cwd_changed_emits_system_message(tmp_path: Path):
+    """CwdChanged outputs systemMessage when CWD shifts to a new project."""
+    out = _run(
+        "cwd_changed.py",
+        {
+            "hook_event_name": "CwdChanged",
+            "old_cwd": "/Users/alice/projects/emerge",
+            "new_cwd": "/Users/alice/projects/other-project",
+            "cwd": "/Users/alice/projects/other-project",
+        },
+        tmp_path,
+    )
+    result = json.loads(out)
+    # CwdChanged uses top-level systemMessage
+    assert "systemMessage" in result
+    assert "hookSpecificOutput" not in result
+    assert "other-project" in result["systemMessage"]
+
+
+def test_cwd_changed_same_dir_emits_empty(tmp_path: Path):
+    """CwdChanged with same old and new CWD emits empty object."""
+    out = _run(
+        "cwd_changed.py",
+        {
+            "hook_event_name": "CwdChanged",
+            "old_cwd": "/Users/alice/projects/emerge",
+            "new_cwd": "/Users/alice/projects/emerge",
+            "cwd": "/Users/alice/projects/emerge",
+        },
+        tmp_path,
+    )
+    result = json.loads(out)
+    assert result == {}
