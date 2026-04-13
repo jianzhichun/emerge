@@ -128,4 +128,5 @@ class OperatorMonitor(threading.Thread):
                 context = plugin.get_context(summary.context_hint)
             except Exception:
                 context = summary.context_hint.copy()
+            context["runner_profile"] = machine_id
             self._push_fn(summary.policy_stage, context, summary)

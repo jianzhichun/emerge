@@ -130,3 +130,36 @@ def test_operator_monitor_accumulates_events_across_polls(tmp_path):
     assert len(push_calls) >= 1, "pattern should fire after accumulating 3 events across polls"
 
 
+def test_poll_machine_injects_runner_profile_into_context(tmp_path):
+    """runner_profile key in context must equal the machines-dict key."""
+    captured: list[dict] = []
+
+    def fake_push(stage: str, context: dict, summary) -> None:
+        captured.append(context)
+
+    now_ms = int(time.time() * 1000)
+    events = [
+        {
+            "ts_ms": now_ms - i * 60_000,
+            "machine_id": "workstation-A",
+            "session_role": "operator",
+            "event_type": "entity_added",
+            "app": "zwcad",
+            "payload": {"layer": "标注", "content": f"room_{i}"},
+        }
+        for i in range(3)
+    ]
+
+    monitor = OperatorMonitor(
+        machines={"mycader-1": _FakeRunnerClient(events)},
+        push_fn=fake_push,
+        poll_interval_s=0.05,
+        event_root=tmp_path / "operator-events",
+        adapter_root=tmp_path / "adapters",
+    )
+    monitor.start()
+    time.sleep(0.3)
+    monitor.stop()
+
+    assert len(captured) >= 1
+    assert captured[0].get("runner_profile") == "mycader-1"
