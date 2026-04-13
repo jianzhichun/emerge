@@ -288,11 +288,12 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 | Observer framework       | `scripts/observer_plugin.py`, `scripts/observers/`                                                                                             |
 | Pattern detector         | `scripts/pattern_detector.py`                                                                                                                  |
 | Distiller                | `scripts/distiller.py`                                                                                                                         |
-| Operator monitor         | `scripts/operator_monitor.py`                                                                                                                  |
+| Operator monitor         | `scripts/operator_monitor.py` — per-runner `pattern-alerts-{profile}.json` routing; `watch_patterns.py --runner-profile` for isolated watcher agents |
+| Agents-team mode         | `/emerge:monitor` — `TeamCreate` + per-runner watcher agents; stage→action popup protocol (explore=silent, canary=choice+timeout, stable=silent exec) |
 | Ops / bootstrap / cockpit | `scripts/repl_admin.py` — HTTP cockpit with SSE real-time status, `cockpit_shell.html` SPA frontend; `scripts/watch_pending.py` — cockpit submit → CC Monitor stream |
 | Memory Hub sync agent    | `scripts/emerge_sync.py`, `scripts/hub_config.py` — bidirectional connector asset sync via orphan-branch git repo; `icc_hub` MCP tool in daemon |
 | Test connector (mock)    | `tests/connectors/mock/pipelines/`                                                                                                             |
-| Slash commands           | `commands/` (`init`, `cockpit`, `runner-status`, `import`, `export`, `hub`)                                                                     |
+| Slash commands           | `commands/` (`init`, `cockpit`, `monitor`, `runner-status`, `import`, `export`, `hub`)                                                          |
 | Skills                   | `skills/` (`initializing-vertical-flywheel`, `remote-runner-dev`, `writing-vertical-adapter`, `operator-monitor-debug`, `policy-optimization`, `reflection-deep-dive`) |
 | Reference (submodule)    | `references/claude-code`                                                                                                                       |
 

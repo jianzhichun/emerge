@@ -3,12 +3,15 @@
 
 Designed to be launched via CC's Monitor tool::
 
-    Monitor(command="python3 .../watch_patterns.py",
-            description="operator pattern alert watcher",
+    Monitor(command="python3 .../watch_patterns.py --runner-profile mycader-1",
+            description="operator pattern alert watcher — mycader-1",
             persistent=true)
+
+Without --runner-profile, falls back to watching pattern-alerts.json (legacy).
 """
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -28,5 +31,19 @@ def _state_root() -> Path:
     return Path.home() / ".emerge" / "repl"
 
 
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Watch emerge pattern alerts for one runner.")
+    p.add_argument(
+        "--runner-profile",
+        default="",
+        help="Profile name to scope alert file (e.g. mycader-1). "
+             "Omit to watch the shared pattern-alerts.json fallback.",
+    )
+    return p.parse_args()
+
+
 if __name__ == "__main__":
-    run_watcher(_state_root() / "pattern-alerts.json", format_pattern_alert)
+    args = _parse_args()
+    profile = args.runner_profile.strip()
+    filename = f"pattern-alerts-{profile}.json" if profile else "pattern-alerts.json"
+    run_watcher(_state_root() / filename, format_pattern_alert)

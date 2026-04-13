@@ -76,6 +76,37 @@ Steps:
    engage the operator or crystallize directly. Alerts include `stage`, `intent_signature`,
    `occurrences`, `window_minutes`, and `machine_ids`.
 
+   > **Per-runner agents-team mode**: when spawning a watcher agent for a specific
+   > runner profile (e.g. `mycader-1`), launch Monitor 2 as:
+   > ```
+   > python3 ".../watch_patterns.py --runner-profile mycader-1"
+   > ```
+   > description: "operator pattern alert watcher — mycader-1"
+   > Each watcher receives only alerts for its assigned runner.
+
+   **Stage → Action protocol** (for watcher agents handling pattern alerts):
+
+   | `stage` | Action |
+   |---|---|
+   | `explore` | Silent — record intent only, no popup |
+   | `canary` | `runner_client.notify({"type":"choice","title":"emerge — 可以接管了","body":f"[{intent_signature}] 已见 {occurrences} 次，接管此次操作？","options":["接管","跳过","停止学习"],"timeout_s":15})` |
+   | `stable` | `icc_exec(intent_signature=...)` silently; optional info notify after |
+
+   **AI-initiated popups** (any stage, when agent is uncertain or wants to distill knowledge):
+   ```python
+   runner_client.notify({
+       "type": "input",
+       "title": "emerge — 需要确认",
+       "body": "<question>",
+   })
+   # action=confirmed, value=<operator answer>
+   # → append answer to NOTES.md via notes-comment action
+   ```
+
+   **Silence principle**: only interrupt for authorization (canary takeover) or genuine
+   ambiguity. Never popup for: execution in progress/completed, read-only queries,
+   errors CC can resolve autonomously.
+
    **Fallback (CC < 2.1.98 / no Monitor tool):** the `UserPromptSubmit` hook also drains
    `pending-actions.processed.json` into `additionalContext` on the next user message.
 
