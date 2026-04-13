@@ -110,3 +110,142 @@ def test_adapter_registry_accepts_valid_names(tmp_path):
     for good_name in ["zwcad", "hypermesh", "cloud-server", "my_app2"]:
         plugin = registry.get_plugin(good_name)
         assert plugin is not None, f"Expected a plugin for {good_name!r}"
+
+
+# ---------------------------------------------------------------------------
+# Gap B: emit_event on ObserverPlugin base class
+# ---------------------------------------------------------------------------
+
+def test_emit_event_writes_to_eventbus(tmp_path, monkeypatch):
+    """ObserverPlugin.emit_event() appends an event to events.jsonl in event_root/<machine_id>/."""
+    import json
+    import socket
+    import time
+
+    class _Adapter(_StubObserver):
+        pass
+
+    adapter = _Adapter()
+    machine_id = socket.gethostname()
+
+    # Redirect home to tmp_path so we don't pollute the real ~/.emerge
+    emerge_home = tmp_path / ".emerge"
+    monkeypatch.setattr(
+        "pathlib.Path.home",
+        staticmethod(lambda: tmp_path),
+    )
+
+    adapter.emit_event({
+        "event_type": "test_event",
+        "intent_signature": "zwcad.write.apply-change",
+        "session_role": "operator",
+    })
+
+    event_path = tmp_path / ".emerge" / "operator-events" / machine_id / "events.jsonl"
+    assert event_path.exists(), "emit_event must create events.jsonl"
+    lines = [l for l in event_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines) == 1
+
+    event = json.loads(lines[0])
+    assert event["event_type"] == "test_event"
+    assert event["intent_signature"] == "zwcad.write.apply-change"
+    assert "ts_ms" in event
+    assert "machine_id" in event
+
+
+def test_emit_event_prepopulates_ts_ms_and_machine_id(tmp_path, monkeypatch):
+    """emit_event injects ts_ms and machine_id automatically."""
+    import json
+    import socket
+
+    class _Adapter(_StubObserver):
+        pass
+
+    monkeypatch.setattr("pathlib.Path.home", staticmethod(lambda: tmp_path))
+
+    adapter = _Adapter()
+    adapter.emit_event({"event_type": "ping"})
+
+    machine_id = socket.gethostname()
+    event_path = tmp_path / ".emerge" / "operator-events" / machine_id / "events.jsonl"
+    event = json.loads(event_path.read_text(encoding="utf-8").strip())
+    assert event["machine_id"] == machine_id
+    assert isinstance(event["ts_ms"], int)
+
+
+def test_emit_event_does_not_override_caller_ts_ms(tmp_path, monkeypatch):
+    """emit_event respects ts_ms if the caller already provides it."""
+    import json
+
+    class _Adapter(_StubObserver):
+        pass
+
+    monkeypatch.setattr("pathlib.Path.home", staticmethod(lambda: tmp_path))
+
+    adapter = _Adapter()
+    adapter.emit_event({"event_type": "ping", "ts_ms": 999_000})
+
+    import socket
+    machine_id = socket.gethostname()
+    event_path = tmp_path / ".emerge" / "operator-events" / machine_id / "events.jsonl"
+    event = json.loads(event_path.read_text(encoding="utf-8").strip())
+    # Caller-provided ts_ms must win (update() overwrites the default)
+    assert event["ts_ms"] == 999_000
+
+
+# ---------------------------------------------------------------------------
+# Gap D: vertical adapter stubs (loaded via AdapterRegistry)
+# ---------------------------------------------------------------------------
+
+def _make_adapter_dir(tmp_path: Path, connector: str) -> Path:
+    """Write a minimal vertical adapter to tmp_path/<connector>/adapter.py and return the dir."""
+    adapter_code = (
+        "from scripts.observer_plugin import ObserverPlugin\n"
+        f"CONNECTOR = '{connector}'\n"
+        "class _Adapter(ObserverPlugin):\n"
+        "    def start(self, config): self._config = config\n"
+        "    def stop(self): pass\n"
+        "    def get_context(self, hint):\n"
+        f"        return {{'observer': '{connector}', **hint}}\n"
+        "    def execute(self, intent, params):\n"
+        "        parts = intent.split('.')\n"
+        "        if len(parts) < 3 or parts[0] != CONNECTOR:\n"
+        f"            return {{'ok': False, 'error': 'wrong connector'}}\n"
+        "        return {'ok': True, 'summary': f'dispatched {intent}'}\n"
+        "ADAPTER_CLASS = _Adapter\n"
+    )
+    d = tmp_path / connector
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "adapter.py").write_text(adapter_code, encoding="utf-8")
+    return d
+
+
+@pytest.mark.parametrize("connector", ["hypermesh", "zwcad", "cloud-server"])
+def test_vertical_adapter_loads_and_executes(tmp_path, connector):
+    """Vertical adapters for each connector load via AdapterRegistry and execute correctly."""
+    _make_adapter_dir(tmp_path, connector)
+    registry = AdapterRegistry(adapter_root=tmp_path)
+    plugin = registry.get_plugin(connector)
+    assert plugin is not None
+
+    plugin.start({})
+    ctx = plugin.get_context({"app": connector})
+    assert ctx["observer"] == connector
+
+    # Valid intent for the connector
+    result = plugin.execute(f"{connector}.write.apply-change", {})
+    assert result["ok"] is True
+
+    # Wrong connector must return ok=False
+    result_bad = plugin.execute("other.write.apply-change", {})
+    assert result_bad["ok"] is False
+
+
+@pytest.mark.parametrize("connector", ["hypermesh", "zwcad", "cloud-server"])
+def test_vertical_adapter_execute_wrong_intent_returns_error(tmp_path, connector):
+    """execute() with wrong connector prefix returns ok=False."""
+    _make_adapter_dir(tmp_path, connector)
+    registry = AdapterRegistry(adapter_root=tmp_path)
+    plugin = registry.get_plugin(connector)
+    result = plugin.execute("wrong.write.something", {})
+    assert result["ok"] is False

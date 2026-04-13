@@ -1050,6 +1050,9 @@ class EmergeDaemon:
                     )
                 except Exception as exc:
                     self._append_warning_text(result, f"policy bookkeeping failed: {exc}")
+                _sig = str(arguments.get("intent_signature", ""))
+                if _sig and not arguments.get("no_replay"):
+                    self._write_operator_event(_sig, is_error=bool(result.get("isError")))
                 if "isError" not in result:
                     result["isError"] = False
                 # Inject bridge fallback warning if the flywheel bridge failed
@@ -2627,6 +2630,32 @@ class EmergeDaemon:
         from scripts.policy_config import atomic_write_json
         atomic_write_json(path, data)
 
+    def _write_operator_event(self, intent_signature: str, *, is_error: bool) -> None:
+        """Write a cc_executed event to the local EventBus.
+
+        Uses session_role='monitor_sub' so PatternDetector filters it out,
+        preventing AI self-monitoring loops. The event exists for audit purposes
+        and to close the observability gap: humans see CC takeovers in the event log.
+        """
+        try:
+            import socket as _socket
+            machine_id = _socket.gethostname()
+            event_dir = Path.home() / ".emerge" / "operator-events" / machine_id
+            event_dir.mkdir(parents=True, exist_ok=True)
+            event_path = event_dir / "events.jsonl"
+            event = {
+                "event_type": "cc_executed",
+                "session_role": "monitor_sub",
+                "intent_signature": intent_signature,
+                "status": "error" if is_error else "ok",
+                "ts_ms": int(time.time() * 1000),
+                "machine_id": machine_id,
+            }
+            with event_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(event, ensure_ascii=True) + "\n")
+        except Exception:
+            pass  # non-fatal — EventBus write must never break execution
+
     def _increment_human_fix(self, intent_signature: str) -> None:
         """Increment human_fixes for the candidate keyed by intent_signature.
 
@@ -2835,8 +2864,9 @@ class EmergeDaemon:
     # ------------------------------------------------------------------
 
     def start_operator_monitor(self) -> None:
-        """Start OperatorMonitor if EMERGE_OPERATOR_MONITOR=1 and not already running."""
-        if os.environ.get("EMERGE_OPERATOR_MONITOR", "0") != "1":
+        """Start OperatorMonitor if runner is configured or EMERGE_OPERATOR_MONITOR=1."""
+        _rr = self._get_runner_router()
+        if os.environ.get("EMERGE_OPERATOR_MONITOR", "0") != "1" and _rr is None:
             return
         if self._operator_monitor is not None and self._operator_monitor.is_alive():
             return
@@ -2881,10 +2911,10 @@ class EmergeDaemon:
         handlers: dict = {
             self._state_root / "pending-actions.json": lambda _: self._on_pending_actions(),
         }
-        # Register local operator-events handler only when OperatorMonitor is active.
+        # Register local operator-events handler when OperatorMonitor is active.
         # The handler delegates to OperatorMonitor.process_local_file() which owns the
         # PatternDetector + event buffer state.
-        if _os.environ.get("EMERGE_OPERATOR_MONITOR") == "1":
+        if self._operator_monitor is not None:
             event_root = _Path.home() / ".emerge" / "operator-events"
             handlers[event_root] = lambda p: self._on_local_event_file(p)
 

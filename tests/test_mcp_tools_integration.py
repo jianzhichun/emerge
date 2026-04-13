@@ -3830,3 +3830,211 @@ def test_initialize_version_negotiation_future_client():
         },
     })
     assert response["result"]["protocolVersion"] == "2025-11-25"
+
+
+# ---------------------------------------------------------------------------
+# Gap A: OperatorMonitor auto-start when runner is configured
+# ---------------------------------------------------------------------------
+
+def test_operator_monitor_starts_when_runner_configured_no_env_var(monkeypatch, tmp_path):
+    """start_operator_monitor starts even without EMERGE_OPERATOR_MONITOR=1 when runner is configured."""
+    import time as _time
+    from unittest.mock import MagicMock
+
+    # Ensure env var is NOT set
+    monkeypatch.delenv("EMERGE_OPERATOR_MONITOR", raising=False)
+    monkeypatch.setenv("EMERGE_MONITOR_POLL_S", "0.05")
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+
+    daemon = EmergeDaemon(root=tmp_path)
+    # Inject a fake runner router so the daemon thinks a runner is configured
+    fake_router = MagicMock()
+    fake_router.find_client.return_value = None  # no actual client, just non-None router
+    monkeypatch.setattr(daemon, "_get_runner_router", lambda: fake_router)
+
+    daemon.start_operator_monitor()
+    _time.sleep(0.1)
+    assert daemon._operator_monitor is not None
+    assert daemon._operator_monitor.is_alive()
+    daemon.stop_operator_monitor()
+    daemon._operator_monitor.join(timeout=1.0)
+
+
+def test_operator_monitor_does_not_start_without_runner_or_env_var(monkeypatch, tmp_path):
+    """start_operator_monitor is a no-op when neither runner nor env var is set."""
+    monkeypatch.delenv("EMERGE_OPERATOR_MONITOR", raising=False)
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+
+    daemon = EmergeDaemon(root=tmp_path)
+    monkeypatch.setattr(daemon, "_get_runner_router", lambda: None)
+
+    daemon.start_operator_monitor()
+    assert daemon._operator_monitor is None
+
+
+def test_event_router_registers_local_events_handler_when_monitor_active(monkeypatch, tmp_path):
+    """start_event_router registers the operator-events handler when OperatorMonitor is set."""
+    import scripts.event_router as _er_mod
+    from unittest.mock import MagicMock
+
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    monkeypatch.delenv("EMERGE_OPERATOR_MONITOR", raising=False)
+
+    daemon = EmergeDaemon(root=tmp_path)
+    fake_monitor = MagicMock()
+    fake_monitor.is_alive.return_value = True
+    daemon._operator_monitor = fake_monitor
+
+    captured_handlers: dict = {}
+
+    class FakeEventRouter:
+        def __init__(self, handlers: dict) -> None:
+            captured_handlers.update(handlers)
+        def start(self) -> None:
+            pass
+
+    monkeypatch.setattr(_er_mod, "EventRouter", FakeEventRouter)
+    daemon.start_event_router()
+
+    # The event_root for operator-events should be registered
+    event_root_key = Path.home() / ".emerge" / "operator-events"
+    assert event_root_key in captured_handlers, (
+        "local operator-events handler must be registered when OperatorMonitor is active"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gap C: icc_exec writes operator events to EventBus
+# ---------------------------------------------------------------------------
+
+def test_icc_exec_writes_operator_event_to_eventbus(tmp_path):
+    """icc_exec with intent_signature writes a cc_executed event to the local EventBus."""
+    import json
+    import socket
+
+    daemon = EmergeDaemon(root=tmp_path)
+    machine_id = socket.gethostname()
+    event_path = Path.home() / ".emerge" / "operator-events" / machine_id / "events.jsonl"
+
+    # Record events before the call
+    before_count = 0
+    if event_path.exists():
+        before_count = sum(1 for _ in event_path.read_text(encoding="utf-8").splitlines() if _.strip())
+
+    result = daemon.call_tool("icc_exec", {
+        "intent_signature": "cloud-server.write.apply-test",
+        "code": "result = 42",
+        "mode": "inline_code",
+    })
+
+    # Event must have been written
+    assert event_path.exists()
+    lines = [l for l in event_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    new_events = [json.loads(l) for l in lines[before_count:]]
+    assert len(new_events) >= 1
+
+    cc_event = new_events[-1]
+    assert cc_event["event_type"] == "cc_executed"
+    assert cc_event["session_role"] == "monitor_sub"
+    assert cc_event["intent_signature"] == "cloud-server.write.apply-test"
+    assert cc_event["status"] in ("ok", "error")
+    assert "ts_ms" in cc_event
+    assert "machine_id" in cc_event
+
+
+def test_icc_exec_no_replay_skips_operator_event(tmp_path):
+    """icc_exec with no_replay=True must NOT write an operator event."""
+    import json
+    import socket
+
+    daemon = EmergeDaemon(root=tmp_path)
+    machine_id = socket.gethostname()
+    event_path = Path.home() / ".emerge" / "operator-events" / machine_id / "events.jsonl"
+
+    before_count = 0
+    if event_path.exists():
+        before_count = sum(1 for _ in event_path.read_text(encoding="utf-8").splitlines() if _.strip())
+
+    daemon.call_tool("icc_exec", {
+        "intent_signature": "cloud-server.write.apply-test",
+        "code": "result = 1",
+        "mode": "inline_code",
+        "no_replay": True,
+    })
+
+    after_count = 0
+    if event_path.exists():
+        after_count = sum(1 for _ in event_path.read_text(encoding="utf-8").splitlines() if _.strip())
+
+    assert after_count == before_count, "no_replay icc_exec must not write operator events"
+
+
+def test_icc_exec_without_intent_signature_skips_operator_event(tmp_path):
+    """icc_exec without intent_signature must NOT write an operator event."""
+    import json
+    import socket
+
+    daemon = EmergeDaemon(root=tmp_path)
+    machine_id = socket.gethostname()
+    event_path = Path.home() / ".emerge" / "operator-events" / machine_id / "events.jsonl"
+
+    before_count = 0
+    if event_path.exists():
+        before_count = sum(1 for _ in event_path.read_text(encoding="utf-8").splitlines() if _.strip())
+
+    daemon.call_tool("icc_exec", {
+        "code": "result = 1",
+        "mode": "inline_code",
+    })
+
+    after_count = 0
+    if event_path.exists():
+        after_count = sum(1 for _ in event_path.read_text(encoding="utf-8").splitlines() if _.strip())
+
+    assert after_count == before_count, "icc_exec without intent_signature must not write operator events"
+
+
+# ---------------------------------------------------------------------------
+# Gap B: ObserverPlugin.emit_event writes to EventBus
+# ---------------------------------------------------------------------------
+
+def test_observer_plugin_emit_event_writes_to_eventbus(tmp_path):
+    """ObserverPlugin.emit_event() writes the event dict to the local EventBus."""
+    import json
+    import socket
+    import sys
+
+    # Minimal concrete subclass
+    sys.path.insert(0, str(ROOT))
+    from scripts.observer_plugin import ObserverPlugin
+
+    class _TestAdapter(ObserverPlugin):
+        def start(self, config): pass
+        def stop(self): pass
+        def get_context(self, hint): return hint
+        def execute(self, intent, params): return {"ok": True}
+
+    adapter = _TestAdapter()
+    machine_id = socket.gethostname()
+    event_path = Path.home() / ".emerge" / "operator-events" / machine_id / "events.jsonl"
+
+    before = 0
+    if event_path.exists():
+        before = sum(1 for l in event_path.read_text(encoding="utf-8").splitlines() if l.strip())
+
+    adapter.emit_event({
+        "event_type": "entity_added",
+        "intent_signature": "zwcad.write.apply-change",
+        "session_role": "operator",
+    })
+
+    assert event_path.exists()
+    lines = [l for l in event_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    new_lines = lines[before:]
+    assert len(new_lines) == 1
+
+    event = json.loads(new_lines[0])
+    assert event["event_type"] == "entity_added"
+    assert event["intent_signature"] == "zwcad.write.apply-change"
+    assert "ts_ms" in event
+    assert "machine_id" in event
