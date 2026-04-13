@@ -74,16 +74,11 @@ def main() -> None:
     except (OSError, json.JSONDecodeError, AttributeError):
         pass
 
-    # Re-register file watch on every session start so CC watches pending-actions.json
-    # even in sessions where Setup already ran under an older version (once: true guard).
-    watch_paths = [str(state_root / "pending-actions.json")]
-
     out = {
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
             "additionalContext": context_text,
-        },
-        "watchPaths": watch_paths,
+        }
     }
     print(json.dumps(out))
 

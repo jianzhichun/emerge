@@ -1230,21 +1230,10 @@ def test_file_changed_returns_watch_paths_for_bootstrap(tmp_path: Path):
 
 
 def test_setup_outputs_watch_paths(tmp_path: Path):
-    """setup.py must output watchPaths to bootstrap FileChanged on session start."""
+    """setup.py outputs watchPaths per CC spec (even if not reliably consumed in VM env)."""
     out = _run("setup.py", {}, tmp_path)
     result = json.loads(out)
     # watchPaths at top level (Setup uses systemMessage, not hookSpecificOutput)
-    assert "watchPaths" in result
-    assert isinstance(result["watchPaths"], list)
-    assert any("pending-actions.json" in p for p in result["watchPaths"])
-
-
-def test_session_start_outputs_watch_paths(tmp_path: Path):
-    """session_start.py must re-register watchPaths so FileChanged works even
-    when Setup already ran under an older version (once: true guard)."""
-    out = _run("session_start.py", {}, tmp_path)
-    result = json.loads(out)
-    # watchPaths at top level alongside hookSpecificOutput
     assert "watchPaths" in result
     assert isinstance(result["watchPaths"], list)
     assert any("pending-actions.json" in p for p in result["watchPaths"])

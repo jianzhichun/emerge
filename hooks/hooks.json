@@ -218,18 +218,6 @@
           }
         ]
       }
-    ],
-    "FileChanged": [
-      {
-        "matcher": "pending-actions.json",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/file_changed.py",
-            "statusMessage": "Flywheel delivering cockpit actions..."
-          }
-        ]
-      }
     ]
   }
 }
