@@ -78,6 +78,37 @@ def test_post_tool_use_and_pre_compact_contract(tmp_path: Path):
     assert pc_token["schema_version"] == "flywheel.v1"
 
 
+def test_post_compact_emits_fresh_flywheel_token(tmp_path: Path):
+    """PostCompact must output a systemMessage with a clean FLYWHEEL_TOKEN."""
+    out = _run(
+        "post_compact.py",
+        {
+            "hook_event_name": "PostCompact",
+            "trigger": "manual",
+            "compact_summary": "Session was compacted. Goal: test goal.",
+        },
+        tmp_path,
+    )
+    result = json.loads(out)
+    # PostCompact uses top-level systemMessage (not hookSpecificOutput)
+    assert "systemMessage" in result
+    assert "hookSpecificOutput" not in result
+    msg = result["systemMessage"]
+    assert "FLYWHEEL_TOKEN" in msg
+    token = json.loads(msg.split("FLYWHEEL_TOKEN\n")[1].strip().split("\n")[0])
+    assert token["schema_version"] == "flywheel.v1"
+    # After compaction, state was reset by PreCompact — token must show empty deltas/risks
+    assert token["deltas"] == []
+    assert token["open_risks"] == []
+
+
+def test_post_compact_includes_span_protocol(tmp_path: Path):
+    """PostCompact systemMessage must include Span Protocol directive."""
+    out = _run("post_compact.py", {"hook_event_name": "PostCompact", "compact_summary": ""}, tmp_path)
+    result = json.loads(out)
+    assert "Span Protocol" in result["systemMessage"]
+
+
 def test_hook_default_state_dir_uses_home_emerge(tmp_path: Path):
     env = os.environ.copy()
     env.pop("CLAUDE_PLUGIN_DATA", None)

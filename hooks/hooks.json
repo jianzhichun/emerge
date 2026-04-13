@@ -156,6 +156,18 @@
           }
         ]
       }
+    ],
+    "PostCompact": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/post_compact.py",
+            "statusMessage": "Flywheel re-anchoring after compaction..."
+          }
+        ]
+      }
     ]
   }
 }
