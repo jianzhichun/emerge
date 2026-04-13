@@ -15,6 +15,7 @@ from scripts.span_tracker import SpanTracker  # noqa: E402
 from scripts.state_tracker import load_tracker  # noqa: E402
 
 _BUDGET_CHARS = 800
+_REFLECTION_CACHE_TTL_MS = 15 * 60 * 1000
 
 
 def main() -> None:
@@ -44,7 +45,7 @@ def main() -> None:
     reflection = SpanTracker(
         state_root=exec_root,
         hook_state_root=state_root,
-    ).format_reflection_with_cache()
+    ).format_reflection_with_cache(cache_ttl_ms=_REFLECTION_CACHE_TTL_MS)
     reflection_block = f"{reflection}\n\n" if reflection else ""
 
     _SPAN_PROTOCOL = (
