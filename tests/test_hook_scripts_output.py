@@ -1164,3 +1164,76 @@ def test_elicitation_result_writes_audit_log(tmp_path: Path):
     assert entry["elicitation_id"] == "elicit-abc123"
     assert entry["action"] == "accept"
     assert entry["mcp_server_name"] == "plugin_emerge_emerge"
+
+
+def test_file_changed_pending_actions_delivers_to_cc(tmp_path: Path):
+    """FileChanged hook processes pending-actions.json and delivers actions as additionalContext."""
+    pending = tmp_path / "pending-actions.json"
+    pending.write_text(json.dumps({
+        "actions": [
+            {"type": "tool-call", "call": {"tool": "icc_exec", "arguments": {"intent_signature": "lark.read.foo"}}}
+        ]
+    }))
+    out = _run(
+        "file_changed.py",
+        {
+            "hook_event_name": "FileChanged",
+            "file_path": str(pending),
+            "event": "add",
+        },
+        tmp_path,
+    )
+    result = json.loads(out)
+    assert result["hookSpecificOutput"]["hookEventName"] == "FileChanged"
+    ctx = result["hookSpecificOutput"]["additionalContext"]
+    assert "icc_exec" in ctx
+    assert "lark.read.foo" in ctx
+    # File renamed to delivered
+    assert not pending.exists()
+    delivered = tmp_path / "pending-actions.delivered.json"
+    assert delivered.exists()
+
+
+def test_file_changed_non_pending_file_emits_empty(tmp_path: Path):
+    """FileChanged for unrelated files emits no hookSpecificOutput."""
+    some_file = tmp_path / "random.txt"
+    some_file.write_text("hello")
+    out = _run(
+        "file_changed.py",
+        {
+            "hook_event_name": "FileChanged",
+            "file_path": str(some_file),
+            "event": "change",
+        },
+        tmp_path,
+    )
+    result = json.loads(out)
+    assert "hookSpecificOutput" not in result
+
+
+def test_file_changed_returns_watch_paths_for_bootstrap(tmp_path: Path):
+    """FileChanged always returns watchPaths containing the state root pending-actions path."""
+    out = _run(
+        "file_changed.py",
+        {
+            "hook_event_name": "FileChanged",
+            "file_path": "/some/unrelated/file.txt",
+            "event": "change",
+        },
+        tmp_path,
+    )
+    result = json.loads(out)
+    # watchPaths must be present to keep the watch list alive across events
+    assert "watchPaths" in result
+    assert isinstance(result["watchPaths"], list)
+    assert any("pending-actions.json" in p for p in result["watchPaths"])
+
+
+def test_setup_outputs_watch_paths(tmp_path: Path):
+    """setup.py must output watchPaths to bootstrap FileChanged on session start."""
+    out = _run("setup.py", {}, tmp_path)
+    result = json.loads(out)
+    # watchPaths at top level (Setup uses systemMessage, not hookSpecificOutput)
+    assert "watchPaths" in result
+    assert isinstance(result["watchPaths"], list)
+    assert any("pending-actions.json" in p for p in result["watchPaths"])

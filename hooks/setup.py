@@ -29,9 +29,13 @@ def main() -> None:
     pin_plugin_data_path_if_present()
     GoalControlPlane().ensure_initialized()
 
-    # Setup does not accept `hookSpecificOutput` —
-    # use top-level `systemMessage` for the readiness notice.
-    out = {"systemMessage": f"emerge plugin ready. Home: {emerge_home}"}
+    emerge_pending = emerge_home / "pending-actions.json"
+    # watchPaths seeds CC's FileChanged watch list for pending-actions delivery.
+    # Setup uses top-level systemMessage + watchPaths (hookSpecificOutput not allowed on Setup).
+    out = {
+        "systemMessage": f"emerge plugin ready. Home: {emerge_home}",
+        "watchPaths": [str(emerge_pending)],
+    }
     print(json.dumps(out))
 
 
