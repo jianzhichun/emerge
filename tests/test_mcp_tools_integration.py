@@ -3225,8 +3225,8 @@ def test_span_approve_elicitation_timeout(tmp_path):
     os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
 
 
-def test_reconcile_elicitation_used_when_outcome_not_provided():
-    """icc_reconcile with no outcome must call _elicit to ask the user."""
+def test_reconcile_returns_error_when_outcome_invalid():
+    """icc_reconcile with invalid/missing outcome must return an error directly (no elicitation)."""
     from scripts.emerge_daemon import EmergeDaemon
     from scripts.state_tracker import load_tracker, save_tracker
     from unittest.mock import patch
@@ -3238,11 +3238,14 @@ def test_reconcile_elicitation_used_when_outcome_not_provided():
     save_tracker(state_path, tracker)
     delta_id = tracker.state["deltas"][-1]["id"]
 
-    with patch.object(daemon, "_elicit", return_value={"outcome": "confirm"}) as mock_elicit:
-        result = daemon.call_tool("icc_reconcile", {"delta_id": delta_id})
+    with patch.object(daemon, "_elicit") as mock_elicit:
+        result = daemon.call_tool("icc_reconcile", {"delta_id": delta_id, "outcome": ""})
 
-    assert result.get("structuredContent", {}).get("outcome") == "confirm"
-    mock_elicit.assert_called_once()
+    # Must return an error, never call _elicit
+    assert result.get("isError") is True
+    content = result.get("content", [{}])
+    assert any("must be confirm/correct/retract" in str(b.get("text", "")) for b in content)
+    mock_elicit.assert_not_called()
 
 
 def test_hub_resolve_elicitation_used_when_resolution_not_provided():

@@ -14,7 +14,8 @@ from scripts.policy_config import default_exec_root, default_hook_state_root, pi
 from scripts.span_tracker import SpanTracker  # noqa: E402
 from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
 
-_REFLECTION_TURN_THRESHOLD = 20
+_REFLECTION_TURN_THRESHOLD = 1
+_SPAN_REMINDER_INTERVAL = 5
 _REFLECTION_CACHE_TTL_MS = 15 * 60 * 1000
 
 
@@ -89,6 +90,16 @@ def main() -> None:
         ).format_reflection_with_cache(cache_ttl_ms=_REFLECTION_CACHE_TTL_MS)
         if reflection:
             context_text = reflection + "\n\n" + context_text
+
+    # Every N turns: remind CC to open a span if none is active
+    active_span_id = str(tracker.state.get("active_span_id", "") or "")
+    if not active_span_id and turn_count > 1 and turn_count % _SPAN_REMINDER_INTERVAL == 0:
+        reminder = (
+            "[Span] No active span. "
+            "If this turn involves tool use, open one first: "
+            'icc_span_open(intent_signature="connector.mode.name").'
+        )
+        context_text = reminder + "\n\n" + context_text
     if _mutated:
         save_tracker(state_path, tracker)
 

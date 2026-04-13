@@ -1104,30 +1104,9 @@ class EmergeDaemon:
             if not delta_id:
                 return self._tool_error("icc_reconcile: delta_id is required")
             if outcome not in ("confirm", "correct", "retract"):
-                # outcome not supplied — ask via ElicitRequest
-                elicit_resp = self._elicit(
-                    f"Choose the reconciliation outcome for delta `{delta_id}`:",
-                    {
-                        "type": "object",
-                        "properties": {
-                            "outcome": {
-                                "type": "string",
-                                "enum": ["confirm", "correct", "retract"],
-                                "title": "Outcome",
-                            }
-                        },
-                        "required": ["outcome"],
-                    },
+                return self._tool_error(
+                    f"icc_reconcile: 'outcome' must be confirm/correct/retract, got {outcome!r}"
                 )
-                if elicit_resp is None:
-                    return self._tool_error(
-                        "icc_reconcile: elicitation declined or timed out — operation cancelled"
-                    )
-                outcome = str(elicit_resp.get("outcome", "")).strip()
-                if outcome not in ("confirm", "correct", "retract"):
-                    return self._tool_error(
-                        f"icc_reconcile: invalid outcome from elicitation: {outcome!r}"
-                    )
             from scripts.state_tracker import load_tracker, save_tracker
             state_path = self._hook_state_path()
             tracker = load_tracker(state_path)

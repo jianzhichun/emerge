@@ -31,6 +31,36 @@ from scripts.policy_config import default_exec_root, default_hook_state_root, de
 from scripts.span_tracker import is_read_only_tool  # noqa: E402
 
 _MAX_DELTAS = 500
+_SPAN_NUDGE_FLAG = "_span_nudge_sent"
+
+
+def _maybe_span_nudge(tool_name: str, state_path: Path) -> str:
+    """Return a nudge string the first time a non-trivial tool runs without a span.
+
+    Writes a flag to state.json so the nudge fires at most once per session.
+    Returns empty string if the nudge has already been sent or state is unreadable.
+    """
+    try:
+        raw = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+    except Exception:
+        return ""
+    if raw.get(_SPAN_NUDGE_FLAG):
+        return ""
+    # Mark sent before returning so concurrent calls don't double-fire
+    raw[_SPAN_NUDGE_FLAG] = True
+    try:
+        tmp = state_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(state_path)
+    except Exception:
+        return ""
+    short = _short_tool_name(tool_name)
+    return (
+        f"[Span nudge] You just used `{short}` without an active span. "
+        "If this task will repeat, open a span at the start next time: "
+        'icc_span_open(intent_signature="connector.mode.name") '
+        "→ execute → icc_span_close(outcome=success|failure|aborted)."
+    )
 
 
 def _args_summary(tool_input: dict) -> str:
@@ -156,6 +186,19 @@ def main() -> None:
 
             # Delta with intent — makes in-span work visible in State tab
             _write_span_delta(tool_name, tool_input, state_path, active_span_intent)
+
+        elif not is_read_only_tool(tool_name):
+            # No active span + non-trivial tool: inject a one-shot nudge so CC
+            # learns to open spans. Fire only once per session to avoid noise.
+            nudge_text = _maybe_span_nudge(tool_name, state_path)
+            if nudge_text:
+                print(json.dumps({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PostToolUse",
+                        "additionalContext": nudge_text,
+                    }
+                }))
+                return
 
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse"}}))
 

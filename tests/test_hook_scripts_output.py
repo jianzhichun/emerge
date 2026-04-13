@@ -213,7 +213,7 @@ def test_pre_compact_emits_recovery_token(tmp_path: Path):
     token = json.loads(token_text)
     assert token["schema_version"] == "flywheel.v1"
     assert isinstance(token["deltas"], list)
-    assert len(ctx) <= 900  # budget enforced
+    assert len(ctx) <= 1500  # budget enforced (includes cold-start reflection nudge)
 
 
 def test_post_tool_use_reads_verification_state_from_content_json(tmp_path: Path):
@@ -928,7 +928,7 @@ def test_pre_compact_prefers_cached_deep_reflection(tmp_path):
 def test_user_prompt_submit_reflection_at_turn_threshold(tmp_path):
     hook_state = tmp_path / "hook-state"
     hook_state.mkdir()
-    (hook_state / "state.json").write_text(json.dumps({"turn_count": 19}), encoding="utf-8")
+    (hook_state / "state.json").write_text(json.dumps({"turn_count": 0}), encoding="utf-8")
     exec_root = tmp_path / "exec-state"
     _seed_span_reflection_data(exec_root)
     env = os.environ.copy()
@@ -946,15 +946,16 @@ def test_user_prompt_submit_reflection_at_turn_threshold(tmp_path):
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "Muscle memory" in ctx
     state_after = json.loads((hook_state / "state.json").read_text(encoding="utf-8"))
-    assert state_after.get("turn_count") == 20
+    assert state_after.get("turn_count") == 1
 
 
-def test_user_prompt_submit_no_reflection_before_threshold(tmp_path):
+def test_user_prompt_submit_span_reminder_at_interval(tmp_path):
+    """Every SPAN_REMINDER_INTERVAL turns (turn > 1, no active span) a reminder is injected."""
     hook_state = tmp_path / "hook-state"
     hook_state.mkdir()
-    (hook_state / "state.json").write_text(json.dumps({"turn_count": 18}), encoding="utf-8")
+    # turn_count=4 → becomes 5 after increment → 5 % 5 == 0 → reminder fires
+    (hook_state / "state.json").write_text(json.dumps({"turn_count": 4}), encoding="utf-8")
     exec_root = tmp_path / "exec-state"
-    _seed_span_reflection_data(exec_root)
     env = os.environ.copy()
     env["CLAUDE_PLUGIN_DATA"] = str(hook_state)
     env["EMERGE_STATE_ROOT"] = str(exec_root)
@@ -968,9 +969,32 @@ def test_user_prompt_submit_no_reflection_before_threshold(tmp_path):
     )
     out = json.loads(proc.stdout.strip())
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "Muscle memory" not in ctx
-    state_after = json.loads((hook_state / "state.json").read_text(encoding="utf-8"))
-    assert state_after.get("turn_count") == 19
+    assert "[Span] No active span" in ctx
+
+
+def test_user_prompt_submit_no_reminder_when_span_active(tmp_path):
+    """Span reminder is suppressed when a span is already open."""
+    hook_state = tmp_path / "hook-state"
+    hook_state.mkdir()
+    (hook_state / "state.json").write_text(
+        json.dumps({"turn_count": 4, "active_span_id": "span-abc", "active_span_intent": "lark.read.foo"}),
+        encoding="utf-8",
+    )
+    exec_root = tmp_path / "exec-state"
+    env = os.environ.copy()
+    env["CLAUDE_PLUGIN_DATA"] = str(hook_state)
+    env["EMERGE_STATE_ROOT"] = str(exec_root)
+    proc = subprocess.run(
+        ["python3", str(ROOT / "hooks" / "user_prompt_submit.py")],
+        input=json.dumps({}),
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    out = json.loads(proc.stdout.strip())
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "[Span] No active span" not in ctx
 
 
 def test_build_reflection_cache_script_writes_cache(tmp_path):
@@ -1015,6 +1039,78 @@ def test_tool_audit_excludes_emerge_icc_tools(tmp_path: Path):
     result = json.loads(out)
     # Must be valid JSON — no crash
     assert isinstance(result, dict)
+
+
+def test_tool_audit_span_nudge_fires_once_for_non_read_only_tool(tmp_path: Path):
+    """First non-trivial tool call without a span injects a one-shot nudge."""
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({}), encoding="utf-8")
+    out = _run(
+        "tool_audit.py",
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "git status"},
+            "tool_response": {},
+            "hook_event_name": "PostToolUse",
+        },
+        tmp_path,
+    )
+    result = json.loads(out)
+    ctx = result.get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "Span nudge" in ctx
+    assert "icc_span_open" in ctx
+    # Flag written so second call does NOT nudge again
+    out2 = _run(
+        "tool_audit.py",
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "git log"},
+            "tool_response": {},
+            "hook_event_name": "PostToolUse",
+        },
+        tmp_path,
+    )
+    result2 = json.loads(out2)
+    ctx2 = result2.get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "Span nudge" not in ctx2
+
+
+def test_tool_audit_no_nudge_for_read_only_tool(tmp_path: Path):
+    """Read-only tools (Grep, Glob, Read) never trigger the span nudge."""
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({}), encoding="utf-8")
+    out = _run(
+        "tool_audit.py",
+        {
+            "tool_name": "Grep",
+            "tool_input": {"pattern": "foo"},
+            "tool_response": {},
+            "hook_event_name": "PostToolUse",
+        },
+        tmp_path,
+    )
+    result = json.loads(out)
+    ctx = result.get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "Span nudge" not in ctx
+
+
+def test_tool_audit_no_nudge_when_span_active(tmp_path: Path):
+    """No nudge when an active span is already open."""
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"active_span_id": "span-xyz", "active_span_intent": "lark.read.foo"}), encoding="utf-8")
+    out = _run(
+        "tool_audit.py",
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "tool_response": {},
+            "hook_event_name": "PostToolUse",
+        },
+        tmp_path,
+    )
+    result = json.loads(out)
+    ctx = result.get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "Span nudge" not in ctx
 
 
 def test_cwd_changed_emits_system_message(tmp_path: Path):

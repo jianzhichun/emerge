@@ -155,8 +155,10 @@ def test_latest_successful_span_ignores_failures(tracker):
     assert tracker.latest_successful_span("lark.read.get-doc") is None
 
 
-def test_span_reflection_empty_when_no_data(tracker):
-    assert tracker.format_reflection() == ""
+def test_span_reflection_cold_start_nudge_when_no_data(tracker):
+    result = tracker.format_reflection()
+    assert "Muscle memory: no learned patterns yet." in result
+    assert "icc_span_open" in result
 
 
 def test_span_reflection_with_stable_intents(tracker, monkeypatch):

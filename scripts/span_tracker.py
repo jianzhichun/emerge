@@ -358,7 +358,13 @@ class SpanTracker:
         """Build a compact muscle-memory summary for hook context injection."""
         candidates = self._load_candidates().get("spans", {})
         if not candidates:
-            return ""
+            return (
+                "Muscle memory: no learned patterns yet.\n"
+                "Open a span before your next tool use — "
+                'icc_span_open(intent_signature="connector.mode.name") '
+                "→ execute → icc_span_close(outcome=success|failure|aborted). "
+                "A few repetitions auto-promote the pattern to zero-LLM execution."
+            )
 
         stable: list[str] = []
         canary: list[str] = []
