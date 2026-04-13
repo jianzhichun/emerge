@@ -1050,3 +1050,117 @@ def test_cwd_changed_same_dir_emits_empty(tmp_path: Path):
     )
     result = json.loads(out)
     assert result == {}
+
+
+import os as _os
+
+
+def test_elicitation_ci_mode_auto_accepts_span_approve(tmp_path: Path):
+    """In EMERGE_CI=1 mode, Elicitation hook auto-accepts icc_span_approve elicitation."""
+    env_backup = _os.environ.copy()
+    try:
+        _os.environ["EMERGE_CI"] = "1"
+        _os.environ["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+        out = _run(
+            "elicitation.py",
+            {
+                "hook_event_name": "Elicitation",
+                "mcp_server_name": "plugin_emerge_emerge",
+                "message": "Activate pipeline `lark.read.get-doc`?\nThis will move from _pending/ to ...",
+                "mode": "form",
+                "elicitation_id": "elicit-abc123",
+                "requested_schema": {
+                    "type": "object",
+                    "properties": {"confirmed": {"type": "boolean"}},
+                },
+            },
+            tmp_path,
+        )
+        result = json.loads(out)
+        assert result["hookSpecificOutput"]["hookEventName"] == "Elicitation"
+        assert result["hookSpecificOutput"]["action"] == "accept"
+        assert result["hookSpecificOutput"]["content"]["confirmed"] is True
+    finally:
+        _os.environ.clear()
+        _os.environ.update(env_backup)
+
+
+def test_elicitation_non_ci_mode_passes_through(tmp_path: Path):
+    """Without EMERGE_CI=1, Elicitation hook emits empty object (let CC show dialog)."""
+    env_backup = _os.environ.copy()
+    try:
+        _os.environ.pop("EMERGE_CI", None)
+        _os.environ["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+        out = _run(
+            "elicitation.py",
+            {
+                "hook_event_name": "Elicitation",
+                "mcp_server_name": "plugin_emerge_emerge",
+                "message": "Activate pipeline `lark.read.get-doc`?",
+                "mode": "form",
+                "elicitation_id": "elicit-abc123",
+                "requested_schema": {"type": "object"},
+            },
+            tmp_path,
+        )
+        result = json.loads(out)
+        # No override — empty output lets CC show the dialog normally
+        assert result == {}
+    finally:
+        _os.environ.clear()
+        _os.environ.update(env_backup)
+
+
+def test_elicitation_ci_auto_accepts_reconcile(tmp_path: Path):
+    """In EMERGE_CI=1, auto-accepts reconcile with outcome=confirm."""
+    env_backup = _os.environ.copy()
+    try:
+        _os.environ["EMERGE_CI"] = "1"
+        _os.environ["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+        out = _run(
+            "elicitation.py",
+            {
+                "hook_event_name": "Elicitation",
+                "mcp_server_name": "plugin_emerge_emerge",
+                "message": "Choose the reconciliation outcome for delta `delta-001`:",
+                "mode": "form",
+                "elicitation_id": "elicit-def456",
+                "requested_schema": {
+                    "type": "object",
+                    "properties": {"outcome": {"type": "string"}},
+                },
+            },
+            tmp_path,
+        )
+        result = json.loads(out)
+        assert result["hookSpecificOutput"]["action"] == "accept"
+        assert result["hookSpecificOutput"]["content"]["outcome"] == "confirm"
+    finally:
+        _os.environ.clear()
+        _os.environ.update(env_backup)
+
+
+def test_elicitation_result_writes_audit_log(tmp_path: Path):
+    """ElicitationResult appends entry to elicitation-log.jsonl."""
+    out = _run(
+        "elicitation_result.py",
+        {
+            "hook_event_name": "ElicitationResult",
+            "mcp_server_name": "plugin_emerge_emerge",
+            "action": "accept",
+            "content": {"confirmed": True},
+            "mode": "form",
+            "elicitation_id": "elicit-abc123",
+        },
+        tmp_path,
+    )
+    result = json.loads(out)
+    # ElicitationResult uses top-level systemMessage or empty — never hookSpecificOutput
+    assert "hookSpecificOutput" not in result
+    # Audit log must have been written
+    log_path = tmp_path / "elicitation-log.jsonl"
+    assert log_path.exists()
+    entry = json.loads(log_path.read_text().strip())
+    assert entry["elicitation_id"] == "elicit-abc123"
+    assert entry["action"] == "accept"
+    assert entry["mcp_server_name"] == "plugin_emerge_emerge"

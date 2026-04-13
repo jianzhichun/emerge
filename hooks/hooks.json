@@ -195,6 +195,30 @@
           }
         ]
       }
+    ],
+    "Elicitation": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/elicitation.py",
+            "statusMessage": "Flywheel handling elicitation..."
+          }
+        ]
+      }
+    ],
+    "ElicitationResult": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/elicitation_result.py",
+            "statusMessage": "Flywheel logging elicitation outcome..."
+          }
+        ]
+      }
     ]
   }
 }
