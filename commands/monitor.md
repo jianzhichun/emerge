@@ -10,7 +10,7 @@ Always invoke the admin CLI via the **Emerge plugin root**.
 
 1. **Read configured runner profiles**:
    ```
-   python3 "/Users/apple/.claude/plugins/cache/emerge/emerge/0.3.65/scripts/repl_admin.py" runner-status --pretty
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" runner-status --pretty
    ```
    Extract the list of profile names (e.g. `mycader-1`, `mycader-2`).
    If no runners are configured, inform the user and stop.
@@ -31,7 +31,7 @@ Always invoke the admin CLI via the **Emerge plugin root**.
 
    Setup:
    1. Start Monitor:
-      command: "python3 /Users/apple/.claude/plugins/cache/emerge/emerge/0.3.65/scripts/watch_patterns.py --runner-profile {profile}"
+      command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/watch_patterns.py --runner-profile {profile}"
       description: "pattern alert watcher — {profile}"
       persistent: true
    2. You are now idle, waiting for pattern alerts.
@@ -44,9 +44,9 @@ Always invoke the admin CLI via the **Emerge plugin root**.
          ui_spec: {"type": "choice", "title": "emerge — 可以接管了",
                    "body": "[{intent_signature}] 已见 {occurrences} 次，接管？",
                    "options": ["接管", "跳过", "停止学习"], "timeout_s": 15}
-         接管 → icc_exec(intent_signature=...)
+         接管 → icc_exec(intent_signature=<value from alert JSON field "intent_signature">)
          停止学习 → pipeline freeze via repl_admin pipeline-set --set frozen=true
-     - stage=stable   → icc_exec(intent_signature=...) silently
+     - stage=stable   → icc_exec(intent_signature=<value from alert JSON field "intent_signature">) silently
 
    AI uncertainty or knowledge distillation questions → POST /notify with type=input:
      ui_spec: {"type": "input", "title": "emerge — 需要确认", "body": "<question>"}

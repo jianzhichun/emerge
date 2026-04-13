@@ -2985,9 +2985,12 @@ class EmergeDaemon:
         pattern-alerts.json for local/legacy setups.
         """
         import time as _time
-        runner_profile = str(context.get("runner_profile", "")).strip()
-        if runner_profile and not re.fullmatch(r"[a-zA-Z0-9_.-]+", runner_profile):
-            runner_profile = ""
+        _rp = str(context.get("runner_profile", "")).strip()
+        runner_profile: str | None = (
+            _rp
+            if _rp and len(_rp) <= 64 and re.fullmatch(r"[a-zA-Z0-9_.-]+", _rp)
+            else None
+        )
         filename = (
             f"pattern-alerts-{runner_profile}.json"
             if runner_profile
