@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -10,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.goal_control_plane import GoalControlPlane  # noqa: E402
-from scripts.policy_config import default_emerge_home, default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
+from scripts.policy_config import default_emerge_home, pin_plugin_data_path_if_present  # noqa: E402
 
 
 def main() -> None:
@@ -29,15 +28,7 @@ def main() -> None:
     pin_plugin_data_path_if_present()
     GoalControlPlane().ensure_initialized()
 
-    # watchPaths seeds CC's FileChanged watch list.
-    # Must point to the same directory cockpit writes to (hook_state_root, not emerge_home).
-    state_root = Path(default_hook_state_root())
-    emerge_pending = state_root / "pending-actions.json"
-    # Setup uses top-level systemMessage + watchPaths (hookSpecificOutput not allowed on Setup).
-    out = {
-        "systemMessage": f"emerge plugin ready. Home: {emerge_home}",
-        "watchPaths": [str(emerge_pending)],
-    }
+    out = {"systemMessage": f"emerge plugin ready. Home: {emerge_home}"}
     print(json.dumps(out))
 
 
