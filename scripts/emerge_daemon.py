@@ -2980,18 +2980,27 @@ class EmergeDaemon:
     def _push_pattern(self, stage: str, context: dict, summary: Any) -> None:
         """Push pattern detection result via file-based alert (watch_patterns.py Monitor).
 
-        Writes pattern-alerts.json to state root. The watch_patterns.py script
-        (launched as a persistent Monitor by /emerge:cockpit) picks it up and
-        streams the formatted alert into the CC conversation.
-        CC reads policy_stage from meta and decides whether to engage the operator
-        (via icc_exec → show_notify) or crystallize directly. Daemon never pops up.
+        Writes pattern-alerts-{runner_profile}.json when runner_profile is present in
+        context (set by OperatorMonitor._poll_machine), otherwise falls back to
+        pattern-alerts.json for local/legacy setups.
         """
         import time as _time
+        runner_profile = str(context.get("runner_profile", "")).strip()
+        if runner_profile and not re.fullmatch(r"[a-zA-Z0-9_.-]+", runner_profile):
+            runner_profile = ""
+        filename = (
+            f"pattern-alerts-{runner_profile}.json"
+            if runner_profile
+            else "pattern-alerts.json"
+        )
+        machine_id = summary.machine_ids[0] if summary.machine_ids else ""
         message = self._build_explore_message(context, summary)
         alert_data = {
             "submitted_at": int(_time.time() * 1000),
             "stage": stage,
             "intent_signature": summary.intent_signature,
+            "runner_profile": runner_profile,
+            "machine_id": machine_id,
             "message": message,
             "meta": {
                 "occurrences": summary.occurrences,
@@ -3000,7 +3009,7 @@ class EmergeDaemon:
             },
         }
         try:
-            self._write_json(self._state_root / "pattern-alerts.json", alert_data)
+            self._write_json(self._state_root / filename, alert_data)
         except Exception:
             pass
 

@@ -1437,6 +1437,28 @@ def test_push_pattern_writes_alert_for_all_stages(monkeypatch, tmp_path):
         assert data["meta"]["machine_ids"] == ["local"]
 
 
+def test_push_pattern_rejects_unsafe_runner_profile(tmp_path, monkeypatch):
+    """runner_profile with path traversal chars falls back to shared file."""
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon(root=ROOT)
+    from scripts.pattern_detector import PatternSummary
+
+    summary = PatternSummary(
+        machine_ids=["m1"],
+        intent_signature="zwcad.draw.line",
+        occurrences=3,
+        policy_stage="explore",
+        context_hint={"app": "zwcad"},
+        window_minutes=5.0,
+        detector_signals=["frequency"],
+    )
+    daemon._push_pattern("explore", {"app": "zwcad", "runner_profile": "../../etc"}, summary)
+
+    assert not (tmp_path / "pattern-alerts-../../etc.json").exists()
+    fallback_file = tmp_path / "pattern-alerts.json"
+    assert fallback_file.exists(), "should fall back to shared file for unsafe profile"
+
+
 def test_runner_client_notify_posts_ui_spec(tmp_path):
     """RunnerClient.notify(ui_spec) POSTs {"ui_spec": {...}} and returns result dict."""
     import json as _json, threading, socket
@@ -4038,3 +4060,55 @@ def test_observer_plugin_emit_event_writes_to_eventbus(tmp_path):
     assert event["intent_signature"] == "zwcad.write.apply-change"
     assert "ts_ms" in event
     assert "machine_id" in event
+
+
+# ---------------------------------------------------------------------------
+# _push_pattern per-runner alert routing
+# ---------------------------------------------------------------------------
+
+def test_push_pattern_writes_per_runner_alert_file(tmp_path, monkeypatch):
+    """When context carries runner_profile, alert goes to pattern-alerts-{profile}.json."""
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon(root=ROOT)
+    from scripts.pattern_detector import PatternSummary
+
+    summary = PatternSummary(
+        machine_ids=["workstation-A"],
+        intent_signature="hypermesh.mesh.batch",
+        occurrences=5,
+        window_minutes=10.0,
+        detector_signals=["frequency"],
+        context_hint={"app": "hypermesh"},
+        policy_stage="canary",
+    )
+    context = {"runner_profile": "mycader-1", "app": "hypermesh"}
+    daemon._push_pattern("canary", context, summary)
+
+    alert_file = tmp_path / "pattern-alerts-mycader-1.json"
+    assert alert_file.exists(), "per-runner alert file not created"
+    data = json.loads(alert_file.read_text())
+    assert data["runner_profile"] == "mycader-1"
+    assert data["machine_id"] == "workstation-A"
+    assert data["stage"] == "canary"
+    assert data["intent_signature"] == "hypermesh.mesh.batch"
+
+
+def test_push_pattern_falls_back_to_shared_file_when_no_runner_profile(tmp_path, monkeypatch):
+    """Without runner_profile in context, alert goes to pattern-alerts.json."""
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon(root=ROOT)
+    from scripts.pattern_detector import PatternSummary
+
+    summary = PatternSummary(
+        machine_ids=["m1"],
+        intent_signature="zwcad.draw.line",
+        occurrences=3,
+        window_minutes=5.0,
+        detector_signals=["frequency"],
+        context_hint={"app": "zwcad"},
+        policy_stage="explore",
+    )
+    daemon._push_pattern("explore", {"app": "zwcad"}, summary)
+
+    fallback_file = tmp_path / "pattern-alerts.json"
+    assert fallback_file.exists(), "fallback alert file not created"
