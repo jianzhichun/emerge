@@ -4112,3 +4112,41 @@ def test_push_pattern_falls_back_to_shared_file_when_no_runner_profile(tmp_path,
 
     fallback_file = tmp_path / "pattern-alerts.json"
     assert fallback_file.exists(), "fallback alert file not created"
+
+
+# ---------------------------------------------------------------------------
+# watch_patterns.py --runner-profile flag
+# ---------------------------------------------------------------------------
+
+def test_watch_patterns_profile_arg_selects_correct_file(tmp_path):
+    """watch_patterns.py --runner-profile mycader-1 watches pattern-alerts-mycader-1.json."""
+    import subprocess, time as _time, json as _j
+
+    alert_file = tmp_path / "pattern-alerts-mycader-1.json"
+    env = {
+        **os.environ,
+        "EMERGE_STATE_ROOT": str(tmp_path),
+    }
+    proc = subprocess.Popen(
+        [sys.executable, "scripts/watch_patterns.py", "--runner-profile", "mycader-1"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        cwd=str(ROOT),
+    )
+    _time.sleep(0.3)
+    alert_file.write_text(_j.dumps({
+        "submitted_at": int(_time.time() * 1000),
+        "stage": "canary",
+        "intent_signature": "hypermesh.mesh.batch",
+        "runner_profile": "mycader-1",
+        "machine_id": "ws-A",
+        "message": "test alert",
+        "meta": {"occurrences": 5, "window_minutes": 10, "machine_ids": ["ws-A"]},
+    }))
+    _time.sleep(0.5)
+    proc.terminate()
+    out = proc.stdout.read().decode()
+    assert "mycader-1" in out or "hypermesh.mesh.batch" in out, (
+        f"watcher did not output alert content; got: {out!r}"
+    )
