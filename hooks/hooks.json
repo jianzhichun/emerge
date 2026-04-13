@@ -6,7 +6,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/setup.py"
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/setup.py",
+            "once": true,
+            "statusMessage": "Emerge plugin initializing..."
           }
         ]
       }
@@ -17,7 +19,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py"
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py",
+            "statusMessage": "Flywheel loading session context..."
           }
         ]
       }
@@ -29,7 +32,8 @@
           {
             "type": "command",
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/session_end.py",
-            "timeout": 10
+            "timeout": 10,
+            "statusMessage": "Flywheel closing session..."
           }
         ]
       }
@@ -41,7 +45,8 @@
           {
             "type": "command",
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/stop.py",
-            "timeout": 10
+            "timeout": 10,
+            "statusMessage": "Flywheel checking open spans..."
           }
         ]
       }
@@ -53,7 +58,8 @@
           {
             "type": "command",
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/stop.py",
-            "timeout": 10
+            "timeout": 10,
+            "statusMessage": "Flywheel checking open spans..."
           }
         ]
       }
@@ -76,7 +82,8 @@
           {
             "type": "command",
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/task_completed.py",
-            "timeout": 10
+            "timeout": 10,
+            "statusMessage": "Flywheel verifying task completion..."
           }
         ]
       }
@@ -88,7 +95,8 @@
           {
             "type": "command",
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/subagent_start.py",
-            "timeout": 10
+            "timeout": 10,
+            "statusMessage": "Flywheel guarding subagent span..."
           }
         ]
       }
@@ -99,7 +107,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/user_prompt_submit.py"
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/user_prompt_submit.py",
+            "statusMessage": "Flywheel injecting context..."
           }
         ]
       }
@@ -110,7 +119,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/pre_tool_use.py"
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/pre_tool_use.py",
+            "statusMessage": "Flywheel validating intent..."
           }
         ]
       }
@@ -121,7 +131,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/post_tool_use.py"
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/post_tool_use.py",
+            "statusMessage": "Flywheel learning..."
           }
         ]
       },
@@ -130,7 +141,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/tool_audit.py"
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/tool_audit.py",
+            "statusMessage": "Flywheel auditing tool..."
           }
         ]
       }
@@ -141,7 +153,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/post_tool_use_failure.py"
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/post_tool_use_failure.py",
+            "statusMessage": "Flywheel recording failure..."
           }
         ]
       }
@@ -152,7 +165,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/pre_compact.py"
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/pre_compact.py",
+            "statusMessage": "Flywheel preserving state before compaction..."
           }
         ]
       }
