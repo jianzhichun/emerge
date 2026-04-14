@@ -20,7 +20,8 @@ class _FakeRunnerClient:
 
 
 def test_operator_monitor_detects_pattern_and_calls_push(tmp_path):
-    """_poll_machine still works when called directly (run() no longer polls)."""
+    """process_local_file triggers pattern detection via the push-based local event path."""
+    import json as _json
     push_calls = []
 
     def fake_push(stage: str, context: dict, summary) -> None:
@@ -39,15 +40,19 @@ def test_operator_monitor_detects_pattern_and_calls_push(tmp_path):
         for i in range(3)
     ]
 
+    machine_dir = tmp_path / "operator-events" / "m1"
+    machine_dir.mkdir(parents=True)
+    events_file = machine_dir / "events.jsonl"
+    events_file.write_text("\n".join(_json.dumps(e) for e in events) + "\n")
+
     monitor = OperatorMonitor(
-        machines={"m1": _FakeRunnerClient(events)},
+        machines={},
         push_fn=fake_push,
         poll_interval_s=0.05,
         event_root=tmp_path / "operator-events",
         adapter_root=tmp_path / "adapters",
     )
-    # run() no longer polls; call _poll_machine directly to test detection logic
-    monitor._poll_machine("m1", _FakeRunnerClient(events))
+    monitor.process_local_file(events_file)
 
     assert len(push_calls) >= 1
     assert push_calls[0]["stage"] == "explore"
@@ -86,12 +91,12 @@ def test_operator_monitor_stops_cleanly(tmp_path):
 
 
 def test_operator_monitor_accumulates_events_across_polls(tmp_path):
-    """Events arriving one-per-call accumulate in the buffer and trigger detection via _poll_machine."""
+    """Events written to events.jsonl accumulate in the buffer via process_local_file."""
+    import json as _json
     push_calls = []
 
     now_ms = int(time.time() * 1000)
-    # Events ordered oldest-first so each successive event has a higher ts_ms,
-    # allowing the since_ms filter to advance correctly across calls.
+    # Events ordered oldest-first so each successive event has a higher ts_ms.
     all_events = [
         {
             "ts_ms": now_ms - (2 - i) * 60_000,
@@ -104,61 +109,20 @@ def test_operator_monitor_accumulates_events_across_polls(tmp_path):
         for i in range(3)
     ]
 
-    call_count = [0]
+    machine_dir = tmp_path / "events" / "m1"
+    machine_dir.mkdir(parents=True)
+    events_file = machine_dir / "events.jsonl"
+    events_file.write_text("\n".join(_json.dumps(e) for e in all_events) + "\n")
 
-    class _OnePollClient:
-        """Returns exactly one new event per call — simulates events arriving one per call."""
-        def get_events(self, machine_id: str, since_ms: int = 0) -> list[dict]:
-            idx = call_count[0]
-            call_count[0] += 1
-            if idx < len(all_events):
-                return [all_events[idx]]
-            return []
-
-    client = _OnePollClient()
     monitor = OperatorMonitor(
-        machines={"m1": client},
+        machines={},
         push_fn=lambda s, c, x: push_calls.append(1),
         poll_interval_s=0.05,
         event_root=tmp_path / "events",
         adapter_root=tmp_path / "adapters",
     )
-    # run() no longer polls; call _poll_machine directly multiple times to test accumulation
-    for _ in range(3):
-        monitor._poll_machine("m1", client)
+    monitor.process_local_file(events_file)
 
-    assert len(push_calls) >= 1, "pattern should fire after accumulating 3 events across calls"
+    assert len(push_calls) >= 1, "pattern should fire after accumulating 3 events"
 
 
-def test_poll_machine_injects_runner_profile_into_context(tmp_path):
-    """runner_profile key in context must equal the machine_id passed to _poll_machine."""
-    captured: list[dict] = []
-
-    def fake_push(stage: str, context: dict, summary) -> None:
-        captured.append(context)
-
-    now_ms = int(time.time() * 1000)
-    events = [
-        {
-            "ts_ms": now_ms - i * 60_000,
-            "machine_id": "workstation-A",
-            "session_role": "operator",
-            "event_type": "entity_added",
-            "app": "zwcad",
-            "payload": {"layer": "标注", "content": f"room_{i}"},
-        }
-        for i in range(3)
-    ]
-
-    monitor = OperatorMonitor(
-        machines={"mycader-1": _FakeRunnerClient(events)},
-        push_fn=fake_push,
-        poll_interval_s=0.05,
-        event_root=tmp_path / "operator-events",
-        adapter_root=tmp_path / "adapters",
-    )
-    # run() no longer polls; call _poll_machine directly to test context injection
-    monitor._poll_machine("mycader-1", _FakeRunnerClient(events))
-
-    assert len(captured) >= 1
-    assert captured[0].get("runner_profile") == "mycader-1"

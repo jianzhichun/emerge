@@ -66,30 +66,6 @@ class _IndentedSafeDumper:
         )
 
 
-class _RunnerClientAdapter:
-    """Calls /operator-events HTTP endpoint on the remote runner directly.
-    Used by OperatorMonitor to fetch operator events from runner machines."""
-
-    def __init__(self, base_url: str, timeout_s: float = 5.0) -> None:
-        self._base_url = base_url.rstrip("/")
-        self._timeout_s = timeout_s
-
-    def get_events(self, machine_id: str, since_ms: int = 0) -> list[dict]:
-        import urllib.parse
-        import json as _j
-        from scripts.runner_client import _NO_PROXY_OPENER
-        url = (
-            f"{self._base_url}/operator-events"
-            f"?machine_id={urllib.parse.quote(machine_id)}&since_ms={since_ms}"
-        )
-        try:
-            with _NO_PROXY_OPENER.open(url, timeout=self._timeout_s) as r:
-                data = _j.loads(r.read())
-            return data.get("events", [])
-        except Exception:
-            return []
-
-
 class EmergeDaemon:
     _SERVER_MAX_PROTOCOL_VERSION = "2025-11-25"
 
@@ -2912,24 +2888,9 @@ class EmergeDaemon:
         from scripts.operator_monitor import OperatorMonitor
 
         poll_s = float(os.environ.get("EMERGE_MONITOR_POLL_S", "5"))
-        machines_env = os.environ.get("EMERGE_MONITOR_MACHINES", "")
-
-        machines: dict = {}
-        _rr = self._get_runner_router()
-        if _rr:
-            for profile_name in (machines_env.split(",") if machines_env else ["default"]):
-                profile_name = profile_name.strip()
-                if not profile_name:
-                    continue
-                client = _rr.find_client({"target_profile": profile_name})
-                if client is not None:
-                    machines[profile_name] = _RunnerClientAdapter(
-                        base_url=client.base_url,
-                        timeout_s=min(client.timeout_s, 10.0),
-                    )
 
         self._operator_monitor = OperatorMonitor(
-            machines=machines,
+            machines={},
             push_fn=self._push_pattern,
             poll_interval_s=poll_s,
             event_root=Path.home() / ".emerge" / "operator-events",
@@ -3020,8 +2981,8 @@ class EmergeDaemon:
         """Push pattern detection result via file-based alert (watch_patterns.py Monitor).
 
         Writes pattern-alerts-{runner_profile}.json when runner_profile is present in
-        context (set by OperatorMonitor._poll_machine), otherwise falls back to
-        pattern-alerts.json for local/legacy setups.
+        context (injected by the runner push path via EventRouter/process_local_file),
+        otherwise falls back to pattern-alerts.json for local/legacy setups.
         """
         import time as _time
         _rp = str(context.get("runner_profile", "")).strip()
@@ -3104,82 +3065,6 @@ class EmergeDaemon:
             self._elicit_results.pop(elicit_id, None)
             return None
         return self._elicit_results.pop(elicit_id, None)
-
-
-def _write_response(payload: dict) -> None:
-    """Write a JSON-RPC response to stdout, thread-safe."""
-    with _stdout_lock:
-        sys.stdout.write(json.dumps(payload) + "\n")
-        sys.stdout.flush()
-
-
-def run_stdio() -> None:
-    import atexit
-    from concurrent.futures import ThreadPoolExecutor
-
-    daemon = EmergeDaemon()
-    executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="emerge-worker")
-
-    daemon.start_operator_monitor()
-    daemon.start_event_router()
-    atexit.register(daemon.stop_operator_monitor)
-    atexit.register(daemon.stop_event_router)
-    atexit.register(lambda: executor.shutdown(wait=False))
-
-    for line in sys.stdin:
-        try:
-            text = line.strip()
-            if not text:
-                continue
-            try:
-                req = json.loads(text)
-            except json.JSONDecodeError as exc:  # pragma: no cover
-                _write_response({"jsonrpc": "2.0", "id": None,
-                                 "error": {"code": -32700, "message": f"Parse error: {exc}"}})
-                continue
-
-            req_id = req.get("id")
-            method = req.get("method", "")
-
-            # Elicitation responses: wake waiting worker thread, never dispatch as a request
-            if req_id and req_id in daemon._elicit_events:
-                result_obj = req.get("result") or {}
-                action = result_obj.get("action", "accept")
-                # MCP 2025-03-26: response is {"action": "accept"|"decline"|"cancel", "content": {...}}
-                # Store None for decline/cancel so _elicit() returns None → callers treat as cancelled
-                if action != "accept":
-                    daemon._elicit_results[req_id] = None
-                else:
-                    daemon._elicit_results[req_id] = result_obj.get("content") or {}
-                ev = daemon._elicit_events.pop(req_id, None)
-                if ev is not None:
-                    ev.set()
-                continue
-
-            # Tool calls run in thread pool so _elicit() can block a worker
-            # while the main loop continues routing
-            if method == "tools/call":
-                def _run(_req=req, _id=req_id):
-                    try:
-                        resp = daemon.handle_jsonrpc(_req)
-                    except Exception as exc:  # pragma: no cover
-                        resp = {"jsonrpc": "2.0", "id": _id,
-                                "error": {"code": -32603, "message": str(exc)}}
-                    if resp is not None:
-                        _write_response(resp)
-                executor.submit(_run)
-                continue
-
-            # All other methods (initialize, ping, tools/list, resources/*) are synchronous
-            try:
-                resp = daemon.handle_jsonrpc(req)
-            except Exception as exc:  # pragma: no cover
-                resp = {"jsonrpc": "2.0", "id": req_id,
-                        "error": {"code": -32603, "message": str(exc)}}
-            if resp is not None:
-                _write_response(resp)
-        except Exception:  # pragma: no cover
-            pass  # never let a single bad message kill the main loop
 
 
 def run_http(port: int = 8789) -> None:

@@ -9,31 +9,12 @@ Designed to be launched via CC's Monitor tool::
 """
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
-from scripts.pending_actions import format_pending_actions  # noqa: E402
-from scripts.watch_file import run_watcher  # noqa: E402
-
-
-def _state_root() -> Path:
-    env = os.environ.get("EMERGE_STATE_ROOT") or os.environ.get("CLAUDE_PLUGIN_DATA")
-    if env:
-        return Path(env)
-    return Path.home() / ".emerge" / "repl"
-
-
-def _fmt(data: dict) -> str | None:
-    actions = data.get("actions", [])
-    if not actions:
-        return None
-    return format_pending_actions(actions)
-
 
 if __name__ == "__main__":
     # Shim: delegate to watch_emerge.py (global event stream mode)

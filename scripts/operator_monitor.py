@@ -91,38 +91,3 @@ class OperatorMonitor(threading.Thread):
             except Exception:
                 context = summary.context_hint.copy()
             self._push_fn(summary.policy_stage, context, summary)
-
-    def _poll_machine(self, machine_id: str, client: Any) -> None:
-        since_ms = self._last_poll_ms.get(machine_id, 0)
-        events = client.get_events(machine_id=machine_id, since_ms=since_ms)
-
-        if events:
-            latest_ts = max(e.get("ts_ms", 0) for e in events)
-            self._last_poll_ms[machine_id] = latest_ts
-
-            buf = self._event_buffers.setdefault(machine_id, deque())
-            buf.extend(events)
-
-        buf = self._event_buffers.get(machine_id)
-        if not buf:
-            return
-
-        # Trim events older than the detector's frequency window
-        now_ms = int(time.time() * 1000)
-        window_ms = PatternDetector.FREQ_WINDOW_MS
-        while buf and now_ms - buf[0].get("ts_ms", 0) > window_ms:
-            buf.popleft()
-
-        if not buf:
-            return
-
-        summaries = self._detector.ingest(list(buf))
-        for summary in summaries:
-            app = summary.context_hint.get("app", machine_id)
-            plugin = self._adapter_registry.get_plugin(app)
-            try:
-                context = plugin.get_context(summary.context_hint)
-            except Exception:
-                context = summary.context_hint.copy()
-            context["runner_profile"] = machine_id
-            self._push_fn(summary.policy_stage, context, summary)

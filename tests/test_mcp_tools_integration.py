@@ -1288,31 +1288,6 @@ def test_operator_monitor_starts_and_stops(monkeypatch, tmp_path):
     daemon._operator_monitor.join(timeout=1.0)
 
 
-def test_run_stdio_starts_operator_monitor_when_env_set(monkeypatch, tmp_path):
-    """run_stdio must call start_operator_monitor() so EMERGE_OPERATOR_MONITOR=1 actually works."""
-    import io
-    import scripts.emerge_daemon as _mod
-    from scripts.emerge_daemon import EmergeDaemon
-
-    started = []
-
-    def fake_start(self):
-        started.append(True)
-
-    monkeypatch.setattr(EmergeDaemon, "start_operator_monitor", fake_start)
-    monkeypatch.setenv("EMERGE_OPERATOR_MONITOR", "1")
-    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
-
-    _orig_stdin = sys.stdin
-    sys.stdin = io.StringIO("")  # empty → loop exits immediately
-    try:
-        _mod.run_stdio()
-    finally:
-        sys.stdin = _orig_stdin
-
-    assert started, "run_stdio did not call start_operator_monitor()"
-
-
 # ---------------------------------------------------------------------------
 # HyperMesh vertical flywheel tests
 # ---------------------------------------------------------------------------
@@ -1493,31 +1468,6 @@ def test_runner_client_notify_posts_ui_spec(tmp_path):
         assert received[0] == {"ui_spec": spec}
     finally:
         server.shutdown()
-
-
-def test_runner_client_adapter_uses_no_proxy_opener(monkeypatch):
-    """_RunnerClientAdapter.get_events must not use the system proxy."""
-    from scripts.emerge_daemon import _RunnerClientAdapter
-    import urllib.request
-
-    calls = []
-
-    def tracking_open(req_or_url, *args, **kwargs):
-        if hasattr(req_or_url, 'full_url'):
-            calls.append(req_or_url.full_url)
-        else:
-            calls.append(str(req_or_url))
-        raise ConnectionRefusedError("mock: no server")
-
-    monkeypatch.setattr(urllib.request, "urlopen", tracking_open)
-
-    adapter = _RunnerClientAdapter("http://127.0.0.1:19999", timeout_s=1)
-    result = adapter.get_events("test-machine", since_ms=0)
-
-    # Should return [] on connection error (not raise)
-    assert result == []
-    # urlopen should NOT have been called (proxy-bypassing opener is used instead)
-    assert calls == [], f"Raw urlopen called — proxy bypass missing: {calls}"
 
 
 # ---------------------------------------------------------------------------
