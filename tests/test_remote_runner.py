@@ -124,3 +124,68 @@ def test_post_operator_message_shows_error_toast_on_failure(tmp_path, monkeypatc
     executor._post_operator_message("test message")
     assert len(toast_bodies) == 1
     assert "失败" in toast_bodies[0]
+
+
+def test_start_tray_skips_when_pystray_unavailable(tmp_path, monkeypatch):
+    """_start_tray must return without error when pystray is not installed."""
+    import sys
+    monkeypatch.setitem(sys.modules, "pystray", None)
+    executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
+    executor._start_tray()  # must not raise
+
+
+def test_start_tray_skips_when_pillow_unavailable(tmp_path, monkeypatch):
+    """_start_tray must return without error when Pillow (PIL) is not installed."""
+    import sys
+    monkeypatch.setitem(sys.modules, "pystray", None)
+    monkeypatch.setitem(sys.modules, "PIL", None)
+    monkeypatch.setitem(sys.modules, "PIL.Image", None)
+    monkeypatch.setitem(sys.modules, "PIL.ImageDraw", None)
+    executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
+    executor._start_tray()  # must not raise
+
+
+def test_start_tray_runs_icon_when_pystray_available(tmp_path, monkeypatch):
+    """_start_tray calls icon.run_detached() when pystray is importable."""
+    import sys
+    import types
+
+    run_detached_called = []
+
+    class _MockIcon:
+        def __init__(self, name, image, title, menu): pass
+        def run_detached(self): run_detached_called.append(True)
+        def stop(self): pass
+
+    class _MockMenuItem:
+        def __init__(self, label, action): pass
+
+    class _MockMenu:
+        def __init__(self, *items): pass
+
+    pystray_mock = types.ModuleType("pystray")
+    pystray_mock.Icon = _MockIcon
+    pystray_mock.MenuItem = _MockMenuItem
+    pystray_mock.Menu = _MockMenu
+    monkeypatch.setitem(sys.modules, "pystray", pystray_mock)
+
+    class _MockImage:
+        @staticmethod
+        def new(*a, **kw): return _MockImage()
+    class _MockImageDraw:
+        @staticmethod
+        def Draw(img): return _MockImageDraw()
+        def text(self, *a, **kw): pass
+    pil_mock = types.ModuleType("PIL")
+    pil_image = types.ModuleType("PIL.Image")
+    pil_image.new = _MockImage.new
+    pil_draw = types.ModuleType("PIL.ImageDraw")
+    pil_draw.Draw = _MockImageDraw.Draw
+    pil_mock.Image = pil_image
+    monkeypatch.setitem(sys.modules, "PIL", pil_mock)
+    monkeypatch.setitem(sys.modules, "PIL.Image", pil_image)
+    monkeypatch.setitem(sys.modules, "PIL.ImageDraw", pil_draw)
+
+    executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
+    executor._start_tray()
+    assert run_detached_called == [True]

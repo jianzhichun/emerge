@@ -136,6 +136,44 @@ class RunnerExecutor:
             except (ImportError, OSError):
                 pass  # headless or module-unavailable — skip feedback silently
 
+    def _start_tray(self) -> None:
+        """Start system tray icon in a background thread.
+
+        No-op (with a log warning) if pystray or Pillow are not installed,
+        so the runner can still operate headlessly without these deps.
+        """
+        try:
+            import pystray
+            from PIL import Image, ImageDraw
+        except ImportError:
+            logging.warning("pystray/Pillow not installed — tray icon disabled")
+            return
+        try:
+            img = Image.new("RGB", (64, 64), color=(30, 30, 30))
+            draw = ImageDraw.Draw(img)
+            draw.text((20, 16), "E", fill=(255, 255, 255))
+        except Exception:
+            img = Image.new("RGB", (64, 64), color=(30, 30, 30))
+
+        def _on_send_message(icon: Any, item: Any) -> None:
+            from scripts.operator_popup import show_input_bubble
+            threading.Thread(
+                target=show_input_bubble,
+                args=(self._post_operator_message,),
+                daemon=True,
+            ).start()
+
+        menu = pystray.Menu(
+            pystray.MenuItem("发送消息", _on_send_message),
+            pystray.MenuItem("退出", lambda icon, item: icon.stop()),
+        )
+        icon = pystray.Icon("emerge", img, "emerge runner", menu)
+        try:
+            icon.run_detached()
+        except (NotImplementedError, AttributeError):
+            # run_detached() not available on this backend — fall back to daemon thread
+            threading.Thread(target=icon.run, daemon=True, name="EmergeTrayIcon").start()
+
     def show_notify(self, params: dict) -> dict:
         """Show OS-native notification dialog. Blocks until user responds.
 
@@ -494,6 +532,7 @@ def run_server(host: str, port: int, *, root: Path | None = None, state_root: Pa
     logging.info("emerge-remote-runner starting host=%s port=%d pid=%d", host, port, os.getpid())
     executor = RunnerExecutor(root=root, state_root=state_root)
     _start_sse_client(executor)
+    executor._start_tray()
     handler_cls = type(
         "BoundRunnerHTTPHandler",
         (RunnerHTTPHandler,),
