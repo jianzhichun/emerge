@@ -8,20 +8,20 @@
 
 ## Overview
 
-Agents-team mode lets a main CC session (主脑) spawn one monitoring agent per runner. Each watcher observes its runner's EventBus, detills operator knowledge via popups and chat, and executes pipeline takeovers on approval. The tray companion on the runner machine provides a persistent channel for operator-initiated conversation.
+Agents-team mode lets a main CC session (team lead) spawn one monitoring agent per runner. Each watcher observes its runner's EventBus, detills operator knowledge via popups and chat, and executes pipeline takeovers on approval. The tray companion on the runner machine provides a persistent channel for operator-initiated conversation.
 
 ---
 
 ## 1. Architecture
 
 ```
-主脑 CC session
+team lead CC session
   TeamCreate("emerge-monitors")
   ├── spawn "{profile}-watcher"   (one per configured runner)
   │     Monitor: pattern-alerts-{profile}.json
   │     on alert → popup/exec protocol
   │     on operator_chat event → respond/execute
-  │     SendMessage(主脑, result)
+  │     SendMessage(team, result)
   │
   └── cockpit: watch_pending Monitor (unchanged)
 
@@ -31,7 +31,7 @@ runner machine
 ```
 
 **Core principles:**
-- 主脑 orchestrates and aggregates; does not handle alerts directly
+- team lead orchestrates and aggregates; does not handle alerts directly
 - Each watcher is isolated to its runner's alert file
 - Popup and execution happen inside the watcher; results reported via SendMessage
 - Tray companion is operator-initiated; popups are agent-initiated
@@ -89,7 +89,7 @@ python3 watch_patterns.py
 
 ## 3. Agents-Team Orchestration
 
-### 3.1 主脑 startup
+### 3.1 team lead startup
 
 Triggered by `/emerge:monitor` or cockpit action:
 
@@ -107,8 +107,8 @@ You are an emerge vertical monitor agent for runner: {profile}.
 1. Start Monitor: watch_patterns.py --runner-profile {profile}
 2. On pattern alert: apply the stage→action protocol below.
 3. Poll EventBus for operator_chat events; respond or execute.
-4. Report results to 主脑 via SendMessage.
-5. On shutdown_request from 主脑: exit cleanly.
+4. Report results to team lead via SendMessage.
+5. On shutdown_request from team lead: exit cleanly.
 
 Stage→action protocol:
   explore → silent observation only, record intent
@@ -133,7 +133,7 @@ spawn
 on alert:
   └── apply stage→action
   └── execute if approved
-  └── SendMessage(主脑, summary)
+  └── SendMessage(team lead, summary)
   └── idle again
 
 on shutdown_request:
@@ -143,7 +143,7 @@ on shutdown_request:
 
 ### 3.3 Dynamic member addition
 
-New runner added via `runner-bootstrap` → 主脑 spawns additional watcher without rebuilding the team:
+New runner added via `runner-bootstrap` → team lead spawns additional watcher without rebuilding the team:
 
 ```python
 Agent(team_name="emerge-monitors", name=f"{new_profile}-watcher", ...)
@@ -317,7 +317,7 @@ Deliverables:
 - cockpit skill update: agents-team spawn protocol + stage→action protocol
 - `/emerge:monitor` skill or cockpit button
 
-Result: 主脑 + per-runner watchers + popup-based interaction fully working.
+Result: team lead + per-runner watchers + popup-based interaction fully working.
 
 ### Phase 2 — Tray Companion
 
