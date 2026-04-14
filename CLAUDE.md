@@ -39,7 +39,7 @@ python3 scripts/emerge_sync.py sync gmail
 
 **Documentation source of truth**: `README.md` is the canonical source for architecture and data-flow diagrams. `CLAUDE.md` focuses on implementation constraints and invariants; when behavior changes, update both, but keep diagram semantics centralized in `README.md` to avoid drift.
 
-**Single control plane**: `EmergeDaemon` (`scripts/emerge_daemon.py`) is the only MCP server. It handles all goal + flywheel tools (`icc_span_open`, `icc_span_close`, `icc_span_approve`, `icc_exec`, `icc_crystallize`, `icc_reconcile`, `icc_goal_ingest`, `icc_goal_read`, `icc_goal_rollback`) and all resources (`policy://`, `runner://`, `state://deltas`, `state://goal`, `state://goal-ledger`, `pipeline://`, `connector://`). There is no second server.
+**Single control plane**: `EmergeDaemon` (`scripts/emerge_daemon.py`) is the only MCP server (HTTP, port 8789, via `scripts/daemon_http.py`). It handles all goal + flywheel tools (`icc_span_open`, `icc_span_close`, `icc_span_approve`, `icc_exec`, `icc_crystallize`, `icc_reconcile`, `icc_goal_ingest`, `icc_goal_read`, `icc_goal_rollback`) and all resources (`policy://`, `runner://`, `state://deltas`, `state://goal`, `state://goal-ledger`, `pipeline://`, `connector://`). There is no second server.
 
 **Two execution paths for pipelines**: `PipelineEngine` is called in-process by the span bridge (`icc_span_open` when stable) and directly by `icc_read`/`icc_write` (internal, schema-hidden). When `RunnerRouter` resolves a client, the daemon builds a self-contained inline `exec()` payload and POSTs to the remote runner. The runner never receives pipeline files — switching machines is a URL change only.
 

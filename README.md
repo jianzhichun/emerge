@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/version-v0.3.65-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-543%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-564%20passing-brightgreen?logo=pytest)
 
 **Emerge** solves a core problem: AI operators repeat the same work but do not learn from it, so every session re-reasons from scratch. It uses a **dual flywheel** to crystallize repeated work into deterministic pipelines: a **forward flywheel** (`icc_exec`/`icc_span_open` tracking → policy promotion explore→canary→stable → auto-crystallized `.py+.yaml` pipelines → zero-LLM execution), and a **reverse flywheel** (`OperatorMonitor` observes human operators → `PatternDetector` detects repetition → elicitation captures intent → AI takes over).
 
@@ -18,7 +18,7 @@ Design anchors:
 
 ## Architecture
 
-Emerge sits **inside the Claude Code process**: the plugin exposes one stdio MCP server and a set of hooks. The daemon is the single control plane; heavy or GUI work is delegated to an **optional HTTP remote runner** while all policy state, registry, and WAL stay local.
+Emerge sits **inside the Claude Code process**: the plugin exposes one HTTP MCP server (port 8789) and a set of hooks. The daemon is the single control plane; heavy or GUI work is delegated to an **optional HTTP remote runner** while all policy state, registry, and WAL stay local.
 
 ```mermaid
 flowchart TB
@@ -35,13 +35,15 @@ flowchart TB
     EVENTBUS[operator-events EventBus]
   end
 
-  CC <-->|MCP stdio / JSON-RPC| DAEMON
+  CC <-->|HTTP MCP / JSON-RPC| DAEMON
   HK -->|context + guardrails| CC
   DAEMON --> CORE
   CORE --> POLICY
   CORE -->|when routed| RUNNER
-  EVENTBUS -->|GET /operator-events polled by OperatorMonitor| DAEMON
+  RUNNER -->|GET /runner/sse — SSE connect| DAEMON
+  RUNNER -->|POST /runner/event — push events| DAEMON
   RUNNER -->|POST /operator-event from observers| EVENTBUS
+  EVENTBUS -->|events-{profile}.jsonl written by daemon| DAEMON
 ```
 
 
@@ -353,7 +355,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 python -m pytest tests -q
 ```
 
-Current baseline: **543** tests passing.
+Current baseline: **564** tests passing.
 
 Documentation release checklist: `docs/doc-consistency-checklist.md`
 

@@ -31,7 +31,7 @@ Always invoke the admin CLI via the **Emerge plugin root**.
 
    Setup:
    1. Start Monitor:
-      command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/watch_patterns.py --runner-profile {profile}"
+      command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/watch_emerge.py --runner-profile {profile}"
       description: "pattern alert watcher — {profile}"
       persistent: true
    2. You are now idle, waiting for pattern alerts.
