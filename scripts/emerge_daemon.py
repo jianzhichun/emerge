@@ -982,6 +982,9 @@ class EmergeDaemon:
                     )
                 except Exception:
                     pass
+                _bsig = str(arguments.get("intent_signature", "")).strip()
+                if _bsig and not arguments.get("no_replay"):
+                    self._write_operator_event(_bsig, is_error=False)
                 return response
             try:
                 mode = str(arguments.get("mode", "inline_code"))
