@@ -100,6 +100,32 @@
         ]
       }
     ],
+    "TeammateIdle": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/teammate_idle.py",
+            "timeout": 10,
+            "statusMessage": "Flywheel keeping watcher alive..."
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "matcher": "mcp__plugin_.*emerge.*__icc_.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/permission_denied.py",
+            "timeout": 10,
+            "statusMessage": "Flywheel requesting retry..."
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "matcher": ".*",
@@ -141,8 +167,7 @@
           {
             "type": "command",
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/tool_audit.py",
-            "statusMessage": "Flywheel auditing tool...",
-            "if": "!mcp__plugin_emerge_emerge__icc_*"
+            "statusMessage": "Flywheel auditing tool..."
           }
         ]
       }
