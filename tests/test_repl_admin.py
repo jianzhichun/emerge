@@ -916,3 +916,94 @@ def test_hook_state_empty_state(tmp_path, monkeypatch):
     assert hf["active_span_id"] is None
     assert hf["span_nudge_sent"] is False
     assert isinstance(result["context_preview"], str)
+
+
+# ---------------------------------------------------------------------------
+# CockpitHTTPServer tests
+# ---------------------------------------------------------------------------
+
+def test_cockpit_http_server_starts_and_returns_url(tmp_path: Path, monkeypatch):
+    """CockpitHTTPServer.start() returns a http://localhost:<port> URL."""
+    import sys, time as _time
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.repl_admin import CockpitHTTPServer, _StandaloneDaemonStub
+
+    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+
+    cockpit = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), port=0, repl_root=tmp_path)
+    url = cockpit.start()
+    _time.sleep(0.1)
+
+    assert url.startswith("http://localhost:")
+    assert (tmp_path / "cockpit.pid").exists()
+    cockpit.stop()
+
+
+def test_cockpit_get_monitor_data_reads_memory(tmp_path: Path):
+    """get_monitor_data() reads _connected_runners from daemon._http_server directly."""
+    import sys, threading
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.repl_admin import CockpitHTTPServer
+
+    class _MockHTTPServer:
+        _runners_lock = threading.Lock()
+        _connected_runners = {
+            "profile-1": {
+                "connected_at_ms": 1000,
+                "last_event_ts_ms": 2000,
+                "machine_id": "m1",
+                "last_alert": None,
+            }
+        }
+
+    class _MockDaemon:
+        _http_server = _MockHTTPServer()
+
+    cockpit = CockpitHTTPServer(daemon=_MockDaemon(), port=0, repl_root=tmp_path)
+    data = cockpit.get_monitor_data()
+
+    assert data["team_active"] is True
+    assert len(data["runners"]) == 1
+    r = data["runners"][0]
+    assert r["runner_profile"] == "profile-1"
+    assert r["machine_id"] == "m1"
+    assert r["connected"] is True
+
+
+def test_cockpit_get_monitor_data_standalone_fallback(tmp_path: Path):
+    """get_monitor_data() falls back to runner-monitor-state.json when _http_server is None."""
+    import sys, json
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.repl_admin import CockpitHTTPServer, _StandaloneDaemonStub
+
+    state_file = tmp_path / "runner-monitor-state.json"
+    state_file.write_text(json.dumps({
+        "runners": [{"runner_profile": "p1", "connected": True}],
+        "team_active": True,
+    }), encoding="utf-8")
+
+    cockpit = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), port=0, repl_root=tmp_path)
+    data = cockpit.get_monitor_data()
+
+    assert data["team_active"] is True
+    assert any(r["runner_profile"] == "p1" for r in data["runners"])
+
+
+def test_cockpit_broadcast_pushes_to_sse_clients(tmp_path: Path):
+    """broadcast() writes SSE data to all connected wfile-like objects."""
+    import sys, json, io
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.repl_admin import CockpitHTTPServer, _StandaloneDaemonStub
+
+    cockpit = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), port=0, repl_root=tmp_path)
+
+    buf = io.BytesIO()
+    with cockpit._sse_lock:
+        cockpit._sse_clients.append(buf)
+
+    cockpit.broadcast({"monitors_updated": True})
+
+    written = buf.getvalue().decode()
+    assert "monitors_updated" in written
+    assert written.startswith("data: ")

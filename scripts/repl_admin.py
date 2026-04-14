@@ -1044,15 +1044,18 @@ def _injected_runtime_basename(i: int) -> str:
 _MAX_INJECTED_PER_CONNECTOR = 50  # guard against runaway accumulation
 
 
-def _cockpit_inject_html(connector: str, html: str, slot_id: str | None = None) -> None:
+def _cockpit_inject_html(connector: str, html: str, slot_id: str | None = None,
+                         *, store: dict | None = None, lock: threading.Lock | None = None) -> None:
     """Inject or update an HTML component slot.
 
     - Named slot (slot_id given): replace existing slot with same id in-place,
       or append a new slot if id not found.
     - Anonymous slot (slot_id=None): always append (legacy behaviour).
     """
-    with _COCKPIT_INJECT_LOCK:
-        slots = _COCKPIT_INJECTED_HTML.setdefault(connector, [])
+    d = store if store is not None else _COCKPIT_INJECTED_HTML
+    lk = lock if lock is not None else _COCKPIT_INJECT_LOCK
+    with lk:
+        slots = d.setdefault(connector, [])
         if slot_id is not None:
             for i, s in enumerate(slots):
                 if s.get("id") == slot_id:
@@ -1063,15 +1066,15 @@ def _cockpit_inject_html(connector: str, html: str, slot_id: str | None = None) 
         else:
             slots.append({"id": None, "html": html})
         if len(slots) > _MAX_INJECTED_PER_CONNECTOR:
-            _COCKPIT_INJECTED_HTML[connector] = slots[-_MAX_INJECTED_PER_CONNECTOR:]
+            d[connector] = slots[-_MAX_INJECTED_PER_CONNECTOR:]
 
 
-def _cockpit_list_injected_html(connector: str) -> list[str]:
-    with _COCKPIT_INJECT_LOCK:
-        return [s["html"] for s in _COCKPIT_INJECTED_HTML.get(connector, [])]
+def _cockpit_list_injected_html(connector: str, store: dict | None = None) -> list[str]:
+    d = store if store is not None else _COCKPIT_INJECTED_HTML
+    return [s["html"] for s in d.get(connector, [])]
 
 
-def cmd_assets() -> dict:
+def cmd_assets(injected_html: dict | None = None) -> dict:
     """Return per-connector assets: notes content and crystallized components.
 
     On-disk ``cockpit/*.html`` are listed first. Session injections from
@@ -1105,7 +1108,7 @@ def cmd_assets() -> dict:
                     "context": ctx_file.read_text(encoding="utf-8") if ctx_file.exists() else "",
                 })
 
-        injected = _cockpit_list_injected_html(name)
+        injected = _cockpit_list_injected_html(name, store=injected_html)
         for i in range(len(injected)):
             components.append({
                 "filename": _injected_runtime_basename(i),
@@ -1822,12 +1825,20 @@ def _cmd_save_settings(patch: dict) -> dict:
     return {"ok": True, "policy": updated.get("policy", {})}
 
 
+def _make_cockpit_handler(cockpit: CockpitHTTPServer):
+    """Return a _CockpitHandler subclass bound to cockpit's instance state."""
+    class _Handler(_CockpitHandler):
+        _cockpit = cockpit
+    return _Handler
+
+
 class _ReuseAddrTCPServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
 
 
 class _CockpitHandler(http.server.BaseHTTPRequestHandler):
     _shell_path: "Path" = Path(__file__).parent / "cockpit_shell.html"
+    _cockpit: "CockpitHTTPServer | None" = None  # set by _make_cockpit_handler()
 
     def log_message(self, fmt: str, *args: object) -> None:  # suppress request logs
         pass
@@ -1853,7 +1864,8 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/policy":
             self._json(cmd_policy_status())
         elif path == "/api/assets":
-            self._json(cmd_assets())
+            ih = self._cockpit._injected_html if self._cockpit is not None else None
+            self._json(cmd_assets(injected_html=ih))
         elif path == "/api/status":
             state_root = _resolve_repl_root()
             pending = (state_root / "pending-actions.json").exists()
@@ -1904,7 +1916,10 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                 since_ms=int(qs.get("since_ms", ["0"])[0]),
             ))
         elif path == "/api/control-plane/monitors":
-            self._json(cmd_control_plane_monitors())
+            if self._cockpit is not None:
+                self._json(self._cockpit.get_monitor_data())
+            else:
+                self._json(cmd_control_plane_monitors())
         elif path == "/api/control-plane/span-candidates":
             self._json(cmd_control_plane_span_candidates())
         elif path == "/api/control-plane/reflection-cache":
@@ -1936,6 +1951,9 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             }, ensure_ascii=False)
             self.wfile.write(f"data: {msg}\n\n".encode())
             self.wfile.flush()
+            if self._cockpit is not None:
+                with self._cockpit._sse_lock:
+                    self._cockpit._sse_clients.append(self.wfile)
             with _sse_lock:
                 _sse_clients.append(self.wfile)
             try:
@@ -1946,6 +1964,10 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             except OSError:
                 pass
             finally:
+                if self._cockpit is not None:
+                    with self._cockpit._sse_lock:
+                        if self.wfile in self._cockpit._sse_clients:
+                            self._cockpit._sse_clients.remove(self.wfile)
                 with _sse_lock:
                     if self.wfile in _sse_clients:
                         _sse_clients.remove(self.wfile)
@@ -1962,8 +1984,12 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             result = cmd_submit_actions(actions)
             self._json(result)
             if result.get("ok"):
-                _sse_broadcast({"pending": True, "action_count": result.get("action_count", 0),
-                                "ts_ms": int(time.time() * 1000)})
+                _ev = {"pending": True, "action_count": result.get("action_count", 0),
+                       "ts_ms": int(time.time() * 1000)}
+                if self._cockpit is not None:
+                    self._cockpit.broadcast(_ev)
+                else:
+                    _sse_broadcast(_ev)
         elif path == "/api/settings":
             self._json(_cmd_save_settings(body))
         elif path == "/api/goal":
@@ -1978,11 +2004,18 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             if slot_id is not None:
                 slot_id = str(slot_id).strip() or None
             if connector and html:
-                if replace:
-                    with _COCKPIT_INJECT_LOCK:
-                        _COCKPIT_INJECTED_HTML[connector] = [{"id": slot_id, "html": html}]
+                if self._cockpit is not None:
+                    store = self._cockpit._injected_html
+                    lock = self._cockpit._inject_lock
                 else:
-                    _cockpit_inject_html(connector, html, slot_id)
+                    store, lock = None, None
+                if replace:
+                    lk = lock if lock is not None else _COCKPIT_INJECT_LOCK
+                    d = store if store is not None else _COCKPIT_INJECTED_HTML
+                    with lk:
+                        d[connector] = [{"id": slot_id, "html": html}]
+                else:
+                    _cockpit_inject_html(connector, html, slot_id, store=store, lock=lock)
             self._json({"ok": True})
         elif path == "/api/control-plane/delta/reconcile":
             self._json(cmd_control_plane_delta_reconcile(
@@ -2056,7 +2089,8 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                 self._err(404)
                 return
             idx = int(m.group(1))
-            injected = _cockpit_list_injected_html(connector)
+            store = self._cockpit._injected_html if self._cockpit is not None else None
+            injected = _cockpit_list_injected_html(connector, store=store)
             if not (0 <= idx < len(injected)):
                 self._err(404)
                 return
@@ -2081,8 +2115,117 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 
-def _cockpit_pid_path() -> "Path":
-    return _resolve_repl_root() / "cockpit.pid"
+class _StandaloneDaemonStub:
+    """Minimal daemon stub for CockpitHTTPServer in standalone CLI mode.
+    get_monitor_data() falls back to runner-monitor-state.json."""
+    _http_server = None
+
+
+class CockpitHTTPServer:
+    """Cockpit HTTP server that can run inside the daemon process (in-process mode)
+    or standalone (CLI mode via cmd_serve).
+
+    In in-process mode, daemon._http_server is set and get_monitor_data() reads
+    _connected_runners from memory (zero file I/O). In standalone mode, fallback
+    reads runner-monitor-state.json.
+    """
+
+    def __init__(
+        self,
+        daemon: object,
+        port: int = 0,
+        repl_root: Path | None = None,
+        connector_root: Path | None = None,
+    ) -> None:
+        self._daemon = daemon
+        self._port = port
+        self._repl_root = repl_root or _resolve_repl_root()
+        self._connector_root = connector_root or _resolve_connector_root()
+        self._server: socketserver.TCPServer | None = None
+        self._thread: threading.Thread | None = None
+        self._sse_clients: list = []
+        self._sse_lock = threading.Lock()
+        self._injected_html: dict = {}
+        self._inject_lock = threading.Lock()
+        self.url: str | None = None
+
+    def start(self) -> str:
+        """Start cockpit HTTP server in daemon thread. Returns URL."""
+        handler = _make_cockpit_handler(self)
+        self._server = _ReuseAddrTCPServer(("127.0.0.1", self._port), handler)
+        actual_port = self._server.server_address[1]
+        self.url = f"http://localhost:{actual_port}"
+        pid_path = _cockpit_pid_path(self._repl_root)
+        pid_path.parent.mkdir(parents=True, exist_ok=True)
+        pid_path.write_text(
+            json.dumps({"pid": os.getpid(), "port": actual_port, "cwd": str(Path.cwd())}),
+            encoding="utf-8",
+        )
+        import atexit as _atexit
+        _atexit.register(self.stop)
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, daemon=True, name="CockpitHTTPServer"
+        )
+        self._thread.start()
+        return self.url
+
+    def stop(self) -> None:
+        if self._server:
+            try:
+                self._server.shutdown()
+            except Exception:
+                pass
+            self._server = None
+        _cockpit_pid_path(self._repl_root).unlink(missing_ok=True)
+
+    def broadcast(self, event: dict) -> None:
+        """Push SSE event to all connected browser clients."""
+        data = f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
+        with self._sse_lock:
+            dead = []
+            for wfile in self._sse_clients:
+                try:
+                    wfile.write(data)
+                    wfile.flush()
+                except OSError:
+                    dead.append(wfile)
+            for wfile in dead:
+                self._sse_clients.remove(wfile)
+
+    def get_monitor_data(self) -> dict:
+        """Return runner monitor data. Reads from daemon memory; falls back to file."""
+        hsrv = getattr(self._daemon, "_http_server", None)
+        if hsrv is not None:
+            with hsrv._runners_lock:
+                items = list(hsrv._connected_runners.items())
+            runners = [
+                {
+                    "runner_profile": profile,
+                    "connected": True,
+                    "connected_at_ms": info.get("connected_at_ms", 0),
+                    "last_event_ts_ms": info.get("last_event_ts_ms", 0),
+                    "machine_id": info.get("machine_id", ""),
+                    "last_alert": info.get("last_alert"),
+                }
+                for profile, info in items
+            ]
+            return {"runners": runners, "team_active": len(runners) > 0}
+        # Standalone mode: fallback to file
+        state_path = self._repl_root / "runner-monitor-state.json"
+        if not state_path.exists():
+            return {"runners": [], "team_active": False}
+        try:
+            data = json.loads(state_path.read_text(encoding="utf-8"))
+            return {
+                "runners": data.get("runners", []),
+                "team_active": bool(data.get("team_active", False)),
+            }
+        except (OSError, json.JSONDecodeError):
+            return {"runners": [], "team_active": False}
+
+
+def _cockpit_pid_path(repl_root: Path | None = None) -> Path:
+    return (repl_root or _resolve_repl_root()) / "cockpit.pid"
 
 
 def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
@@ -2091,7 +2234,8 @@ def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
     mismatch), it is stopped and a new one is started.
     """
     import signal as _signal
-    pid_path = _cockpit_pid_path()
+    repl_root = _resolve_repl_root()
+    pid_path = _cockpit_pid_path(repl_root)
     current_cwd = str(Path.cwd())
 
     # Reuse existing instance if alive AND same project
@@ -2101,13 +2245,12 @@ def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
             existing_pid = int(info["pid"])
             existing_port = int(info["port"])
             existing_cwd = info.get("cwd", "")
-            os.kill(existing_pid, 0)  # raises OSError if process is gone
+            os.kill(existing_pid, 0)
             if existing_cwd == current_cwd:
                 url = f"http://localhost:{existing_port}"
                 if open_browser:
                     webbrowser.open(url)
                 return {"ok": True, "port": existing_port, "url": url, "reused": True}
-            # Different project — stop the old server and start fresh
             try:
                 os.kill(existing_pid, _signal.SIGTERM)
             except OSError:
@@ -2116,21 +2259,13 @@ def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
             pass
         pid_path.unlink(missing_ok=True)
 
-    server = _ReuseAddrTCPServer(("127.0.0.1", port), _CockpitHandler)
-    actual_port = server.server_address[1]
-    url = f"http://localhost:{actual_port}"
-
-    # Write pid file so CC (and serve-stop) can manage lifecycle
-    pid_path.parent.mkdir(parents=True, exist_ok=True)
-    pid_path.write_text(
-        json.dumps({"pid": os.getpid(), "port": actual_port, "cwd": current_cwd}), encoding="utf-8"
-    )
+    cockpit = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), port=port, repl_root=repl_root)
+    url = cockpit.start()
+    actual_port = int(url.split(":")[-1])
 
     import atexit as _atexit
-    _atexit.register(lambda: _sse_broadcast({"status": "offline"}))
+    _atexit.register(lambda: cockpit.broadcast({"status": "offline"}))
 
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
     if open_browser:
         webbrowser.open(url)
     return {"ok": True, "port": actual_port, "url": url, "reused": False}
