@@ -39,11 +39,19 @@ def _parse_args() -> argparse.Namespace:
         help="Profile name to scope alert file (e.g. mycader-1). "
              "Omit to watch the shared pattern-alerts.json fallback.",
     )
+    p.add_argument("--state-root", default="", help="Override state root (for testing)")
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
     profile = args.runner_profile.strip()
-    filename = f"pattern-alerts-{profile}.json" if profile else "pattern-alerts.json"
-    run_watcher(_state_root() / filename, format_pattern_alert)
+    # Shim: delegate to watch_emerge.py for unified event stream
+    import os as _os, sys as _sys
+    _emerge = str(ROOT / "scripts" / "watch_emerge.py")
+    cmd = [_sys.executable, _emerge]
+    if profile:
+        cmd += ["--runner-profile", profile]
+    if getattr(args, "state_root", ""):
+        cmd += ["--state-root", args.state_root]
+    _os.execv(_sys.executable, cmd)

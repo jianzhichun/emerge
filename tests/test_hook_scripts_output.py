@@ -495,28 +495,29 @@ def test_user_prompt_submit_drains_unprocessed_pending_actions(tmp_path: Path):
 
 
 def test_watch_pending_emits_and_renames(tmp_path: Path):
-    """watch_pending.py prints actions to stdout and renames file."""
+    """watch_pending.py shims to watch_emerge.py, tailing events.jsonl for cockpit_action events."""
     import subprocess, time, signal
-    pending = tmp_path / "pending-actions.json"
-    pending.write_text(json.dumps({
-        "submitted_at": int(time.time() * 1000),
-        "actions": [{"type": "tool-call", "call": {"tool": "icc_exec", "arguments": {"intent_signature": "a.read.b"}}, "meta": {}}],
-    }))
+    # After shim, watch_pending.py delegates to watch_emerge.py which tails events.jsonl
+    events_file = tmp_path / "events.jsonl"
     env = os.environ.copy()
     env["EMERGE_STATE_ROOT"] = str(tmp_path)
     proc = subprocess.Popen(
         ["python3", str(ROOT / "scripts" / "watch_pending.py")],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
     )
-    deadline = time.time() + 3.0
-    while time.time() < deadline and pending.exists():
-        time.sleep(0.1)
+    time.sleep(0.3)
+    events_file.parent.mkdir(parents=True, exist_ok=True)
+    with events_file.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "type": "cockpit_action",
+            "ts_ms": int(time.time() * 1000),
+            "actions": [{"type": "tool-call", "call": {"tool": "icc_exec", "arguments": {"intent_signature": "a.read.b"}}, "meta": {}}],
+        }) + "\n")
+    time.sleep(0.6)
     proc.send_signal(signal.SIGTERM)
     stdout, _ = proc.communicate(timeout=3)
     assert "[Cockpit]" in stdout
     assert "icc_exec" in stdout
-    assert (tmp_path / "pending-actions.processed.json").exists()
-    assert not pending.exists()
 
 
 def test_save_tracker_preserves_span_fields(tmp_path):

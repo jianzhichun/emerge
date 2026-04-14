@@ -36,4 +36,9 @@ def _fmt(data: dict) -> str | None:
 
 
 if __name__ == "__main__":
-    run_watcher(_state_root() / "pending-actions.json", _fmt)
+    # Shim: delegate to watch_emerge.py (global event stream mode)
+    import os as _os, sys as _sys
+    from pathlib import Path as _Path
+    _root = _Path(__file__).resolve().parent.parent
+    _emerge = str(_root / "scripts" / "watch_emerge.py")
+    _os.execv(_sys.executable, [_sys.executable, _emerge])

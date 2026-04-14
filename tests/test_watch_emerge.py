@@ -70,3 +70,27 @@ def test_watch_emerge_exits_on_sigterm(tmp_path):
     proc.terminate()
     proc.wait(timeout=3)
     assert proc.returncode is not None
+
+
+def test_watch_patterns_shim_delegates_to_watch_emerge(tmp_path):
+    """watch_patterns.py --runner-profile delegates to watch_emerge.py."""
+    events_file = tmp_path / "events-mycader-1.jsonl"
+
+    proc = subprocess.Popen(
+        [sys.executable, str(ROOT / "scripts" / "watch_patterns.py"),
+         "--runner-profile", "mycader-1",
+         "--state-root", str(tmp_path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    time.sleep(0.3)
+    _write_event(events_file, {
+        "type": "pattern_alert",
+        "ts_ms": 1000,
+        "stage": "canary",
+        "intent_signature": "hypermesh.mesh.batch",
+        "meta": {"occurrences": 5, "window_minutes": 10, "machine_ids": ["wkst"]},
+    })
+    time.sleep(0.6)
+    proc.terminate()
+    out = proc.stdout.read().decode()
+    assert "canary" in out or "hypermesh" in out

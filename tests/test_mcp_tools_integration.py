@@ -4119,10 +4119,11 @@ def test_push_pattern_falls_back_to_shared_file_when_no_runner_profile(tmp_path,
 # ---------------------------------------------------------------------------
 
 def test_watch_patterns_profile_arg_selects_correct_file(tmp_path):
-    """watch_patterns.py --runner-profile mycader-1 watches pattern-alerts-mycader-1.json."""
+    """watch_patterns.py --runner-profile mycader-1 shims to watch_emerge.py, tailing events-mycader-1.jsonl."""
     import subprocess, time as _time, json as _j
 
-    alert_file = tmp_path / "pattern-alerts-mycader-1.json"
+    # After shim, watch_patterns.py delegates to watch_emerge.py which tails events-{profile}.jsonl
+    events_file = tmp_path / "events-mycader-1.jsonl"
     env = {
         **os.environ,
         "EMERGE_STATE_ROOT": str(tmp_path),
@@ -4135,15 +4136,17 @@ def test_watch_patterns_profile_arg_selects_correct_file(tmp_path):
         cwd=str(ROOT),
     )
     _time.sleep(0.3)
-    alert_file.write_text(_j.dumps({
-        "submitted_at": int(_time.time() * 1000),
-        "stage": "canary",
-        "intent_signature": "hypermesh.mesh.batch",
-        "runner_profile": "mycader-1",
-        "machine_id": "ws-A",
-        "message": "test alert",
-        "meta": {"occurrences": 5, "window_minutes": 10, "machine_ids": ["ws-A"]},
-    }))
+    events_file.parent.mkdir(parents=True, exist_ok=True)
+    with events_file.open("a", encoding="utf-8") as f:
+        f.write(_j.dumps({
+            "type": "pattern_alert",
+            "ts_ms": int(_time.time() * 1000),
+            "stage": "canary",
+            "intent_signature": "hypermesh.mesh.batch",
+            "runner_profile": "mycader-1",
+            "machine_id": "ws-A",
+            "meta": {"occurrences": 5, "window_minutes": 10, "machine_ids": ["ws-A"]},
+        }) + "\n")
     _time.sleep(0.5)
     proc.terminate()
     out = proc.stdout.read().decode()
