@@ -888,26 +888,29 @@ class EmergeDaemon:
             real_dir.mkdir(parents=True, exist_ok=True)
             real_py = real_dir / f"{pipeline_name}.py"
             real_yaml = real_dir / f"{pipeline_name}.yaml"
-            # Ask user to confirm before activating the pipeline
-            elicit_resp = self._elicit(
-                f"Activate pipeline `{intent_signature}`?\n"
-                f"This will move from _pending/ to {real_dir} and enable the bridge.",
-                {
-                    "type": "object",
-                    "properties": {"confirmed": {"type": "boolean", "title": "Activate"}},
-                    "required": ["confirmed"],
-                },
-            )
-            if elicit_resp is None:
-                return self._tool_error(
-                    "icc_span_approve: elicitation declined or timed out — operation cancelled"
+            # In HTTP mode, PreToolUse hook already obtained user confirmation via
+            # permissionDecision: ask — skip _elicit() to avoid double-gate.
+            # In stdio mode, use elicitation form for structured confirmation.
+            if not getattr(self, "_http_mode", False):
+                elicit_resp = self._elicit(
+                    f"Activate pipeline `{intent_signature}`?\n"
+                    f"This will move from _pending/ to {real_dir} and enable the bridge.",
+                    {
+                        "type": "object",
+                        "properties": {"confirmed": {"type": "boolean", "title": "Activate"}},
+                        "required": ["confirmed"],
+                    },
                 )
-            if not elicit_resp.get("confirmed"):
-                return self._tool_ok_json({
-                    "approved": False,
-                    "cancelled": True,
-                    "message": "icc_span_approve cancelled by user.",
-                })
+                if elicit_resp is None:
+                    return self._tool_error(
+                        "icc_span_approve: elicitation declined or timed out — operation cancelled"
+                    )
+                if not elicit_resp.get("confirmed"):
+                    return self._tool_ok_json({
+                        "approved": False,
+                        "cancelled": True,
+                        "message": "icc_span_approve cancelled by user.",
+                    })
             # Atomic move: write to temp in target dir, then replace
             fd, tmp_py = tempfile.mkstemp(prefix=".approve-", dir=str(real_dir))
             try:
@@ -1289,6 +1292,11 @@ class EmergeDaemon:
             if not conflict_id:
                 return self._tool_error("icc_hub resolve: 'conflict_id' is required")
             if resolution not in ("ours", "theirs", "skip"):
+                if getattr(self, "_http_mode", False):
+                    return self._tool_error(
+                        "icc_hub resolve: 'resolution' is required (ours/theirs/skip). "
+                        "Example: icc_hub(action='resolve', conflict_id='...', resolution='ours')"
+                    )
                 elicit_resp = self._elicit(
                     f"Choose the resolution strategy for conflict `{conflict_id}`:",
                     {
