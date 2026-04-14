@@ -120,7 +120,7 @@ class RunnerExecutor:
         event = {
             "type": "operator_message",
             "text": text,
-            "profile": self._runner_profile,
+            "runner_profile": self._runner_profile,
             "machine_id": machine_id,
             "ts_ms": int(_time.time() * 1000),
         }

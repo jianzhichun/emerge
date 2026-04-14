@@ -286,7 +286,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 | Pipeline engine & policy | `scripts/pipeline_engine.py`, `scripts/policy_config.py`                                                                                       |
 | ExecSession & WAL        | `scripts/exec_session.py`                                                                                                                      |
 | State & metrics          | `scripts/state_tracker.py`, `scripts/metrics.py`                                                                                               |
-| Remote runner            | `scripts/remote_runner.py` (SSE client, event forwarding, popup dispatch), `scripts/runner_client.py`, `scripts/runner_watchdog.py`            |
+| Remote runner            | `scripts/remote_runner.py` (SSE client, event forwarding, popup dispatch, system tray icon via `_start_tray`), `scripts/runner_client.py`, `scripts/runner_watchdog.py`. `runner_notify` toast type is fire-and-forget (no popup-result). Operator tray → `POST /runner/event` → `events-{profile}.jsonl` with `type=operator_message`. |
 | Observer framework       | `scripts/observer_plugin.py`, `scripts/observers/`                                                                                             |
 | Pattern detector         | `scripts/pattern_detector.py`                                                                                                                  |
 | Distiller                | `scripts/distiller.py`                                                                                                                         |

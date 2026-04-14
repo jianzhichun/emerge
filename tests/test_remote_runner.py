@@ -106,7 +106,7 @@ def test_post_operator_message_sends_correct_payload(tmp_path):
     ev = captured[0]
     assert ev["type"] == "operator_message"
     assert ev["text"] == "暂停 pipeline"
-    assert ev["profile"] == "mycader-1"
+    assert ev["runner_profile"] == "mycader-1"
     assert isinstance(ev["ts_ms"], int)
     assert "machine_id" in ev
 

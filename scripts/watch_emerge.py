@@ -51,6 +51,10 @@ def _format_event(event: dict) -> str | None:
         return format_runner_event(event)
     if etype in ("pattern_alert", "local_pattern_alert"):
         return format_pattern_alert(event)
+    if etype == "operator_message":
+        text = event.get("text", "")
+        profile = event.get("runner_profile", event.get("profile", "?"))
+        return f"[Operator:{profile}] {text}"
     if etype == "cockpit_action":
         # Pending actions embedded in event
         try:

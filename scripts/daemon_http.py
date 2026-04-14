@@ -190,8 +190,8 @@ class DaemonHTTPServer:
                    if k not in ("runner_profile", "type")},
             })
 
-        # Pattern detection on runner push events
-        if runner_profile:
+        # Pattern detection on runner push events (skip operator chat messages)
+        if runner_profile and payload.get("type") != "operator_message":
             window_ms = self._detector.FREQ_WINDOW_MS
             with self._runner_buffers_lock:
                 buf = self._runner_event_buffers.setdefault(runner_profile, deque())
