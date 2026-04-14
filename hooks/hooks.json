@@ -113,6 +113,19 @@
         ]
       }
     ],
+    "PermissionRequest": [
+      {
+        "matcher": "mcp__plugin_.*emerge.*__icc_.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/permission_request.py",
+            "timeout": 10,
+            "statusMessage": "Flywheel auto-approving..."
+          }
+        ]
+      }
+    ],
     "PermissionDenied": [
       {
         "matcher": "mcp__plugin_.*emerge.*__icc_.*",
@@ -122,6 +135,57 @@
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/permission_denied.py",
             "timeout": 10,
             "statusMessage": "Flywheel requesting retry..."
+          }
+        ]
+      }
+    ],
+    "InstructionsLoaded": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/instructions_loaded.py",
+            "timeout": 10,
+            "statusMessage": "Flywheel refreshing context..."
+          }
+        ]
+      }
+    ],
+    "WorktreeCreate": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/worktree_lifecycle.py",
+            "timeout": 10,
+            "statusMessage": "Flywheel isolating worktree span state..."
+          }
+        ]
+      }
+    ],
+    "WorktreeRemove": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/worktree_lifecycle.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "TaskCreated": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/task_created.py",
+            "timeout": 10,
+            "statusMessage": "Flywheel linking task to span..."
           }
         ]
       }
