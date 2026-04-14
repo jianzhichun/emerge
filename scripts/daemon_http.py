@@ -164,6 +164,10 @@ class DaemonHTTPServer:
             with (machine_dir / "events.jsonl").open("a", encoding="utf-8") as f:
                 f.write(json.dumps(payload, ensure_ascii=False) + "\n")
         if runner_profile:
+            import re as _re2
+            if not _re2.fullmatch(r"[a-zA-Z0-9_.-]+", runner_profile) or len(runner_profile) > 64:
+                runner_profile = ""  # invalid profile, skip per-runner event file
+        if runner_profile:
             with self._runners_lock:
                 if runner_profile in self._connected_runners:
                     self._connected_runners[runner_profile]["last_event_ts_ms"] = ts_ms
@@ -266,7 +270,7 @@ def ensure_running_or_launch(
             pid = int(info["pid"])
             os.kill(pid, 0)
             return "already_running"
-        except (ProcessLookupError, KeyError, ValueError, json.JSONDecodeError):
+        except (ProcessLookupError, PermissionError, KeyError, ValueError, json.JSONDecodeError):
             pid_path.unlink(missing_ok=True)
     if daemon_factory is None:
         return "not_running"
