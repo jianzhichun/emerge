@@ -27,13 +27,13 @@ def main() -> None:
     teammate_name = str(payload.get("teammate_name") or "")
 
     if team_name == "emerge-monitors" and teammate_name.endswith("-watcher"):
+        profile = teammate_name.removesuffix("-watcher")
         print(
-            f"[emerge/TeammateIdle] {teammate_name} is an emerge monitor agent — "
-            "do NOT go idle. Resume your persistent watch_emerge Monitor: "
-            f"command: python3 ${{CLAUDE_PLUGIN_ROOT}}/scripts/watch_emerge.py "
-            f"--runner-profile {teammate_name.removesuffix('-watcher')} "
-            "description: 'pattern alert watcher' persistent: true. "
-            "Wait for the next pattern alert and apply the stage→action protocol.",
+            f"[emerge/TeammateIdle] {teammate_name} is an emerge monitor agent — do NOT go idle. "
+            f"Re-launch the Monitor tool with: command "
+            f"`python3 ${{CLAUDE_PLUGIN_ROOT}}/scripts/watch_emerge.py --runner-profile {profile}`, "
+            "description `pattern alert watcher`, persistent: true. "
+            "Then wait for the next pattern alert and apply the stage→action protocol.",
             file=sys.stderr,
         )
         sys.exit(2)

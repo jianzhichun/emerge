@@ -53,6 +53,7 @@ def test_teammate_idle_feedback_mentions_watch_emerge(tmp_path):
     )
     assert rc == 2
     assert "watch_emerge" in err
+    assert "profile-abc" in err  # runner-profile correctly stripped from teammate_name
 
 
 def test_teammate_idle_allows_other_teams(tmp_path):
