@@ -5,6 +5,7 @@ import os
 import threading
 import time
 import uuid
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -56,9 +57,8 @@ class DaemonHTTPServer:
         self._popup_lock = threading.Lock()
         # Pattern detection: per-runner sliding-window event buffers
         from scripts.pattern_detector import PatternDetector as _PatternDetector
-        from collections import deque as _deque
         self._detector = _PatternDetector()
-        self._runner_event_buffers: dict[str, _deque] = {}
+        self._runner_event_buffers: dict[str, deque] = {}
         self._runner_buffers_lock = threading.Lock()
 
     @property
@@ -180,7 +180,6 @@ class DaemonHTTPServer:
             with self._runners_lock:
                 if runner_profile in self._connected_runners:
                     self._connected_runners[runner_profile]["last_event_ts_ms"] = ts_ms
-            self._write_monitor_state()
             self._append_event(self._state_root / f"events-{runner_profile}.jsonl", {
                 "type": "runner_event",
                 "ts_ms": ts_ms,
@@ -193,10 +192,10 @@ class DaemonHTTPServer:
         if runner_profile:
             window_ms = self._detector.FREQ_WINDOW_MS
             with self._runner_buffers_lock:
-                import collections as _col
-                buf = self._runner_event_buffers.setdefault(runner_profile, _col.deque())
+                buf = self._runner_event_buffers.setdefault(runner_profile, deque())
                 buf.append({
-                    **{k: v for k, v in payload.items() if k != "runner_profile"},
+                    **{k: v for k, v in payload.items()
+                       if k not in ("runner_profile", "ts_ms", "machine_id")},
                     "ts_ms": ts_ms,
                     "machine_id": machine_id or runner_profile,
                 })
@@ -237,8 +236,9 @@ class DaemonHTTPServer:
                             "ts_ms": ts_ms,
                         }
 
+            # Single _write_monitor_state call captures both last_event_ts_ms and last_alert
+            self._write_monitor_state()
             if summaries:
-                self._write_monitor_state()
                 cockpit = getattr(self._daemon, "_cockpit_server", None)
                 if cockpit is not None:
                     cockpit.broadcast({"monitors_updated": True})
