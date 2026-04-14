@@ -58,3 +58,22 @@ def format_pattern_alert(data: dict) -> str:
             f"machines={meta.get('machine_ids', [])}"
         )
     return "\n".join(lines)
+
+
+def format_runner_discovered(data: dict) -> str:
+    profile = data.get("runner_profile", "?")
+    machine = data.get("machine_id", "?")
+    ts = data.get("ts_ms", 0)
+    return f"[RunnerDiscovered] runner={profile} machine={machine} ts={ts}"
+
+
+def format_runner_online(data: dict) -> str:
+    profile = data.get("runner_profile", "?")
+    return f"[RunnerOnline] runner={profile} is ready"
+
+
+def format_runner_event(data: dict) -> str:
+    profile = data.get("runner_profile", "?")
+    etype = data.get("type", "?")
+    ts = data.get("ts_ms", 0)
+    return f"[RunnerEvent] runner={profile} type={etype} ts={ts}"
