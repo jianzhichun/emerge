@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 
 def show_notify(ui_spec: dict) -> dict[str, Any]:
@@ -197,3 +197,40 @@ def _render_info(*, body: str, title: str) -> dict[str, Any]:
     tk.Button(root, text="Close", command=root.destroy, width=10).pack(pady=(0, 14))
     root.mainloop()
     return {"action": "dismissed", "value": ""}
+
+
+def show_input_bubble(on_submit: Callable[[str], None]) -> None:
+    """Open a minimal tkinter input bubble.
+
+    Calls on_submit(text) with the stripped text when the operator clicks Send
+    or presses Enter. Silently closes on Cancel or empty input.
+    """
+    import tkinter as tk
+    root = tk.Tk()
+    root.title("emerge")
+    root.attributes("-topmost", True)
+    root.resizable(False, False)
+    root.update_idletasks()
+    sw = root.winfo_screenwidth()
+    sh = root.winfo_screenheight()
+    w, h = 360, 120
+    root.geometry(f"{w}x{h}+{int(sw / 2 - w / 2)}+{int(sh / 2 - h / 2)}")
+    tk.Label(root, text="发送消息给 watcher:", font=("", 10)).pack(
+        pady=(10, 4), padx=12, anchor="w"
+    )
+    entry = tk.Entry(root, width=40, relief="solid", bd=1)
+    entry.pack(padx=12, pady=(0, 6))
+    entry.focus_set()
+    btn_frame = tk.Frame(root)
+    btn_frame.pack(pady=(0, 10))
+
+    def _on_send() -> None:
+        text = entry.get().strip()
+        root.destroy()
+        if text:
+            on_submit(text)
+
+    entry.bind("<Return>", lambda _e: _on_send())
+    tk.Button(btn_frame, text="发送", command=_on_send, width=8).pack(side="left", padx=4)
+    tk.Button(btn_frame, text="取消", command=root.destroy, width=8).pack(side="left", padx=4)
+    root.mainloop()
