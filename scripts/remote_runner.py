@@ -139,21 +139,24 @@ class RunnerExecutor:
     def _start_tray(self) -> None:
         """Start system tray icon in a background thread.
 
-        No-op (with a log warning) if pystray or Pillow are not installed,
-        so the runner can still operate headlessly without these deps.
+        No-op if:
+        - pystray or Pillow are not installed (logs a warning), or
+        - no team-lead URL is configured (tray would be non-functional).
         """
+        if not self._team_lead_url:
+            return
         try:
             import pystray
             from PIL import Image, ImageDraw
         except ImportError:
             logging.warning("pystray/Pillow not installed — tray icon disabled")
             return
+        img = Image.new("RGB", (64, 64), color=(30, 30, 30))
         try:
-            img = Image.new("RGB", (64, 64), color=(30, 30, 30))
             draw = ImageDraw.Draw(img)
             draw.text((20, 16), "E", fill=(255, 255, 255))
         except Exception:
-            img = Image.new("RGB", (64, 64), color=(30, 30, 30))
+            pass  # proceed with plain solid image
 
         def _on_send_message(icon: Any, item: Any) -> None:
             from scripts.operator_popup import show_input_bubble

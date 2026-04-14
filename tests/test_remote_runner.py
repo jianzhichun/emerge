@@ -126,11 +126,18 @@ def test_post_operator_message_shows_error_toast_on_failure(tmp_path, monkeypatc
     assert "失败" in toast_bodies[0]
 
 
+def test_start_tray_skips_when_no_team_lead_url(tmp_path):
+    """_start_tray must return silently when no team-lead URL is configured."""
+    executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
+    executor._start_tray()  # must not raise; tray is non-functional without a daemon URL
+
+
 def test_start_tray_skips_when_pystray_unavailable(tmp_path, monkeypatch):
     """_start_tray must return without error when pystray is not installed."""
     import sys
     monkeypatch.setitem(sys.modules, "pystray", None)
     executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
+    executor._team_lead_url = "http://localhost:8789"
     executor._start_tray()  # must not raise
 
 
@@ -142,6 +149,7 @@ def test_start_tray_skips_when_pillow_unavailable(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "PIL.Image", None)
     monkeypatch.setitem(sys.modules, "PIL.ImageDraw", None)
     executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
+    executor._team_lead_url = "http://localhost:8789"
     executor._start_tray()  # must not raise
 
 
@@ -187,5 +195,6 @@ def test_start_tray_runs_icon_when_pystray_available(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "PIL.ImageDraw", pil_draw)
 
     executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
+    executor._team_lead_url = "http://localhost:8789"
     executor._start_tray()
     assert run_detached_called == [True]
