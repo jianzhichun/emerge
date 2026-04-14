@@ -54,6 +54,12 @@ class DaemonHTTPServer:
         self._popup_futures: dict[str, threading.Event] = {}
         self._popup_results: dict[str, dict] = {}
         self._popup_lock = threading.Lock()
+        # Pattern detection: per-runner sliding-window event buffers
+        from scripts.pattern_detector import PatternDetector as _PatternDetector
+        from collections import deque as _deque
+        self._detector = _PatternDetector()
+        self._runner_event_buffers: dict[str, _deque] = {}
+        self._runner_buffers_lock = threading.Lock()
 
     @property
     def port(self) -> int:
@@ -153,6 +159,9 @@ class DaemonHTTPServer:
             "machine_id": machine_id,
         })
         self._write_monitor_state()
+        cockpit = getattr(self._daemon, "_cockpit_server", None)
+        if cockpit is not None:
+            cockpit.broadcast({"monitors_updated": True})
 
     def _on_runner_event(self, payload: dict) -> None:
         runner_profile = str(payload.get("runner_profile", "")).strip()
@@ -179,6 +188,60 @@ class DaemonHTTPServer:
                 **{k: v for k, v in payload.items()
                    if k not in ("runner_profile", "type")},
             })
+
+        # Pattern detection on runner push events
+        if runner_profile:
+            window_ms = self._detector.FREQ_WINDOW_MS
+            with self._runner_buffers_lock:
+                import collections as _col
+                buf = self._runner_event_buffers.setdefault(runner_profile, _col.deque())
+                buf.append({
+                    **{k: v for k, v in payload.items() if k != "runner_profile"},
+                    "ts_ms": ts_ms,
+                    "machine_id": machine_id or runner_profile,
+                })
+                while buf and ts_ms - buf[0].get("ts_ms", 0) > window_ms:
+                    buf.popleft()
+                snapshot = list(buf)
+
+            summaries = self._detector.ingest(snapshot)
+            for summary in summaries:
+                try:
+                    stage = self._daemon._span_tracker.get_policy_status(
+                        summary.intent_signature
+                    )
+                except Exception:
+                    stage = summary.policy_stage  # fallback: "explore"
+
+                alert = {
+                    "type": "pattern_alert",
+                    "ts_ms": ts_ms,
+                    "runner_profile": runner_profile,
+                    "stage": stage,
+                    "intent_signature": summary.intent_signature,
+                    "meta": {
+                        "occurrences": summary.occurrences,
+                        "window_minutes": round(summary.window_minutes, 1),
+                        "machine_ids": summary.machine_ids,
+                        "detector_signals": summary.detector_signals,
+                    },
+                }
+                self._append_event(
+                    self._state_root / f"events-{runner_profile}.jsonl", alert
+                )
+                with self._runners_lock:
+                    if runner_profile in self._connected_runners:
+                        self._connected_runners[runner_profile]["last_alert"] = {
+                            "stage": stage,
+                            "intent_signature": summary.intent_signature,
+                            "ts_ms": ts_ms,
+                        }
+
+            if summaries:
+                self._write_monitor_state()
+                cockpit = getattr(self._daemon, "_cockpit_server", None)
+                if cockpit is not None:
+                    cockpit.broadcast({"monitors_updated": True})
 
     def _on_popup_result(self, payload: dict) -> None:
         popup_id = str(payload.get("popup_id", "")).strip()
@@ -243,7 +306,7 @@ class DaemonHTTPServer:
                 }
                 for profile, info in self._connected_runners.items()
             ]
-        state = {"runners": runners, "team_active": False,
+        state = {"runners": runners, "team_active": len(runners) > 0,
                  "updated_ts_ms": int(time.time() * 1000)}
         path = self._state_root / "runner-monitor-state.json"
         try:
@@ -357,6 +420,9 @@ def _make_handler(srv: "DaemonHTTPServer"):
                         srv._runner_sse_clients.pop(runner_profile, None)
                         srv._connected_runners.pop(runner_profile, None)
                     srv._write_monitor_state()
+                    cockpit = getattr(srv._daemon, "_cockpit_server", None)
+                    if cockpit is not None:
+                        cockpit.broadcast({"monitors_updated": True})
 
         def do_POST(self):  # noqa: N802
             import urllib.parse as _up
