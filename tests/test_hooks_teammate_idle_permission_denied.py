@@ -87,3 +87,74 @@ def test_teammate_idle_empty_payload_is_safe(tmp_path):
     rc, out, err = _run(TEAMMATE_IDLE_HOOK, {}, tmp_path)
     assert rc == 0
     assert json.loads(out) == {}
+
+
+# ---------------------------------------------------------------------------
+# PermissionDenied tests
+# ---------------------------------------------------------------------------
+
+def test_permission_denied_retry_for_icc_exec(tmp_path):
+    """icc_exec denied → retry: true."""
+    rc, out, err = _run(
+        PERMISSION_DENIED_HOOK,
+        {"hook_event_name": "PermissionDenied",
+         "tool_name": "mcp__plugin_emerge_emerge__icc_exec"},
+        tmp_path,
+    )
+    assert rc == 0
+    assert json.loads(out).get("retry") is True
+
+
+def test_permission_denied_retry_for_icc_span_open(tmp_path):
+    """icc_span_open denied → retry: true."""
+    rc, out, err = _run(
+        PERMISSION_DENIED_HOOK,
+        {"hook_event_name": "PermissionDenied",
+         "tool_name": "mcp__plugin_emerge_emerge__icc_span_open"},
+        tmp_path,
+    )
+    assert rc == 0
+    assert json.loads(out).get("retry") is True
+
+
+def test_permission_denied_retry_for_any_icc_variant(tmp_path):
+    """Any icc_* tool from any emerge plugin variant → retry: true."""
+    rc, out, err = _run(
+        PERMISSION_DENIED_HOOK,
+        {"hook_event_name": "PermissionDenied",
+         "tool_name": "mcp__plugin_test_emerge_test__icc_crystallize"},
+        tmp_path,
+    )
+    assert rc == 0
+    assert json.loads(out).get("retry") is True
+
+
+def test_permission_denied_no_retry_for_bash(tmp_path):
+    """Bash denied → no retry opinion (empty dict)."""
+    rc, out, err = _run(
+        PERMISSION_DENIED_HOOK,
+        {"hook_event_name": "PermissionDenied",
+         "tool_name": "Bash"},
+        tmp_path,
+    )
+    assert rc == 0
+    assert json.loads(out).get("retry") is not True
+
+
+def test_permission_denied_retry_for_icc_goal_read(tmp_path):
+    """icc_goal_read IS an icc_ tool — expect retry: true."""
+    rc, out, err = _run(
+        PERMISSION_DENIED_HOOK,
+        {"hook_event_name": "PermissionDenied",
+         "tool_name": "mcp__plugin_emerge_emerge__icc_goal_read"},
+        tmp_path,
+    )
+    assert rc == 0
+    assert json.loads(out).get("retry") is True
+
+
+def test_permission_denied_empty_payload_is_safe(tmp_path):
+    """Empty payload must not crash; no retry."""
+    rc, out, err = _run(PERMISSION_DENIED_HOOK, {}, tmp_path)
+    assert rc == 0
+    assert json.loads(out).get("retry") is not True
