@@ -405,7 +405,8 @@ class RunnerSSEClient:
                 result = self._show_notify(ui_spec)
             except Exception:
                 result = {"value": None}
-            self._post_result(popup_id, result)
+            if ui_spec.get("type") != "toast":
+                self._post_result(popup_id, result)
 
     def _post_result(self, popup_id: str, result: dict) -> None:
         import urllib.request as _ur

@@ -7,18 +7,19 @@ def show_notify(ui_spec: dict) -> dict[str, Any]:
     """Show OS-native blocking dialog driven by ui_spec.
 
     ui_spec fields:
-      type     : "choice" | "input" | "confirm" | "info"
+      type     : "choice" | "input" | "confirm" | "info" | "toast"
       body     : str  — main message text
-      title    : str  — window title (default "emerge")
+      title    : str  — window title (default "emerge"; ignored for toast)
       options  : list[str]  — button labels (required for type="choice")
       prefill  : str  — pre-filled text (type="input")
-      timeout_s: int  — >0 auto-selects options[0] after countdown (default 0)
+      timeout_s: int  — >0 auto-selects options[0] after countdown (default 0);
+                        for toast: auto-dismiss delay in seconds (default 5)
 
     Returns:
       {"action": "selected"|"confirmed"|"dismissed"|"skip", "value": str}
     """
     ui_type = ui_spec.get("type", "")
-    if ui_type not in ("choice", "input", "confirm", "info"):
+    if ui_type not in ("choice", "input", "confirm", "info", "toast"):
         return {"action": "skip", "value": ""}
     try:
         title = str(ui_spec.get("title", "emerge"))
@@ -34,6 +35,8 @@ def show_notify(ui_spec: dict) -> dict[str, Any]:
             return _render_input(body=body, prefill=prefill, title=title)
         if ui_type == "confirm":
             return _render_confirm(body=body, title=title)
+        if ui_type == "toast":
+            return _render_toast(body=body, timeout_s=max(1, timeout_s or 5))
         # info
         return _render_info(body=body, title=title)
     except Exception as exc:
@@ -149,6 +152,36 @@ def _render_confirm(*, body: str, title: str) -> dict[str, Any]:
     tk.Button(btn_frame, text="Cancel", command=on_dismiss, width=10).pack(side="left", padx=6)
     root.mainloop()
     return result
+
+
+def _render_toast(*, body: str, timeout_s: int) -> dict[str, Any]:
+    """Non-interactive toast that auto-dismisses after timeout_s seconds.
+
+    Spawns a daemon thread for the tkinter window and returns immediately.
+    """
+    import threading
+
+    def _show() -> None:  # intentionally closes over body/timeout_s — both are immutable call-locals
+        import tkinter as tk
+        try:
+            root = tk.Tk()
+            root.overrideredirect(True)
+            root.attributes("-topmost", True)
+            root.update_idletasks()
+            sw = root.winfo_screenwidth()
+            sh = root.winfo_screenheight()
+            w, h = 300, 64
+            root.geometry(f"{w}x{h}+{sw - w - 20}+{sh - h - 60}")
+            tk.Label(root, text=body, wraplength=280, font=("", 10), justify="left").pack(
+                pady=8, padx=12, anchor="w"
+            )
+            root.after(timeout_s * 1000, root.destroy)
+            root.mainloop()
+        except Exception:
+            pass  # headless or display error — silently skip
+
+    threading.Thread(target=_show, daemon=True).start()
+    return {"action": "dismissed", "value": ""}
 
 
 def _render_info(*, body: str, title: str) -> dict[str, Any]:

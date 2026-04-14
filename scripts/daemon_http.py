@@ -180,8 +180,10 @@ class DaemonHTTPServer:
             with self._runners_lock:
                 if runner_profile in self._connected_runners:
                     self._connected_runners[runner_profile]["last_event_ts_ms"] = ts_ms
+            _orig_type = payload.get("type", "")
+            _written_type = _orig_type if _orig_type == "operator_message" else "runner_event"
             self._append_event(self._state_root / f"events-{runner_profile}.jsonl", {
-                "type": "runner_event",
+                "type": _written_type,
                 "ts_ms": ts_ms,
                 "runner_profile": runner_profile,
                 **{k: v for k, v in payload.items()
@@ -255,6 +257,22 @@ class DaemonHTTPServer:
 
     def request_popup(self, runner_profile: str, ui_spec: dict, timeout_s: float = 30.0) -> dict:
         """Send popup to runner via SSE, wait for result. Blocks calling thread."""
+        if ui_spec.get("type") == "toast":
+            # Fire-and-forget: popup_id="" is an intentional sentinel — runner never posts back
+            # a popup-result for toasts, so there is nothing to correlate.
+            command = json.dumps({"type": "notify", "popup_id": "", "ui_spec": ui_spec})
+            with self._runners_lock:
+                wfile = self._runner_sse_clients.get(runner_profile)
+            if wfile is None:
+                return {"ok": False, "error": "runner_not_connected"}
+            try:
+                wfile.write(f"data: {command}\n\n".encode())
+                wfile.flush()
+                return {"ok": True}
+            except OSError:
+                with self._runners_lock:
+                    self._runner_sse_clients.pop(runner_profile, None)
+                return {"ok": False, "error": "runner_disconnected"}
         popup_id = uuid.uuid4().hex
         ev = threading.Event()
         with self._popup_lock:

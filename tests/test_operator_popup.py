@@ -75,3 +75,49 @@ def test_show_notify_info(monkeypatch):
         lambda *, body, title: {"action": "dismissed", "value": ""})
     result = popup_mod.show_notify({"type": "info", "body": "完成"})
     assert result == {"action": "dismissed", "value": ""}
+
+
+def test_show_notify_toast_returns_dismissed(monkeypatch):
+    import scripts.operator_popup as popup_mod
+    monkeypatch.setattr(popup_mod, "_render_toast",
+        lambda *, body, timeout_s: {"action": "dismissed", "value": ""})
+    result = popup_mod.show_notify({"type": "toast", "body": "完成", "timeout_s": 3})
+    assert result == {"action": "dismissed", "value": ""}
+
+
+def test_show_notify_toast_default_timeout(monkeypatch):
+    import scripts.operator_popup as popup_mod
+    captured: dict = {}
+    monkeypatch.setattr(popup_mod, "_render_toast",
+        lambda *, body, timeout_s: (captured.update({"timeout_s": timeout_s})
+                                    or {"action": "dismissed", "value": ""}))
+    popup_mod.show_notify({"type": "toast", "body": "x"})
+    assert captured["timeout_s"] == 5
+
+
+def test_dispatch_command_toast_skips_post_result():
+    from scripts.remote_runner import RunnerSSEClient
+    post_result_calls: list = []
+    client = RunnerSSEClient.__new__(RunnerSSEClient)
+    client._show_notify = lambda spec: {"action": "dismissed", "value": ""}
+    client._post_result = lambda popup_id, result: post_result_calls.append(popup_id)
+    client._dispatch_command({
+        "type": "notify",
+        "popup_id": "abc",
+        "ui_spec": {"type": "toast", "body": "test"},
+    })
+    assert post_result_calls == []
+
+
+def test_dispatch_command_non_toast_posts_result():
+    from scripts.remote_runner import RunnerSSEClient
+    post_result_calls: list = []
+    client = RunnerSSEClient.__new__(RunnerSSEClient)
+    client._show_notify = lambda spec: {"action": "selected", "value": "好"}
+    client._post_result = lambda popup_id, result: post_result_calls.append(popup_id)
+    client._dispatch_command({
+        "type": "notify",
+        "popup_id": "xyz",
+        "ui_spec": {"type": "choice", "body": "接管？", "options": ["好"]},
+    })
+    assert post_result_calls == ["xyz"]
