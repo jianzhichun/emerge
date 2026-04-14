@@ -43,7 +43,7 @@ flowchart TB
   RUNNER -->|GET /runner/sse — SSE connect| DAEMON
   RUNNER -->|POST /runner/event — push events| DAEMON
   RUNNER -->|POST /operator-event from observers| EVENTBUS
-  EVENTBUS -->|events-{profile}.jsonl written by daemon| DAEMON
+  EVENTBUS -->|"events-{profile}.jsonl written by daemon"| DAEMON
 ```
 
 
