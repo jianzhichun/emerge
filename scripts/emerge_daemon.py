@@ -1131,6 +1131,22 @@ class EmergeDaemon:
             })
         if name == "icc_hub":
             return self._handle_icc_hub(arguments)
+        if name == "runner_notify":
+            runner_profile = str(arguments.get("runner_profile", "")).strip()
+            ui_spec = arguments.get("ui_spec", {})
+            if not runner_profile:
+                return {"isError": True, "content": [{"type": "text",
+                        "text": "runner_notify: runner_profile is required"}]}
+            if not isinstance(ui_spec, dict):
+                return {"isError": True, "content": [{"type": "text",
+                        "text": "runner_notify: ui_spec must be an object"}]}
+            http_srv = getattr(self, "_http_server", None)
+            if http_srv is None:
+                return {"isError": True, "content": [{"type": "text",
+                        "text": "runner_notify requires HTTP daemon mode (--http flag)"}]}
+            result = http_srv.request_popup(runner_profile, ui_spec)
+            import json as _j
+            return {"content": [{"type": "text", "text": _j.dumps(result, ensure_ascii=False)}]}
         return self._tool_error(f"Unknown tool: {name}")
 
     def _handle_icc_hub(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1722,6 +1738,29 @@ class EmergeDaemon:
                                     },
                                 },
                                 "required": ["action"],
+                            },
+                        },
+                        {
+                            "name": "runner_notify",
+                            "title": "Notify operator via runner popup",
+                            "annotations": {"readOnlyHint": False},
+                            "description": (
+                                "Show a popup on the runner machine and wait for operator response. "
+                                "Returns {ok, value, timed_out}. Requires HTTP daemon mode."
+                            ),
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "runner_profile": {
+                                        "type": "string",
+                                        "description": "Runner profile name (e.g. mycader-1)",
+                                    },
+                                    "ui_spec": {
+                                        "type": "object",
+                                        "description": "Popup spec: {type, title, body, options?, timeout_s?}",
+                                    },
+                                },
+                                "required": ["runner_profile", "ui_spec"],
                             },
                         },
                     ]

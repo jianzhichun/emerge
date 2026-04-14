@@ -133,3 +133,54 @@ def test_runner_executor_forwards_event_to_daemon(tmp_path):
     events = [json.loads(l) for l in profile_events.read_text().splitlines()]
     assert any(e["type"] == "runner_event" for e in events)
     srv.stop()
+
+
+def test_runner_notify_returns_error_when_no_http_server(tmp_path):
+    """runner_notify MCP tool returns error when not in HTTP mode."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.emerge_daemon import EmergeDaemon
+
+    daemon = EmergeDaemon()
+    # No _http_server set — should return isError
+    result = daemon.call_tool("runner_notify", {
+        "runner_profile": "mycader-1",
+        "ui_spec": {"type": "choice", "title": "Test"}
+    })
+    assert result.get("isError") or (
+        result.get("content", [{}])[0].get("text", "").startswith("runner_notify")
+    )
+
+
+def test_runner_notify_returns_error_when_runner_not_connected(tmp_path):
+    """runner_notify returns error when runner is not connected to SSE."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.daemon_http import DaemonHTTPServer
+
+    class _StubDaemon:
+        def handle_jsonrpc(self, req):
+            return {"jsonrpc": "2.0", "id": req.get("id"), "result": {}}
+
+    srv = DaemonHTTPServer(
+        daemon=_StubDaemon(), port=0,
+        pid_path=tmp_path / "d.pid",
+        event_root=tmp_path / "operator-events",
+        state_root=tmp_path / "repl",
+    )
+    srv.start()
+    time.sleep(0.1)
+
+    daemon = EmergeDaemon()
+    daemon._http_server = srv
+
+    result = daemon.call_tool("runner_notify", {
+        "runner_profile": "not-connected",
+        "ui_spec": {"type": "choice", "title": "Test"}
+    })
+    content_text = result.get("content", [{}])[0].get("text", "")
+    result_data = json.loads(content_text)
+    assert result_data.get("ok") is False
+    assert result_data.get("error") == "runner_not_connected"
+    srv.stop()
