@@ -1954,8 +1954,9 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             if self._cockpit is not None:
                 with self._cockpit._sse_lock:
                     self._cockpit._sse_clients.append(self.wfile)
-            with _sse_lock:
-                _sse_clients.append(self.wfile)
+            else:
+                with _sse_lock:
+                    _sse_clients.append(self.wfile)
             try:
                 while True:
                     time.sleep(25)
@@ -1968,9 +1969,10 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                     with self._cockpit._sse_lock:
                         if self.wfile in self._cockpit._sse_clients:
                             self._cockpit._sse_clients.remove(self.wfile)
-                with _sse_lock:
-                    if self.wfile in _sse_clients:
-                        _sse_clients.remove(self.wfile)
+                else:
+                    with _sse_lock:
+                        if self.wfile in _sse_clients:
+                            _sse_clients.remove(self.wfile)
             return
         else:
             self._err(404)
@@ -2268,7 +2270,7 @@ def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
 
     if open_browser:
         webbrowser.open(url)
-    return {"ok": True, "port": actual_port, "url": url, "reused": False}
+    return {"ok": True, "port": actual_port, "url": url, "reused": False, "cockpit": cockpit}
 
 
 def cmd_serve_stop() -> dict:
