@@ -175,7 +175,8 @@ class DaemonHTTPServer:
                 "type": "runner_event",
                 "ts_ms": ts_ms,
                 "runner_profile": runner_profile,
-                **{k: v for k, v in payload.items() if k != "runner_profile"},
+                **{k: v for k, v in payload.items()
+                   if k not in ("runner_profile", "type")},
             })
 
     def _on_popup_result(self, payload: dict) -> None:
