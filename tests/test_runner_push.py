@@ -101,3 +101,35 @@ def test_runner_monitor_state_written(tmp_path):
     state = json.loads(state_path.read_text())
     assert any(r["runner_profile"] == "mycader-1" for r in state["runners"])
     srv.stop()
+
+
+def test_runner_executor_forwards_event_to_daemon(tmp_path):
+    """RunnerExecutor.write_operator_event forwards to daemon when team_lead_url set."""
+    from scripts.remote_runner import RunnerExecutor
+
+    srv = _make_server_with_files(tmp_path)
+
+    runner_config = tmp_path / "runner-config.json"
+    runner_config.write_text(json.dumps({
+        "team_lead_url": f"http://localhost:{srv.port}",
+        "runner_profile": "test-runner",
+    }))
+
+    ex = RunnerExecutor(
+        root=tmp_path,
+        state_root=tmp_path / "state",
+        runner_config_path=runner_config,
+    )
+    ex.write_operator_event({
+        "machine_id": "wkst-A",
+        "type": "test",
+        "ts_ms": 1234,
+        "data": "hello",
+    })
+    time.sleep(0.3)  # wait for background thread
+
+    profile_events = tmp_path / "repl" / "events-test-runner.jsonl"
+    assert profile_events.exists()
+    events = [json.loads(l) for l in profile_events.read_text().splitlines()]
+    assert any(e["type"] == "runner_event" for e in events)
+    srv.stop()

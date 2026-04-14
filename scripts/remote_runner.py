@@ -46,7 +46,7 @@ def _validate_machine_id(machine_id: str) -> None:
 
 
 class RunnerExecutor:
-    def __init__(self, root: Path | None = None, state_root: Path | None = None) -> None:
+    def __init__(self, root: Path | None = None, state_root: Path | None = None, runner_config_path: Path | None = None) -> None:
         resolved_root = root or ROOT
         self._root = resolved_root
         self._script_roots = self._resolve_script_roots()
@@ -57,6 +57,18 @@ class RunnerExecutor:
         self._event_write_lock = threading.Lock()
         self._event_root = self._state_root.parent / "operator-events"
 
+        # Team lead config (optional — runners in agents-team mode)
+        import json as _json
+        cfg_path = runner_config_path or (Path.home() / ".emerge" / "runner-config.json")
+        self._team_lead_url: str = ""
+        self._runner_profile: str = ""
+        try:
+            data = _json.loads(cfg_path.read_text(encoding="utf-8"))
+            self._team_lead_url = str(data.get("team_lead_url", "")).rstrip("/")
+            self._runner_profile = str(data.get("runner_profile", "")).strip()
+        except (OSError, ValueError):
+            pass
+
     def write_operator_event(self, event: dict) -> None:
         machine_id = str(event.get("machine_id", "")).strip()
         _validate_machine_id(machine_id)
@@ -66,6 +78,29 @@ class RunnerExecutor:
         with self._event_write_lock:
             with events_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+        # Forward to team lead daemon (fire-and-forget, non-blocking)
+        if self._team_lead_url and self._runner_profile:
+            threading.Thread(
+                target=self._forward_event_to_daemon,
+                args=(event,),
+                daemon=True,
+            ).start()
+
+    def _forward_event_to_daemon(self, event: dict) -> None:
+        """Forward event to team lead daemon. Best-effort, never blocks operator."""
+        import urllib.request as _ur
+        import urllib.error as _ue
+        import json as _j
+        url = f"{self._team_lead_url}/runner/event"
+        payload = {**event, "runner_profile": self._runner_profile}
+        body = _j.dumps(payload, ensure_ascii=True).encode()
+        req = _ur.Request(url, data=body, headers={"Content-Type": "application/json"})
+        try:
+            with _ur.urlopen(req, timeout=3):
+                pass
+        except (_ue.URLError, OSError):
+            pass  # best-effort, never block operator
 
     def show_notify(self, params: dict) -> dict:
         """Show OS-native notification dialog. Blocks until user responds.
