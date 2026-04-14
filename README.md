@@ -280,17 +280,18 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | Plugin manifest          | `.claude-plugin/plugin.json` (`name`: `emerge`), `.claude-plugin/marketplace.json`                                                             |
 | Local MCP wiring (dev)   | `.mcp.json` → `scripts/emerge_daemon.py`                                                                                                       |
-| MCP server               | `scripts/emerge_daemon.py` (`EmergeDaemon`, stdio JSON-RPC)                                                                                    |
+| MCP server               | `scripts/emerge_daemon.py` (`EmergeDaemon`) + `scripts/daemon_http.py` (`DaemonHTTPServer`, HTTP MCP transport, port 8789, runner SSE hub, `runner_notify` tool) |
 | Pipeline engine & policy | `scripts/pipeline_engine.py`, `scripts/policy_config.py`                                                                                       |
 | ExecSession & WAL        | `scripts/exec_session.py`                                                                                                                      |
 | State & metrics          | `scripts/state_tracker.py`, `scripts/metrics.py`                                                                                               |
-| Remote runner            | `scripts/remote_runner.py`, `scripts/runner_client.py`, `scripts/runner_watchdog.py`                                                           |
+| Remote runner            | `scripts/remote_runner.py` (SSE client, event forwarding, popup dispatch), `scripts/runner_client.py`, `scripts/runner_watchdog.py`            |
 | Observer framework       | `scripts/observer_plugin.py`, `scripts/observers/`                                                                                             |
 | Pattern detector         | `scripts/pattern_detector.py`                                                                                                                  |
 | Distiller                | `scripts/distiller.py`                                                                                                                         |
-| Operator monitor         | `scripts/operator_monitor.py` — per-runner `pattern-alerts-{profile}.json` routing; `watch_patterns.py --runner-profile` for isolated watcher agents |
-| Agents-team mode         | `/emerge:monitor` — `TeamCreate` + per-runner watcher agents; stage→action popup protocol (explore=silent, canary=choice+timeout, stable=silent exec) |
-| Ops / bootstrap / cockpit | `scripts/repl_admin.py` — HTTP cockpit with SSE real-time status, `cockpit_shell.html` SPA frontend; `scripts/watch_pending.py` — cockpit submit → CC Monitor stream |
+| Operator monitor         | `scripts/operator_monitor.py` — per-runner `pattern-alerts-{profile}.json` routing; events arrive via runner SSE push (poll loop removed) |
+| Agents-team mode         | `/emerge:monitor` — `TeamCreate` + per-runner watcher agents; stage→action protocol (explore=silent, canary=`runner_notify` choice+timeout, stable=silent exec) |
+| Unified event watcher    | `scripts/watch_emerge.py` — tails global/per-runner/local event streams; `watch_patterns.py` and `watch_pending.py` are shims delegating to it |
+| Ops / bootstrap / cockpit | `scripts/repl_admin.py` — HTTP cockpit with SSE real-time status + `monitors_updated` events, `cockpit_shell.html` SPA frontend (Overview/Monitors/Audit/Session/State/Operator tabs); `scripts/watch_pending.py` — cockpit submit → CC Monitor stream |
 | Memory Hub sync agent    | `scripts/emerge_sync.py`, `scripts/hub_config.py` — bidirectional connector asset sync via orphan-branch git repo; `icc_hub` MCP tool in daemon |
 | Test connector (mock)    | `tests/connectors/mock/pipelines/`                                                                                                             |
 | Slash commands           | `commands/` (`init`, `cockpit`, `monitor`, `runner-status`, `import`, `export`, `hub`)                                                          |
@@ -304,7 +305,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 | Command          | Description                                                                                      |
 | ---------------- | ------------------------------------------------------------------------------------------------ |
 | `/init`          | Initialize a vertical flywheel from natural language context                                     |
-| `/cockpit`       | Browser control plane — SSE real-time status, intent overview, delta/risk/span/exec panels, audit trail, session mgmt, and reflection-cache observability. Operator submits reach the agent via CC Monitor tool (`scripts/watch_pending.py`, CC ≥2.1.98) with `UserPromptSubmit` hook fallback. |
+| `/cockpit`       | Browser control plane — SSE real-time status, intent overview, delta/risk/span/exec panels, audit trail, session mgmt, reflection-cache observability, and runner monitor state (Monitors tab). Operator submits reach the agent via CC Monitor tool (`scripts/watch_pending.py`, CC ≥2.1.98) with `UserPromptSubmit` hook fallback. |
 | `/runner-status` | Show remote runner health status                                                                 |
 | `/import`        | Import a connector asset package zip into local connector/pipeline state                         |
 | `/export`        | Export a connector asset package zip (connector files + registry entries)                        |
@@ -328,6 +329,8 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 <p align="center">
   <sub>
     <b>Overview</b> · policy posture & rollout
+    &nbsp;&nbsp;|&nbsp;&nbsp;
+    <b>Monitors</b> · connected runner health & last alert
     &nbsp;&nbsp;|&nbsp;&nbsp;
     <b>State</b> · L3 diagnostics and intent-linked timeline
     &nbsp;&nbsp;|&nbsp;&nbsp;

@@ -1054,6 +1054,9 @@ function connectSSE() {
         serverPending = !!d.pending;
         updateSubmitState();
       }
+      if (d.monitors_updated && currentTab === 'monitors') {
+        renderMonitorsTab();
+      }
     } catch(e) {}
   };
   es.onerror = () => {
@@ -1070,10 +1073,11 @@ function connectSSE() {
 // Called by the 5-second interval. renderCurrentTab() is used for full redraws (tab switch,
 // initial load, queue changes).
 function refreshPolicyDisplay() {
-  if (currentTab === 'audit' || currentTab === 'session' || currentTab === 'state' || currentTab === 'operator') {
+  if (currentTab === 'audit' || currentTab === 'session' || currentTab === 'state' || currentTab === 'operator' || currentTab === 'monitors') {
     if (currentTab === 'audit') _loadAuditTimeline();
     else if (currentTab === 'session') _loadSessionData();
     else if (currentTab === 'state') _loadStateTabData();
+    else if (currentTab === 'monitors') renderMonitorsTab();
     return;
   }
   if (!policyData) return;
@@ -1126,6 +1130,7 @@ function renderTabs() {
 
   // Global control-plane tabs
   html += `<div style="margin-left:auto;display:flex;gap:0">`;
+  html += `<div class="tab ${currentTab === 'monitors' ? 'active' : ''}" onclick="switchTab('monitors')" style="font-size:11px;opacity:0.7">Monitors</div>`;
   html += `<div class="tab ${currentTab === 'audit' ? 'active' : ''}" onclick="switchTab('audit')" style="font-size:11px;opacity:0.7">Audit</div>`;
   html += `<div class="tab ${currentTab === 'session' ? 'active' : ''}" onclick="switchTab('session')" style="font-size:11px;opacity:0.7">Session</div>`;
   html += `<div class="tab ${currentTab === 'state' ? 'active' : ''}" onclick="switchTab('state')" style="font-size:11px;opacity:0.7">State</div>`;
@@ -1172,7 +1177,7 @@ function switchConnectorPanel(panelName) {
 function renderCurrentTab() {
   const panelEl = document.getElementById('main-panel');
   if (panelEl) panelEl.classList.toggle('no-scroll', currentTab === 'state');
-  if (currentTab !== 'overview' && currentTab !== 'audit' && currentTab !== 'session' && currentTab !== 'state' && currentTab !== 'operator') {
+  if (currentTab !== 'overview' && currentTab !== 'audit' && currentTab !== 'session' && currentTab !== 'state' && currentTab !== 'operator' && currentTab !== 'monitors') {
     const connectors = assetsData ? Object.keys(assetsData.connectors || {}) : [];
     if (!connectors.includes(currentTab)) currentTab = 'overview';
   }
@@ -1181,6 +1186,7 @@ function renderCurrentTab() {
   else if (currentTab === 'session') renderSessionTab();
   else if (currentTab === 'state') renderStateTab();
   else if (currentTab === 'operator') renderOperatorTab();
+  else if (currentTab === 'monitors') { renderMonitorsTab(); return; }
   else renderConnectorTab(currentTab);
 }
 
@@ -1188,7 +1194,7 @@ function applyViewStateFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const requestedTab = params.get('tab');
   const connectors = assetsData ? Object.keys(assetsData.connectors || {}) : [];
-  const globalTabs = ['audit', 'session', 'state', 'operator'];
+  const globalTabs = ['audit', 'session', 'state', 'operator', 'monitors'];
   if (requestedTab === 'overview' || !requestedTab) {
     currentTab = 'overview';
   } else if (globalTabs.includes(requestedTab)) {
@@ -1211,7 +1217,7 @@ function syncUrlWithViewState(opts) {
   const push = !!(opts && opts.push);
   const url = new URL(window.location.href);
   url.searchParams.set('tab', currentTab);
-  if (currentTab === 'overview' || currentTab === 'audit' || currentTab === 'session' || currentTab === 'state' || currentTab === 'operator') {
+  if (currentTab === 'overview' || currentTab === 'audit' || currentTab === 'session' || currentTab === 'state' || currentTab === 'operator' || currentTab === 'monitors') {
     url.searchParams.delete('panel');
   } else {
     url.searchParams.set('panel', getActiveConnectorPanel(currentTab));
@@ -1992,6 +1998,50 @@ function renderOperatorTab() {
       </p>
     </div>
   </div>`;
+}
+
+async function renderMonitorsTab() {
+  const panel = document.getElementById('main-panel');
+  panel.innerHTML = '<div style="padding:16px;color:#8b949e">Loading monitor state…</div>';
+  try {
+    const resp = await fetch('/api/control-plane/monitors');
+    const data = await resp.json();
+    const runners = data.runners || [];
+    if (!runners.length) {
+      panel.innerHTML = '<div style="padding:24px;color:#8b949e;text-align:center">No runners connected.<br>Use <code>/emerge:monitor</code> to start agents-team mode.</div>';
+      return;
+    }
+    let html = '<div style="padding:16px">';
+    html += `<div style="margin-bottom:12px;font-size:12px;color:#8b949e">${runners.length} runner(s) connected</div>`;
+    html += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+    html += '<thead><tr>';
+    for (const h of ['Runner', 'Machine', 'Connected', 'Last Event', 'Last Alert']) {
+      html += `<th style="text-align:left;padding:6px 10px;background:#161b22;border-bottom:1px solid #30363d;color:#8b949e;font-size:10px;text-transform:uppercase">${h}</th>`;
+    }
+    html += '</tr></thead><tbody>';
+    const now = Date.now();
+    for (const r of runners) {
+      const connectedSec = r.connected_at_ms ? Math.round((now - r.connected_at_ms) / 1000) : 0;
+      const lastEventSec = r.last_event_ts_ms ? Math.round((now - r.last_event_ts_ms) / 1000) : null;
+      const alertBadge = r.last_alert
+        ? `<span style="background:#0d2000;color:#3fb950;border:1px solid #2a4a2a;padding:1px 6px;border-radius:3px;font-size:10px">${escHtml(r.last_alert.stage)}: ${escHtml(r.last_alert.intent_signature || '')}</span>`
+        : '<span style="color:#8b949e">none</span>';
+      html += `<tr>
+        <td style="padding:6px 10px;border-bottom:1px solid #21262d">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${r.connected ? '#3fb950' : '#6e7681'};margin-right:6px"></span>
+          ${escHtml(r.runner_profile)}
+        </td>
+        <td style="padding:6px 10px;border-bottom:1px solid #21262d">${escHtml(r.machine_id || '')}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #21262d">${connectedSec}s ago</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #21262d">${lastEventSec !== null ? lastEventSec + 's ago' : '—'}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #21262d">${alertBadge}</td>
+      </tr>`;
+    }
+    html += '</tbody></table></div>';
+    panel.innerHTML = html;
+  } catch (e) {
+    panel.innerHTML = `<div style="padding:16px;color:#f85149">Error loading monitors: ${escHtml(String(e))}</div>`;
+  }
 }
 
 // ── Thresholds bar ────────────────────────────────────────────────────────────

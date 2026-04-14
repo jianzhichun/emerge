@@ -40,16 +40,21 @@ Always invoke the admin CLI via the **Emerge plugin root**.
    - Read `stage` and `intent_signature` from the alert.
    - Apply the stage→action protocol:
      - stage=explore  → silent; record intent in notes if new
-     - stage=canary   → call POST /notify on the runner:
-         ui_spec: {"type": "choice", "title": "emerge — 可以接管了",
-                   "body": "[{intent_signature}] 已见 {occurrences} 次，接管？",
-                   "options": ["接管", "跳过", "停止学习"], "timeout_s": 15}
+     - stage=canary   → call runner_notify MCP tool:
+         runner_notify(
+             runner_profile="{profile}",
+             ui_spec={"type": "choice", "title": "emerge — 可以接管了",
+                      "body": "[{intent_signature}] 已见 {occurrences} 次，接管？",
+                      "options": ["接管", "跳过", "停止学习"],
+                      "timeout_s": 15})
          接管 → icc_exec(intent_signature=<value from alert JSON field "intent_signature">)
          停止学习 → pipeline freeze via repl_admin pipeline-set --set frozen=true
      - stage=stable   → icc_exec(intent_signature=<value from alert JSON field "intent_signature">) silently
 
-   AI uncertainty or knowledge distillation questions → POST /notify with type=input:
-     ui_spec: {"type": "input", "title": "emerge — 需要确认", "body": "<question>"}
+   AI uncertainty or knowledge distillation questions → call runner_notify with type=input:
+     runner_notify(
+         runner_profile="{profile}",
+         ui_spec={"type": "input", "title": "emerge — 需要确认", "body": "<question>"})
      Store answer in NOTES.md via notes-comment cockpit action.
 
    - SendMessage(team_lead, summary of action taken)
