@@ -3217,7 +3217,9 @@ def _ensure_cockpit(plugin_root: Path) -> str | None:
     """Start cockpit server if not already running. Returns URL or None."""
     import subprocess as _sub
     import sys as _sys
-    pid_path = Path.home() / ".emerge" / "cockpit.pid"
+    from scripts.policy_config import default_exec_root as _exec_root
+    _repl_root = Path(os.environ.get("EMERGE_REPL_ROOT", "") or os.environ.get("EMERGE_STATE_ROOT", "") or str(_exec_root())).expanduser().resolve()
+    pid_path = _repl_root / "cockpit.pid"
     if pid_path.exists():
         try:
             import json as _j

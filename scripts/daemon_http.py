@@ -171,6 +171,7 @@ class DaemonHTTPServer:
             with self._runners_lock:
                 if runner_profile in self._connected_runners:
                     self._connected_runners[runner_profile]["last_event_ts_ms"] = ts_ms
+            self._write_monitor_state()
             self._append_event(self._state_root / f"events-{runner_profile}.jsonl", {
                 "type": "runner_event",
                 "ts_ms": ts_ms,
@@ -332,6 +333,10 @@ def _make_handler(srv: "DaemonHTTPServer"):
                 srv.remove_sse_session(session_id)
 
         def _handle_runner_sse(self, runner_profile: str):
+            import re as _re_sse
+            if runner_profile and not _re_sse.fullmatch(r"[a-zA-Z0-9_.-]+", runner_profile):
+                self._send_json(400, {"error": "invalid runner_profile"})
+                return
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")

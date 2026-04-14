@@ -1140,8 +1140,29 @@ function renderTabs() {
   document.getElementById('tabs-bar').innerHTML = html;
 }
 
+let _monitorsPollingInterval = null;
+
+function _startMonitorsPolling() {
+  if (_monitorsPollingInterval) return;
+  _monitorsPollingInterval = setInterval(() => {
+    if (currentTab === 'monitors') renderMonitorsTab();
+  }, 10000);
+}
+
+function _stopMonitorsPolling() {
+  if (_monitorsPollingInterval) {
+    clearInterval(_monitorsPollingInterval);
+    _monitorsPollingInterval = null;
+  }
+}
+
 function switchTab(tab) {
   currentTab = tab;
+  if (tab === 'monitors') {
+    _startMonitorsPolling();
+  } else {
+    _stopMonitorsPolling();
+  }
   renderTabs();
   renderCurrentTab();
   syncUrlWithViewState({ push: true });

@@ -147,9 +147,7 @@ def test_runner_notify_returns_error_when_no_http_server(tmp_path):
         "runner_profile": "mycader-1",
         "ui_spec": {"type": "choice", "title": "Test"}
     })
-    assert result.get("isError") or (
-        result.get("content", [{}])[0].get("text", "").startswith("runner_notify")
-    )
+    assert result.get("isError") is True
 
 
 def test_runner_sse_client_dispatches_notify_and_posts_result(tmp_path):

@@ -37,8 +37,15 @@ def _fmt(data: dict) -> str | None:
 
 if __name__ == "__main__":
     # Shim: delegate to watch_emerge.py (global event stream mode)
+    import argparse as _ap
     import os as _os, sys as _sys
     from pathlib import Path as _Path
     _root = _Path(__file__).resolve().parent.parent
     _emerge = str(_root / "scripts" / "watch_emerge.py")
-    _os.execv(_sys.executable, [_sys.executable, _emerge])
+    _p = _ap.ArgumentParser(add_help=False)
+    _p.add_argument("--state-root", default="")
+    _known, _ = _p.parse_known_args()
+    _cmd = [_sys.executable, _emerge]
+    if _known.state_root:
+        _cmd += ["--state-root", _known.state_root]
+    _os.execv(_sys.executable, _cmd)
