@@ -152,6 +152,49 @@ def test_runner_notify_returns_error_when_no_http_server(tmp_path):
     )
 
 
+def test_runner_sse_client_dispatches_notify_and_posts_result(tmp_path):
+    """RunnerSSEClient._dispatch_command handles notify and posts result back."""
+    from scripts.remote_runner import RunnerSSEClient
+
+    srv = _make_server_with_files(tmp_path)
+
+    popup_calls = []
+    popup_id = "test-abc-123"
+
+    # Pre-register a future in daemon
+    ev = threading.Event()
+    with srv._popup_lock:
+        srv._popup_futures[popup_id] = ev
+
+    def _mock_show_notify(ui_spec):
+        popup_calls.append(ui_spec)
+        return {"value": "接管"}
+
+    client = RunnerSSEClient(
+        team_lead_url=f"http://localhost:{srv.port}",
+        runner_profile="test-runner",
+        executor_show_notify=_mock_show_notify,
+    )
+
+    # Dispatch synchronously (no background thread needed for unit test)
+    client._dispatch_command({
+        "type": "notify",
+        "popup_id": popup_id,
+        "ui_spec": {"type": "choice", "title": "Test popup"},
+    })
+
+    time.sleep(0.2)  # let the POST complete
+    assert len(popup_calls) == 1
+    assert popup_calls[0]["type"] == "choice"
+
+    fired = ev.wait(timeout=2)
+    assert fired
+    with srv._popup_lock:
+        result = srv._popup_results.get(popup_id, {})
+    assert result.get("value") == "接管"
+    srv.stop()
+
+
 def test_runner_notify_returns_error_when_runner_not_connected(tmp_path):
     """runner_notify returns error when runner is not connected to SSE."""
     import sys

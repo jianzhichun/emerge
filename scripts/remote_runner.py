@@ -335,10 +335,130 @@ class RunnerHTTPHandler(BaseHTTPRequestHandler):
         return
 
 
+class RunnerSSEClient:
+    """Connects to daemon /runner/sse, dispatches received commands.
+
+    Runs in a background daemon thread. Auto-reconnects on disconnect.
+    """
+
+    def __init__(
+        self,
+        team_lead_url: str,
+        runner_profile: str,
+        executor_show_notify,
+    ) -> None:
+        self._url = team_lead_url.rstrip("/")
+        self._runner_profile = runner_profile
+        self._show_notify = executor_show_notify
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="RunnerSSEClient"
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _run(self) -> None:
+        import urllib.request as _ur
+        import urllib.error as _ue
+        backoff = 1.0
+        while not self._stop.is_set():
+            try:
+                url = f"{self._url}/runner/sse?runner_profile={self._runner_profile}"
+                req = _ur.Request(url, headers={"Accept": "text/event-stream"})
+                with _ur.urlopen(req, timeout=None) as resp:
+                    backoff = 1.0
+                    buf = ""
+                    while not self._stop.is_set():
+                        chunk = resp.read(1)
+                        if not chunk:
+                            break
+                        buf += chunk.decode("utf-8", errors="replace")
+                        if "\n\n" in buf:
+                            parts = buf.split("\n\n")
+                            buf = parts[-1]
+                            for part in parts[:-1]:
+                                for line in part.splitlines():
+                                    if line.startswith("data: "):
+                                        try:
+                                            cmd = json.loads(line[6:])
+                                            threading.Thread(
+                                                target=self._dispatch_command,
+                                                args=(cmd,), daemon=True
+                                            ).start()
+                                        except json.JSONDecodeError:
+                                            pass
+            except (_ue.URLError, OSError):
+                if not self._stop.is_set():
+                    self._stop.wait(timeout=min(backoff, 30))
+                    backoff = min(backoff * 2, 30)
+
+    def _dispatch_command(self, cmd: dict) -> None:
+        cmd_type = cmd.get("type")
+        if cmd_type == "notify":
+            popup_id = str(cmd.get("popup_id", ""))
+            ui_spec = cmd.get("ui_spec", {})
+            try:
+                result = self._show_notify(ui_spec)
+            except Exception:
+                result = {"value": None}
+            self._post_result(popup_id, result)
+
+    def _post_result(self, popup_id: str, result: dict) -> None:
+        import urllib.request as _ur
+        import urllib.error as _ue
+        payload = {"popup_id": popup_id, "value": result.get("value")}
+        body = json.dumps(payload, ensure_ascii=False).encode()
+        req = _ur.Request(
+            f"{self._url}/runner/popup-result",
+            data=body, headers={"Content-Type": "application/json"}
+        )
+        try:
+            with _ur.urlopen(req, timeout=5):
+                pass
+        except (_ue.URLError, OSError):
+            pass
+
+
+def _start_sse_client(executor: "RunnerExecutor") -> "RunnerSSEClient | None":
+    """Start SSE client if team_lead_url is configured."""
+    if not (executor._team_lead_url and executor._runner_profile):
+        return None
+    import urllib.request as _ur
+    import urllib.error as _ue
+    # POST /runner/online to register
+    try:
+        import socket as _sock
+        machine_id = _sock.gethostname()
+        body = json.dumps({
+            "runner_profile": executor._runner_profile,
+            "machine_id": machine_id,
+        }).encode()
+        req = _ur.Request(
+            f"{executor._team_lead_url}/runner/online",
+            data=body, headers={"Content-Type": "application/json"}
+        )
+        with _ur.urlopen(req, timeout=5):
+            pass
+    except (_ue.URLError, OSError):
+        pass
+    client = RunnerSSEClient(
+        team_lead_url=executor._team_lead_url,
+        runner_profile=executor._runner_profile,
+        executor_show_notify=executor.show_notify,
+    )
+    client.start()
+    return client
+
+
 def run_server(host: str, port: int, *, root: Path | None = None, state_root: Path | None = None) -> None:
     _setup_logging()
     logging.info("emerge-remote-runner starting host=%s port=%d pid=%d", host, port, os.getpid())
     executor = RunnerExecutor(root=root, state_root=state_root)
+    _start_sse_client(executor)
     handler_cls = type(
         "BoundRunnerHTTPHandler",
         (RunnerHTTPHandler,),
