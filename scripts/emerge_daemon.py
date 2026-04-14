@@ -3044,7 +3044,11 @@ class EmergeDaemon:
 
         Must be called from a worker thread (not the main stdio loop).
         Returns the content dict from the response, or None on timeout.
+
+        In HTTP mode: CC does not maintain persistent SSE channel, returns None immediately.
         """
+        if getattr(self, "_http_mode", False):
+            return None  # HTTP mode: no server→client push channel
         import uuid
         elicit_id = f"elicit-{uuid.uuid4().hex[:8]}"
         event = threading.Event()
@@ -3139,5 +3143,91 @@ def run_stdio() -> None:
             pass  # never let a single bad message kill the main loop
 
 
+def run_http(port: int = 8789) -> None:
+    """Start emerge daemon in HTTP MCP server mode."""
+    import atexit
+    import threading as _threading
+    from scripts.daemon_http import DaemonHTTPServer
+
+    daemon = EmergeDaemon()
+    daemon._http_mode = True  # disable _elicit() blocking
+    daemon.start_operator_monitor()
+    daemon.start_event_router()
+    atexit.register(daemon.stop_operator_monitor)
+    atexit.register(daemon.stop_event_router)
+
+    pid_path = Path.home() / ".emerge" / "daemon.pid"
+    srv = DaemonHTTPServer(daemon=daemon, port=port, pid_path=pid_path)
+    daemon._http_server = srv
+    srv.start()
+    print(f"Emerge daemon HTTP server running on port {srv.port}", flush=True)
+    # Auto-start cockpit
+    try:
+        _ensure_cockpit(Path(__file__).resolve().parent.parent)
+    except Exception:
+        pass
+    try:
+        _threading.Event().wait()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.stop()
+
+
+def _ensure_cockpit(plugin_root: Path) -> str | None:
+    """Start cockpit server if not already running. Returns URL or None."""
+    import subprocess as _sub
+    import sys as _sys
+    pid_path = Path.home() / ".emerge" / "cockpit.pid"
+    if pid_path.exists():
+        try:
+            import json as _j
+            info = _j.loads(pid_path.read_text())
+            os.kill(int(info["pid"]), 0)
+            return f"http://localhost:{info['port']}"
+        except (OSError, KeyError, ValueError):
+            pid_path.unlink(missing_ok=True)
+    repl_admin = plugin_root / "scripts" / "repl_admin.py"
+    if not repl_admin.exists():
+        return None
+    proc = _sub.Popen(
+        [_sys.executable, str(repl_admin), "serve", "--port", "0"],
+        stdout=_sub.PIPE, stderr=_sub.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            text = line.decode("utf-8", errors="replace").strip()
+            if "http://localhost:" in text:
+                import re as _re
+                m = _re.search(r'http://localhost:(\d+)', text)
+                if m:
+                    url = f"http://localhost:{m.group(1)}"
+                    url_path = Path.home() / ".emerge" / "cockpit-url.txt"
+                    url_path.write_text(url, encoding="utf-8")
+                    return url
+    except Exception:
+        pass
+    return None
+
+
 if __name__ == "__main__":
-    run_stdio()
+    import argparse as _ap
+    _p = _ap.ArgumentParser()
+    _p.add_argument("--http", action="store_true", help="Run as HTTP MCP server")
+    _p.add_argument("--port", type=int, default=8789)
+    _p.add_argument("--ensure-running", action="store_true",
+                    help="Launch daemon if not already running, then exit")
+    _args = _p.parse_args()
+    if _args.ensure_running:
+        from scripts.daemon_http import ensure_running_or_launch
+        result = ensure_running_or_launch(
+            port=_args.port,
+            daemon_factory=lambda: EmergeDaemon(),
+        )
+        print(result)
+    elif _args.http:
+        run_http(port=_args.port)
+    else:
+        run_stdio()

@@ -178,6 +178,27 @@ def main() -> None:
                 "Confirm only if the user explicitly requested this rollback."
             ),
         }
+    elif tool_name.endswith("__icc_span_approve"):
+        out = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "ask",
+            },
+            "systemMessage": (
+                "icc_span_approve 将把 span skeleton 移动到正式 pipeline 目录并激活自动化执行路径。"
+                "请确认批准此操作？"
+            ),
+        }
+    elif tool_name.endswith("__icc_hub") and isinstance(arguments, dict) and arguments.get("action") == "resolve":
+        out = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "ask",
+            },
+            "systemMessage": (
+                "icc_hub resolve 将应用冲突解决方案，此操作不可撤销。请确认继续？"
+            ),
+        }
     elif _sig_normalized_to is not None:
         out = {
             "hookSpecificOutput": {

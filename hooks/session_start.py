@@ -76,6 +76,21 @@ def main() -> None:
     except (OSError, json.JSONDecodeError, AttributeError):
         pass
 
+    # 确保 HTTP daemon 正在运行（幂等，已运行则无操作）
+    import subprocess as _sub
+    _plugin_root = Path(__file__).resolve().parents[1]
+    try:
+        _sub.Popen(
+            [sys.executable,
+             str(_plugin_root / "scripts" / "emerge_daemon.py"),
+             "--ensure-running"],
+            start_new_session=True,
+            stdout=_sub.DEVNULL,
+            stderr=_sub.DEVNULL,
+        )
+    except Exception:
+        pass
+
     out = {
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",

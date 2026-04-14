@@ -67,3 +67,24 @@ def test_pid_file_written(tmp_path):
     srv.stop()
     # PID file removed on stop
     assert not pid_path.exists()
+
+
+def test_ensure_running_noop_when_already_running(tmp_path):
+    """ensure_running_or_launch() returns early if daemon is already alive."""
+    from scripts.daemon_http import DaemonHTTPServer, ensure_running_or_launch
+
+    pid_path = tmp_path / "d.pid"
+
+    class _StubDaemon:
+        def handle_jsonrpc(self, req):
+            return {"jsonrpc": "2.0", "id": req.get("id"), "result": {}}
+
+    srv = DaemonHTTPServer(daemon=_StubDaemon(), port=0, pid_path=pid_path)
+    srv.start()
+    port = srv.port
+    time.sleep(0.1)
+
+    result = ensure_running_or_launch(pid_path=pid_path, port=0, daemon_factory=None)
+    assert result == "already_running"
+    assert srv.port == port
+    srv.stop()
