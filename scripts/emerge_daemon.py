@@ -3197,10 +3197,12 @@ def _ensure_cockpit(plugin_root: Path) -> str | None:
     )
     try:
         assert proc.stdout is not None
-        for line in proc.stdout:
+        import re as _re
+        for _i, line in enumerate(proc.stdout):
+            if _i >= 20:
+                break  # give up after 20 lines to avoid hanging
             text = line.decode("utf-8", errors="replace").strip()
             if "http://localhost:" in text:
-                import re as _re
                 m = _re.search(r'http://localhost:(\d+)', text)
                 if m:
                     url = f"http://localhost:{m.group(1)}"
@@ -3223,10 +3225,15 @@ if __name__ == "__main__":
     if _args.ensure_running:
         from scripts.daemon_http import ensure_running_or_launch
         result = ensure_running_or_launch(
+            pid_path=None,
             port=_args.port,
-            daemon_factory=lambda: EmergeDaemon(),
+            daemon_factory=None,  # detection-only
         )
-        print(result)
+        if result == "already_running":
+            print("already_running")
+        else:
+            # Not running — start HTTP daemon (blocks until killed)
+            run_http(port=_args.port)
     elif _args.http:
         run_http(port=_args.port)
     else:
