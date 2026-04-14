@@ -10,34 +10,29 @@ from scripts.observer_plugin import AdapterRegistry
 from scripts.pattern_detector import PatternDetector, PatternSummary
 
 
-class _RunnerClientProtocol:
-    """Duck-typed protocol for runner clients used by OperatorMonitor."""
-    def get_events(self, machine_id: str, since_ms: int = 0) -> list[dict]: ...
-
-
 class OperatorMonitor(threading.Thread):
-    """Background thread that polls remote runners for operator events,
+    """Background thread that watches local operator event files,
     runs PatternDetector against a per-machine sliding window buffer,
-    and calls push_fn when a pattern is found."""
+    and writes pattern alerts directly to events-local.jsonl."""
 
     def __init__(
         self,
         machines: dict[str, Any],
-        push_fn: Callable[[str, dict, PatternSummary], None],
+        push_fn: Callable[[str, dict, PatternSummary], None] | None = None,
         poll_interval_s: float = 5.0,
         event_root: Path | None = None,
         adapter_root: Path | None = None,
+        state_root: Path | None = None,
     ) -> None:
         super().__init__(daemon=True, name="OperatorMonitor")
-        # machines parameter kept for API compatibility; polling removed (runner pushes events via daemon)
         self._machines = machines
-        self._push_fn = push_fn
+        self._push_fn = push_fn  # deprecated: kept for backward compat
         self._poll_interval_s = poll_interval_s
         self._event_root = event_root or (Path.home() / ".emerge" / "operator-events")
+        self._state_root = state_root or (Path.home() / ".emerge" / "repl")
         self._adapter_registry = AdapterRegistry(adapter_root=adapter_root)
         self._detector = PatternDetector()
         self._last_poll_ms: dict[str, int] = {}
-        # Sliding window buffer: accumulates events within FREQ_WINDOW_MS per machine.
         self._event_buffers: dict[str, deque] = {}
         self._stop_event = threading.Event()
 
@@ -51,6 +46,7 @@ class OperatorMonitor(threading.Thread):
     def process_local_file(self, events_path: Path) -> None:
         """Process a single local events.jsonl file. Called by EventRouter on file change."""
         import json as _json
+        import time as _time
         if not events_path.exists() or events_path.name != "events.jsonl":
             return
         machine_id = events_path.parent.name
@@ -76,7 +72,7 @@ class OperatorMonitor(threading.Thread):
         buf = self._event_buffers.get(key)
         if not buf:
             return
-        now_ms = int(time.time() * 1000)
+        now_ms = int(_time.time() * 1000)
         window_ms = self._detector.FREQ_WINDOW_MS
         while buf and now_ms - buf[0].get("ts_ms", 0) > window_ms:
             buf.popleft()
@@ -90,4 +86,25 @@ class OperatorMonitor(threading.Thread):
                 context = plugin.get_context(summary.context_hint)
             except Exception:
                 context = summary.context_hint.copy()
-            self._push_fn(summary.policy_stage, context, summary)
+            # Primary path: write directly to events-local.jsonl
+            ts_ms = int(_time.time() * 1000)
+            events_local = self._state_root / "events-local.jsonl"
+            events_local.parent.mkdir(parents=True, exist_ok=True)
+            alert = {
+                "type": "local_pattern_alert",
+                "ts_ms": ts_ms,
+                "stage": summary.policy_stage,
+                "intent_signature": summary.intent_signature,
+                "meta": {
+                    "occurrences": summary.occurrences,
+                    "window_minutes": round(summary.window_minutes, 1),
+                    "machine_ids": summary.machine_ids,
+                    "detector_signals": summary.detector_signals,
+                    "app": summary.context_hint.get("app", ""),
+                },
+            }
+            with events_local.open("a", encoding="utf-8") as f:
+                f.write(_json.dumps(alert, ensure_ascii=False) + "\n")
+            # Deprecated callback path (backward compat)
+            if self._push_fn is not None:
+                self._push_fn(summary.policy_stage, context, summary)

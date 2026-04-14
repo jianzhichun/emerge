@@ -1,5 +1,6 @@
 # tests/test_operator_monitor.py
 from __future__ import annotations
+import json
 import sys
 import time
 from pathlib import Path
@@ -10,23 +11,7 @@ if str(ROOT) not in sys.path:
 from scripts.operator_monitor import OperatorMonitor
 
 
-class _FakeRunnerClient:
-    """Simulates a remote runner that returns pre-seeded events."""
-    def __init__(self, events: list[dict]):
-        self._events = events
-
-    def get_events(self, machine_id: str, since_ms: int = 0) -> list[dict]:
-        return [e for e in self._events if e.get("ts_ms", 0) > since_ms]
-
-
-def test_operator_monitor_detects_pattern_and_calls_push(tmp_path):
-    """process_local_file triggers pattern detection via the push-based local event path."""
-    import json as _json
-    push_calls = []
-
-    def fake_push(stage: str, context: dict, summary) -> None:
-        push_calls.append({"stage": stage, "context": context, "summary": summary})
-
+def _make_events(n: int, tmp_path: Path) -> Path:
     now_ms = int(time.time() * 1000)
     events = [
         {
@@ -37,51 +22,72 @@ def test_operator_monitor_detects_pattern_and_calls_push(tmp_path):
             "app": "zwcad",
             "payload": {"layer": "标注", "content": f"room_{i}"},
         }
-        for i in range(3)
+        for i in range(n)
     ]
-
     machine_dir = tmp_path / "operator-events" / "m1"
     machine_dir.mkdir(parents=True)
     events_file = machine_dir / "events.jsonl"
-    events_file.write_text("\n".join(_json.dumps(e) for e in events) + "\n")
+    events_file.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+    return events_file
+
+
+def test_process_local_file_writes_events_local_jsonl(tmp_path):
+    """process_local_file writes local_pattern_alert to events-local.jsonl (no push_fn)."""
+    state_root = tmp_path / "repl"
+    state_root.mkdir()
+    events_file = _make_events(3, tmp_path)
 
     monitor = OperatorMonitor(
         machines={},
-        push_fn=fake_push,
         poll_interval_s=0.05,
         event_root=tmp_path / "operator-events",
         adapter_root=tmp_path / "adapters",
+        state_root=state_root,
     )
     monitor.process_local_file(events_file)
 
-    assert len(push_calls) >= 1
-    assert push_calls[0]["stage"] == "explore"
+    events_local = state_root / "events-local.jsonl"
+    assert events_local.exists(), "events-local.jsonl must be written"
+    lines = [json.loads(l) for l in events_local.read_text().splitlines() if l.strip()]
+    assert len(lines) >= 1
+    alert = lines[0]
+    assert alert["type"] == "local_pattern_alert"
+    assert alert["stage"] == "explore"
+    assert "intent_signature" in alert
+    assert alert["meta"]["occurrences"] >= 3
 
 
-def test_operator_monitor_does_not_fire_on_empty_events(tmp_path):
-    push_calls = []
+def test_process_local_file_no_events_does_not_write(tmp_path):
+    """No events → events-local.jsonl not created."""
+    state_root = tmp_path / "repl"
+    state_root.mkdir()
+    machine_dir = tmp_path / "operator-events" / "m1"
+    machine_dir.mkdir(parents=True)
+    events_file = machine_dir / "events.jsonl"
+    events_file.write_text("")
 
     monitor = OperatorMonitor(
-        machines={"m1": _FakeRunnerClient([])},
-        push_fn=lambda s, c, x: push_calls.append(1),
+        machines={},
         poll_interval_s=0.05,
-        event_root=tmp_path / "events",
+        event_root=tmp_path / "operator-events",
         adapter_root=tmp_path / "adapters",
+        state_root=state_root,
     )
-    monitor.start()
-    time.sleep(0.2)
-    monitor.stop()
+    monitor.process_local_file(events_file)
 
-    assert push_calls == []
+    assert not (state_root / "events-local.jsonl").exists()
 
 
 def test_operator_monitor_stops_cleanly(tmp_path):
+    """start() / stop() lifecycle works without push_fn."""
+    state_root = tmp_path / "repl"
+    state_root.mkdir()
     monitor = OperatorMonitor(
         machines={},
-        push_fn=lambda s, c, x: None,
         poll_interval_s=0.05,
         event_root=tmp_path / "events",
         adapter_root=tmp_path / "adapters",
+        state_root=state_root,
     )
     monitor.start()
     assert monitor.is_alive()
@@ -90,39 +96,22 @@ def test_operator_monitor_stops_cleanly(tmp_path):
     assert not monitor.is_alive()
 
 
-def test_operator_monitor_accumulates_events_across_polls(tmp_path):
-    """Events written to events.jsonl accumulate in the buffer via process_local_file."""
-    import json as _json
-    push_calls = []
-
-    now_ms = int(time.time() * 1000)
-    # Events ordered oldest-first so each successive event has a higher ts_ms.
-    all_events = [
-        {
-            "ts_ms": now_ms - (2 - i) * 60_000,
-            "machine_id": "m1",
-            "session_role": "operator",
-            "event_type": "entity_added",
-            "app": "zwcad",
-            "payload": {"layer": "标注", "content": f"room_{i}"},
-        }
-        for i in range(3)
-    ]
-
-    machine_dir = tmp_path / "events" / "m1"
-    machine_dir.mkdir(parents=True)
-    events_file = machine_dir / "events.jsonl"
-    events_file.write_text("\n".join(_json.dumps(e) for e in all_events) + "\n")
+def test_process_local_file_accumulates_across_calls(tmp_path):
+    """Calling process_local_file with 3 events fires a pattern alert."""
+    state_root = tmp_path / "repl"
+    state_root.mkdir()
+    events_file = _make_events(3, tmp_path)
 
     monitor = OperatorMonitor(
         machines={},
-        push_fn=lambda s, c, x: push_calls.append(1),
         poll_interval_s=0.05,
-        event_root=tmp_path / "events",
+        event_root=tmp_path / "operator-events",
         adapter_root=tmp_path / "adapters",
+        state_root=state_root,
     )
     monitor.process_local_file(events_file)
 
-    assert len(push_calls) >= 1, "pattern should fire after accumulating 3 events"
-
-
+    events_local = state_root / "events-local.jsonl"
+    assert events_local.exists()
+    count_first = len(events_local.read_text().splitlines())
+    assert count_first >= 1, "should write at least one alert after 3 events"
