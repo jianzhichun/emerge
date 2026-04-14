@@ -83,3 +83,44 @@ def test_get_session_is_thread_safe(tmp_path: Path):
     assert not errors, f"Threads raised: {errors}"
     # All threads must have received the exact same ExecSession instance
     assert len(set(id(r) for r in results)) == 1, "Multiple ExecSession instances created (race condition)"
+
+
+def test_forward_event_to_daemon_returns_false_on_failure(tmp_path):
+    """_forward_event_to_daemon returns False when the daemon is unreachable."""
+    executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
+    executor._team_lead_url = "http://127.0.0.1:19999"  # nothing listening
+    executor._runner_profile = "test-profile"
+    result = executor._forward_event_to_daemon({"type": "test"})
+    assert result is False
+
+
+def test_post_operator_message_sends_correct_payload(tmp_path):
+    """_post_operator_message calls _forward_event_to_daemon with required fields."""
+    executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
+    executor._team_lead_url = "http://localhost:9999"
+    executor._runner_profile = "mycader-1"
+    captured: list = []
+    executor._forward_event_to_daemon = lambda event: (captured.append(event), True)[1]
+    executor._post_operator_message("暂停 pipeline")
+    assert len(captured) == 1
+    ev = captured[0]
+    assert ev["type"] == "operator_message"
+    assert ev["text"] == "暂停 pipeline"
+    assert ev["profile"] == "mycader-1"
+    assert isinstance(ev["ts_ms"], int)
+    assert "machine_id" in ev
+
+
+def test_post_operator_message_shows_error_toast_on_failure(tmp_path, monkeypatch):
+    """_post_operator_message shows error toast when daemon is unreachable."""
+    import scripts.operator_popup as popup_mod
+    toast_bodies: list = []
+    monkeypatch.setattr(popup_mod, "_render_toast",
+        lambda *, body, timeout_s: (toast_bodies.append(body), {"action": "dismissed", "value": ""})[1])
+    executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
+    executor._team_lead_url = "http://localhost:9999"
+    executor._runner_profile = "mycader-1"
+    executor._forward_event_to_daemon = lambda event: False
+    executor._post_operator_message("test message")
+    assert len(toast_bodies) == 1
+    assert "失败" in toast_bodies[0]

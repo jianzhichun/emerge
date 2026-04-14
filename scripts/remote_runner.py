@@ -87,8 +87,11 @@ class RunnerExecutor:
                 daemon=True,
             ).start()
 
-    def _forward_event_to_daemon(self, event: dict) -> None:
-        """Forward event to team lead daemon. Best-effort, never blocks operator."""
+    def _forward_event_to_daemon(self, event: dict) -> bool:
+        """Forward event to team lead daemon. Best-effort, never blocks operator.
+
+        Returns True on success, False on connection failure.
+        """
         import urllib.request as _ur
         import urllib.error as _ue
         import json as _j
@@ -99,8 +102,39 @@ class RunnerExecutor:
         try:
             with _ur.urlopen(req, timeout=3):
                 pass
+            return True
         except (_ue.URLError, OSError):
-            pass  # best-effort, never block operator
+            return False  # best-effort, never block operator
+
+    def _post_operator_message(self, text: str) -> None:
+        """Forward operator tray message to daemon as an operator_message event.
+
+        Shows a non-blocking error toast if the daemon is unreachable.
+        """
+        import socket as _sock
+        import time as _time
+        try:
+            machine_id = _sock.gethostname()
+        except OSError:
+            machine_id = "unknown"
+        event = {
+            "type": "operator_message",
+            "text": text,
+            "profile": self._runner_profile,
+            "machine_id": machine_id,
+            "ts_ms": int(_time.time() * 1000),
+        }
+        ok = bool(
+            self._team_lead_url
+            and self._runner_profile
+            and self._forward_event_to_daemon(event)
+        )
+        if not ok:
+            try:
+                from scripts.operator_popup import show_notify
+                show_notify({"type": "toast", "body": "发送失败，daemon 未连接", "timeout_s": 4})
+            except (ImportError, OSError):
+                pass  # headless or module-unavailable — skip feedback silently
 
     def show_notify(self, params: dict) -> dict:
         """Show OS-native notification dialog. Blocks until user responds.
