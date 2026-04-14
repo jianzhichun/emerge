@@ -29,6 +29,7 @@ class OperatorMonitor(threading.Thread):
         adapter_root: Path | None = None,
     ) -> None:
         super().__init__(daemon=True, name="OperatorMonitor")
+        # machines parameter kept for API compatibility; polling removed (runner pushes events via daemon)
         self._machines = machines
         self._push_fn = push_fn
         self._poll_interval_s = poll_interval_s
@@ -44,13 +45,8 @@ class OperatorMonitor(threading.Thread):
         self._stop_event.set()
 
     def run(self) -> None:
-        while not self._stop_event.wait(timeout=self._poll_interval_s):
-            for machine_id, client in self._machines.items():
-                try:
-                    self._poll_machine(machine_id, client)
-                except Exception:
-                    pass
-            # Local operator events delivered by EventRouter (event-driven, not polled)
+        """Block until stop() is called. Operator events arrive via process_local_file()."""
+        self._stop_event.wait()
 
     def process_local_file(self, events_path: Path) -> None:
         """Process a single local events.jsonl file. Called by EventRouter on file change."""

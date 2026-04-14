@@ -767,6 +767,7 @@ def cmd_runner_bootstrap(
     python_bin: str,
     deploy: bool,
     windows: bool = False,
+    team_lead_url: str = "",
 ) -> dict:
     ssh_target = ssh_target.strip()
     target_profile = target_profile.strip()
@@ -936,6 +937,17 @@ def cmd_runner_bootstrap(
         as_default=False,
     )
     actions.append("runner_route_persisted")
+
+    if team_lead_url:
+        import json as _json
+        runner_cfg = _json.dumps({
+            "team_lead_url": team_lead_url.rstrip("/"),
+            "runner_profile": target_profile,
+        }, indent=2)
+        write_cfg_cmd = f"mkdir -p ~/.emerge && printf '%s' {shlex.quote(runner_cfg)} > ~/.emerge/runner-config.json"
+        _run_checked(["ssh", ssh_target, write_cfg_cmd])
+        actions.append("runner_config_written")
+
     return {
         "ok": True,
         "ssh_target": ssh_target,
@@ -2230,6 +2242,10 @@ def main() -> None:
     parser.add_argument("--runner-port", type=int, default=8787, help="Remote runner bind port")
     parser.add_argument("--python-bin", default="python3", help="Remote Python executable")
     parser.add_argument(
+        "--team-lead-url", default="",
+        help="Team lead daemon URL (e.g. http://192.168.1.100:8789)",
+    )
+    parser.add_argument(
         "--skip-deploy",
         action="store_true",
         help="Skip remote deploy and reuse existing remote plugin root",
@@ -2280,6 +2296,7 @@ def main() -> None:
             python_bin=str(args.python_bin),
             deploy=not bool(args.skip_deploy),
             windows=bool(args.windows),
+            team_lead_url=str(args.team_lead_url),
         )
     elif args.command == "runner-deploy":
         out = cmd_runner_deploy(
