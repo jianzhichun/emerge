@@ -1741,7 +1741,12 @@ class EmergeDaemon:
                                     },
                                     "ui_spec": {
                                         "type": "object",
-                                        "description": "Popup spec: {type, title, body, options?, timeout_s?}",
+                                        "description": (
+                                            "Popup spec. type: choice|input|confirm|info|toast. "
+                                            "toast is fire-and-forget (no popup-result posted). "
+                                            "Other types block until operator responds. "
+                                            "Fields: title, body, options (choice), timeout_s."
+                                        ),
                                     },
                                 },
                                 "required": ["runner_profile", "ui_spec"],
