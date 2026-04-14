@@ -54,7 +54,7 @@ def _format_event(event: dict) -> str | None:
     if etype == "operator_message":
         text = event.get("text", "")
         profile = event.get("runner_profile", event.get("profile", "?"))
-        return f"[Operator:{profile}] {text}"
+        return f"[ACTION REQUIRED][Operator:{profile}] {text}"
     if etype == "cockpit_action":
         # Pending actions embedded in event
         try:
