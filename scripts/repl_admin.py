@@ -1676,6 +1676,22 @@ def cmd_control_plane_session_reset(confirm: str, full: bool = False) -> dict:
     }
 
 
+def cmd_control_plane_monitors(state_root=None) -> dict:
+    """Return connected runner monitor state from runner-monitor-state.json."""
+    root = Path(state_root) if state_root else _resolve_state_root()
+    state_path = root / "runner-monitor-state.json"
+    if not state_path.exists():
+        return {"runners": [], "team_active": False}
+    try:
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        return {
+            "runners": data.get("runners", []),
+            "team_active": bool(data.get("team_active", False)),
+        }
+    except (OSError, json.JSONDecodeError):
+        return {"runners": [], "team_active": False}
+
+
 def _cmd_set_goal(body: dict) -> dict:
     """Submit a human_edit goal event and return the active snapshot."""
     goal = str(body.get("goal", "")).strip()
@@ -1887,6 +1903,8 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                 limit=int(qs.get("limit", ["200"])[0]),
                 since_ms=int(qs.get("since_ms", ["0"])[0]),
             ))
+        elif path == "/api/control-plane/monitors":
+            self._json(cmd_control_plane_monitors())
         elif path == "/api/control-plane/span-candidates":
             self._json(cmd_control_plane_span_candidates())
         elif path == "/api/control-plane/reflection-cache":
