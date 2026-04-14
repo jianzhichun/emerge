@@ -1384,56 +1384,6 @@ def test_hypermesh_icc_write_participates_in_pipeline_lifecycle_registry(tmp_pat
         os.environ.pop("EMERGE_SESSION_ID", None)
 
 
-def test_push_pattern_writes_alert_for_all_stages(monkeypatch, tmp_path):
-    """_push_pattern writes pattern-alerts.json for each policy stage."""
-    from scripts.pattern_detector import PatternSummary
-    from scripts.emerge_daemon import EmergeDaemon
-
-    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
-    daemon = EmergeDaemon(root=ROOT)
-
-    for stage in ("explore", "canary", "stable"):
-        summary = PatternSummary(
-            machine_ids=["local"],
-            intent_signature="hypermesh.node_create",
-            occurrences=5,
-            window_minutes=10.0,
-            detector_signals=["frequency"],
-            context_hint={"app": "hypermesh", "samples": []},
-            policy_stage=stage,
-        )
-        daemon._push_pattern(stage, {"app": "hypermesh"}, summary)
-
-        alert_path = tmp_path / "pattern-alerts.json"
-        assert alert_path.exists(), f"stage={stage}: pattern-alerts.json not written"
-        data = json.loads(alert_path.read_text())
-        assert data["stage"] == stage
-        assert data["intent_signature"] == "hypermesh.node_create"
-        assert data["meta"]["machine_ids"] == ["local"]
-
-
-def test_push_pattern_rejects_unsafe_runner_profile(tmp_path, monkeypatch):
-    """runner_profile with path traversal chars falls back to shared file."""
-    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
-    daemon = EmergeDaemon(root=ROOT)
-    from scripts.pattern_detector import PatternSummary
-
-    summary = PatternSummary(
-        machine_ids=["m1"],
-        intent_signature="zwcad.draw.line",
-        occurrences=3,
-        policy_stage="explore",
-        context_hint={"app": "zwcad"},
-        window_minutes=5.0,
-        detector_signals=["frequency"],
-    )
-    daemon._push_pattern("explore", {"app": "zwcad", "runner_profile": "../../etc"}, summary)
-
-    assert not (tmp_path / "pattern-alerts-../../etc.json").exists()
-    fallback_file = tmp_path / "pattern-alerts.json"
-    assert fallback_file.exists(), "should fall back to shared file for unsafe profile"
-
-
 def test_runner_client_notify_posts_ui_spec(tmp_path):
     """RunnerClient.notify(ui_spec) POSTs {"ui_spec": {...}} and returns result dict."""
     import json as _json, threading, socket
@@ -3533,34 +3483,6 @@ def test_span_close_stable_includes_skeleton_path(tmp_path, monkeypatch):
     assert "icc_span_approve" in inner.get("next_step", "")
 
 
-def test_push_pattern_writes_alert_file(tmp_path, monkeypatch):
-    """_push_pattern must write pattern-alerts.json to state root."""
-    from scripts.emerge_daemon import EmergeDaemon
-    from scripts.pattern_detector import PatternSummary
-    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
-    daemon = EmergeDaemon()
-
-    summary = PatternSummary(
-        intent_signature="zwcad.read.state",
-        occurrences=5,
-        window_minutes=12.0,
-        context_hint={"app": "ZWCAD"},
-        machine_ids=["m1"],
-        policy_stage="explore",
-        detector_signals=[],
-    )
-    daemon._push_pattern("explore", {"app": "ZWCAD"}, summary)
-
-    alert_path = tmp_path / "pattern-alerts.json"
-    assert alert_path.exists()
-    data = json.loads(alert_path.read_text())
-    assert data["intent_signature"] == "zwcad.read.state"
-    assert data["stage"] == "explore"
-    assert data["meta"]["occurrences"] == 5
-    assert data["meta"]["machine_ids"] == ["m1"]
-    assert "[OperatorMonitor]" in data["message"]
-
-
 def test_on_pending_actions_renames_to_processed(tmp_path, monkeypatch):
     """_on_pending_actions renames to .processed.json for hook/monitor pickup."""
     import json
@@ -4010,58 +3932,6 @@ def test_observer_plugin_emit_event_writes_to_eventbus(tmp_path):
     assert event["intent_signature"] == "zwcad.write.apply-change"
     assert "ts_ms" in event
     assert "machine_id" in event
-
-
-# ---------------------------------------------------------------------------
-# _push_pattern per-runner alert routing
-# ---------------------------------------------------------------------------
-
-def test_push_pattern_writes_per_runner_alert_file(tmp_path, monkeypatch):
-    """When context carries runner_profile, alert goes to pattern-alerts-{profile}.json."""
-    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
-    daemon = EmergeDaemon(root=ROOT)
-    from scripts.pattern_detector import PatternSummary
-
-    summary = PatternSummary(
-        machine_ids=["workstation-A"],
-        intent_signature="hypermesh.mesh.batch",
-        occurrences=5,
-        window_minutes=10.0,
-        detector_signals=["frequency"],
-        context_hint={"app": "hypermesh"},
-        policy_stage="canary",
-    )
-    context = {"runner_profile": "mycader-1", "app": "hypermesh"}
-    daemon._push_pattern("canary", context, summary)
-
-    alert_file = tmp_path / "pattern-alerts-mycader-1.json"
-    assert alert_file.exists(), "per-runner alert file not created"
-    data = json.loads(alert_file.read_text())
-    assert data["runner_profile"] == "mycader-1"
-    assert data["machine_id"] == "workstation-A"
-    assert data["stage"] == "canary"
-    assert data["intent_signature"] == "hypermesh.mesh.batch"
-
-
-def test_push_pattern_falls_back_to_shared_file_when_no_runner_profile(tmp_path, monkeypatch):
-    """Without runner_profile in context, alert goes to pattern-alerts.json."""
-    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
-    daemon = EmergeDaemon(root=ROOT)
-    from scripts.pattern_detector import PatternSummary
-
-    summary = PatternSummary(
-        machine_ids=["m1"],
-        intent_signature="zwcad.draw.line",
-        occurrences=3,
-        window_minutes=5.0,
-        detector_signals=["frequency"],
-        context_hint={"app": "zwcad"},
-        policy_stage="explore",
-    )
-    daemon._push_pattern("explore", {"app": "zwcad"}, summary)
-
-    fallback_file = tmp_path / "pattern-alerts.json"
-    assert fallback_file.exists(), "fallback alert file not created"
 
 
 # ---------------------------------------------------------------------------

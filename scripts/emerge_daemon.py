@@ -2899,10 +2899,10 @@ class EmergeDaemon:
 
         self._operator_monitor = OperatorMonitor(
             machines={},
-            push_fn=self._push_pattern,
             poll_interval_s=poll_s,
             event_root=Path.home() / ".emerge" / "operator-events",
             adapter_root=Path.home() / ".emerge" / "adapters",
+            state_root=self._state_root,
         )
         self._operator_monitor.start()
 
@@ -2985,56 +2985,6 @@ class EmergeDaemon:
         except Exception:
             pass
 
-    def _push_pattern(self, stage: str, context: dict, summary: Any) -> None:
-        """Push pattern detection result via file-based alert (watch_patterns.py Monitor).
-
-        Writes pattern-alerts-{runner_profile}.json when runner_profile is present in
-        context (injected by the runner push path via EventRouter/process_local_file),
-        otherwise falls back to pattern-alerts.json for local/legacy setups.
-        """
-        import time as _time
-        _rp = str(context.get("runner_profile", "")).strip()
-        runner_profile: str | None = (
-            _rp
-            if _rp and len(_rp) <= 64 and re.fullmatch(r"[a-zA-Z0-9_.-]+", _rp)
-            else None
-        )
-        filename = (
-            f"pattern-alerts-{runner_profile}.json"
-            if runner_profile
-            else "pattern-alerts.json"
-        )
-        machine_id = summary.machine_ids[0] if summary.machine_ids else ""
-        message = self._build_explore_message(context, summary)
-        alert_data = {
-            "submitted_at": int(_time.time() * 1000),
-            "stage": stage,
-            "intent_signature": summary.intent_signature,
-            "runner_profile": runner_profile,
-            "machine_id": machine_id,
-            "message": message,
-            "meta": {
-                "occurrences": summary.occurrences,
-                "window_minutes": summary.window_minutes,
-                "machine_ids": summary.machine_ids,
-            },
-        }
-        try:
-            self._write_json(self._state_root / filename, alert_data)
-        except Exception:
-            pass
-
-    def _build_explore_message(self, context: dict, summary: Any) -> str:
-        app = context.get("app", "unknown")
-        samples = context.get("samples", summary.context_hint.get("samples", []))
-        sig = summary.intent_signature
-        return (
-            f"[OperatorMonitor] Detected recurring pattern `{sig}` in {app} — "
-            f"{summary.occurrences} occurrences in ~{summary.window_minutes:.0f} min."
-            + (f" Samples: {', '.join(str(s) for s in samples[:3])}." if samples else "")
-            + " Evaluate whether to take over; if so, initiate elicitation."
-        )
-
     def _write_mcp_push(self, payload: dict) -> None:
         """Write a JSON-RPC notification/request to stdout for CC to receive."""
         line = json.dumps(payload) + "\n"
@@ -3076,10 +3026,11 @@ class EmergeDaemon:
 
 
 def run_http(port: int = 8789) -> None:
-    """Start emerge daemon in HTTP MCP server mode."""
+    """Start emerge daemon in HTTP MCP server mode with in-process cockpit."""
     import atexit
     import threading as _threading
     from scripts.daemon_http import DaemonHTTPServer
+    from scripts.repl_admin import CockpitHTTPServer
 
     daemon = EmergeDaemon()
     daemon._http_mode = True  # disable _elicit() blocking
@@ -3093,59 +3044,23 @@ def run_http(port: int = 8789) -> None:
     daemon._http_server = srv
     srv.start()
     print(f"Emerge daemon HTTP server running on port {srv.port}", flush=True)
-    # Auto-start cockpit
+
+    # Start cockpit in-process — no subprocess, shares daemon memory
     try:
-        _ensure_cockpit(Path(__file__).resolve().parent.parent)
-    except Exception:
-        pass
+        cockpit = CockpitHTTPServer(daemon=daemon, port=0)
+        url = cockpit.start()
+        daemon._cockpit_server = cockpit
+        print(f"[emerge] Cockpit: {url}", flush=True)
+        atexit.register(cockpit.stop)
+    except Exception as _e:
+        print(f"[emerge] Cockpit failed to start: {_e}", flush=True)
+
     try:
         _threading.Event().wait()
     except KeyboardInterrupt:
         pass
     finally:
         srv.stop()
-
-
-def _ensure_cockpit(plugin_root: Path) -> str | None:
-    """Start cockpit server if not already running. Returns URL or None."""
-    import subprocess as _sub
-    import sys as _sys
-    from scripts.policy_config import default_exec_root as _exec_root
-    _repl_root = Path(os.environ.get("EMERGE_REPL_ROOT", "") or os.environ.get("EMERGE_STATE_ROOT", "") or str(_exec_root())).expanduser().resolve()
-    pid_path = _repl_root / "cockpit.pid"
-    if pid_path.exists():
-        try:
-            import json as _j
-            info = _j.loads(pid_path.read_text())
-            os.kill(int(info["pid"]), 0)
-            return f"http://localhost:{info['port']}"
-        except (OSError, KeyError, ValueError):
-            pid_path.unlink(missing_ok=True)
-    repl_admin = plugin_root / "scripts" / "repl_admin.py"
-    if not repl_admin.exists():
-        return None
-    proc = _sub.Popen(
-        [_sys.executable, str(repl_admin), "serve", "--port", "0"],
-        stdout=_sub.PIPE, stderr=_sub.DEVNULL,
-        start_new_session=True,
-    )
-    try:
-        assert proc.stdout is not None
-        import re as _re
-        for _i, line in enumerate(proc.stdout):
-            if _i >= 20:
-                break  # give up after 20 lines to avoid hanging
-            text = line.decode("utf-8", errors="replace").strip()
-            if "http://localhost:" in text:
-                m = _re.search(r'http://localhost:(\d+)', text)
-                if m:
-                    url = f"http://localhost:{m.group(1)}"
-                    url_path = Path.home() / ".emerge" / "cockpit-url.txt"
-                    url_path.write_text(url, encoding="utf-8")
-                    return url
-    except Exception:
-        pass
-    return None
 
 
 if __name__ == "__main__":
