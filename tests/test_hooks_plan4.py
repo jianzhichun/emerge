@@ -14,6 +14,7 @@ PERMISSION_REQUEST_HOOK = ROOT / "hooks" / "permission_request.py"
 INSTRUCTIONS_LOADED_HOOK = ROOT / "hooks" / "instructions_loaded.py"
 WORKTREE_LIFECYCLE_HOOK = ROOT / "hooks" / "worktree_lifecycle.py"
 TASK_CREATED_HOOK = ROOT / "hooks" / "task_created.py"
+SESSION_START_HOOK = ROOT / "hooks" / "session_start.py"
 
 
 def _run(script: Path, payload: dict, data_dir: Path):
@@ -291,3 +292,107 @@ def test_icc_exec_bridge_path_writes_operator_event(tmp_path):
     # fall-through to normal exec should call _write_operator_event
     after = sum(1 for _ in event_path.read_text(encoding="utf-8").splitlines() if _.strip()) if event_path.exists() else 0
     assert after > before
+
+
+# ---------------------------------------------------------------------------
+# C1: .claude/rules connector file generation (session_start)
+# ---------------------------------------------------------------------------
+
+def _run_session_start(payload: dict, data_dir: Path, cwd: Path):
+    env = {
+        **os.environ,
+        "EMERGE_DATA_ROOT": str(data_dir),
+        "CLAUDE_PLUGIN_DATA": str(data_dir / "repl"),
+    }
+    result = subprocess.run(
+        [sys.executable, str(SESSION_START_HOOK)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(cwd),
+    )
+    return result.returncode, result.stdout.strip(), result.stderr.strip()
+
+
+def test_connector_rules_written_for_connectors_with_notes(tmp_path, monkeypatch):
+    """SessionStart writes .claude/rules/connector-<name>.md for connectors with NOTES.md."""
+    import importlib
+
+    # Set up fake connectors dir
+    connectors_root = tmp_path / "home" / ".emerge" / "connectors"
+    (connectors_root / "myconn").mkdir(parents=True)
+    (connectors_root / "myconn" / "NOTES.md").write_text(
+        "This is the myconn NOTES content.\nLine 2.\n", encoding="utf-8"
+    )
+    (connectors_root / "emptyconn").mkdir(parents=True)
+    # emptyconn has no NOTES.md
+
+    # Patch Path.home() to return tmp_path/home
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+
+    # Import the helper directly (not subprocess) for speed
+    sys.path.insert(0, str(ROOT))
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("session_start", ROOT / "hooks" / "session_start.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    mod._write_connector_rules(str(project_dir))
+
+    rules_dir = project_dir / ".claude" / "rules"
+    assert rules_dir.is_dir()
+    rule_file = rules_dir / "connector-myconn.md"
+    assert rule_file.exists(), "rule file should be created for connector with NOTES.md"
+    content = rule_file.read_text(encoding="utf-8")
+    assert "emerge:connector:myconn" in content
+    assert "myconn NOTES content" in content
+
+    assert not (rules_dir / "connector-emptyconn.md").exists(), \
+        "no rule file for connector without NOTES.md"
+
+
+def test_connector_rules_skipped_when_no_connectors_dir(tmp_path, monkeypatch):
+    """SessionStart silently skips rule generation when ~/.emerge/connectors doesn't exist."""
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "nonexistent_home"))
+
+    sys.path.insert(0, str(ROOT))
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("session_start2", ROOT / "hooks" / "session_start.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    project_dir = tmp_path / "project2"
+    project_dir.mkdir()
+    mod._write_connector_rules(str(project_dir))  # should not raise
+
+    rules_dir = project_dir / ".claude" / "rules"
+    assert not rules_dir.exists()
+
+
+def test_connector_rules_excerpt_truncated_to_400_chars(tmp_path, monkeypatch):
+    """Rule file content is truncated to 400 chars of NOTES.md."""
+    connectors_root = tmp_path / "home" / ".emerge" / "connectors"
+    (connectors_root / "bigconn").mkdir(parents=True)
+    long_notes = "A" * 1000
+    (connectors_root / "bigconn" / "NOTES.md").write_text(long_notes, encoding="utf-8")
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+
+    sys.path.insert(0, str(ROOT))
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("session_start3", ROOT / "hooks" / "session_start.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    project_dir = tmp_path / "project3"
+    project_dir.mkdir()
+    mod._write_connector_rules(str(project_dir))
+
+    content = (project_dir / ".claude" / "rules" / "connector-bigconn.md").read_text(encoding="utf-8")
+    # 400 chars excerpt + header lines — total content should be well under 600 chars
+    assert len(content) < 600
+    assert "A" * 400 in content
+    assert "A" * 401 not in content

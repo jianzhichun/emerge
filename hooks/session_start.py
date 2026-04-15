@@ -13,6 +13,40 @@ from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_
 from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
 
 
+def _write_connector_rules(cwd: str) -> None:
+    """Generate .claude/rules/connector-<name>.md for each connector with NOTES.md.
+
+    CC lazy-loads these files and fires InstructionsLoaded on each load, which
+    injects the live NOTES.md content and reflection at exactly the right moment
+    (not just once at SessionStart).
+    """
+    connectors_root = Path.home() / ".emerge" / "connectors"
+    if not connectors_root.is_dir():
+        return
+    try:
+        rules_dir = Path(cwd) / ".claude" / "rules"
+        rules_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+    for connector_dir in sorted(connectors_root.iterdir()):
+        if not connector_dir.is_dir():
+            continue
+        notes_path = connector_dir / "NOTES.md"
+        if not notes_path.exists():
+            continue
+        name = connector_dir.name
+        try:
+            excerpt = notes_path.read_text(encoding="utf-8").strip()[:400]
+            content = (
+                f"<!-- emerge:connector:{name} — auto-generated at SessionStart -->\n"
+                f"# Connector: {name}\n\n"
+                f"{excerpt}\n"
+            )
+            (rules_dir / f"connector-{name}.md").write_text(content, encoding="utf-8")
+        except OSError:
+            continue
+
+
 def main() -> None:
     payload_text = sys.stdin.read().strip()
     try:
@@ -75,6 +109,9 @@ def main() -> None:
             )
     except (OSError, json.JSONDecodeError, AttributeError):
         pass
+
+    # Generate .claude/rules/connector-*.md for lazy connector context injection
+    _write_connector_rules(payload.get("cwd") or str(Path.cwd()))
 
     # 确保 HTTP daemon 正在运行（幂等，已运行则无操作）
     import subprocess as _sub
