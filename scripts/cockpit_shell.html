@@ -1234,8 +1234,6 @@ function renderTabs() {
 }
 
 let _monitorsPollingInterval = null;
-let _addRunnerPollInterval = null;
-let _addRunnerKnownProfiles = null;
 let _monitorsHasContent = false;
 
 function _startMonitorsPolling() {
@@ -1250,29 +1248,9 @@ function _stopMonitorsPolling() {
     clearInterval(_monitorsPollingInterval);
     _monitorsPollingInterval = null;
   }
-  if (_addRunnerPollInterval) {
-    clearInterval(_addRunnerPollInterval);
-    _addRunnerPollInterval = null;
-  }
   _monitorsHasContent = false;
 }
 
-async function _pollForNewRunner() {
-  try {
-    const r = await fetch('/api/control-plane/monitors');
-    const d = await r.json();
-    const runners = d.runners || [];
-    const newRunner = runners.find(r => _addRunnerKnownProfiles && !_addRunnerKnownProfiles.has(r.runner_profile));
-    if (newRunner) {
-      clearInterval(_addRunnerPollInterval);
-      _addRunnerPollInterval = null;
-      const statusEl = document.getElementById('add-runner-status');
-      if (statusEl) {
-        statusEl.innerHTML = `<div style="margin-top:10px;color:#3fb950;font-size:12px;font-weight:600">✓ ${escHtml(newRunner.runner_profile)} connected</div>`;
-      }
-    }
-  } catch (e) {}
-}
 
 function switchTab(tab) {
   currentTab = tab;
@@ -2125,64 +2103,6 @@ async function _loadStateTabData() {
 }
 
 
-function _renderAddRunnerPanel() {
-  return `
-<div style="border:1px solid #30363d;border-radius:6px;padding:16px;margin-bottom:16px;background:#0d1117">
-  <div style="font-size:13px;font-weight:600;color:#c9d1d9;margin-bottom:12px">Add Runner</div>
-  <div style="font-size:11px;color:#8b949e;margin-bottom:10px">Profile name is auto-detected from the runner machine's hostname. Override: <code>EMERGE_PROFILE=name curl … | bash</code></div>
-  <div style="margin-bottom:10px">
-    <div style="font-size:11px;color:#8b949e;margin-bottom:4px">Linux / macOS</div>
-    <div style="display:flex;align-items:flex-start;gap:8px">
-      <code id="bash-cmd" style="background:#161b22;border:1px solid #30363d;border-radius:4px;padding:6px 10px;font-size:11px;color:#58a6ff;flex:1;word-break:break-all">Loading…</code>
-      <button type="button" onclick="_copyInstallCmd('bash-cmd')" style="flex-shrink:0;background:#21262d;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:11px;padding:5px 10px;cursor:pointer">Copy</button>
-    </div>
-  </div>
-  <div style="margin-bottom:10px">
-    <div style="font-size:11px;color:#8b949e;margin-bottom:4px">Windows PowerShell</div>
-    <div style="display:flex;align-items:flex-start;gap:8px">
-      <code id="ps1-cmd" style="background:#161b22;border:1px solid #30363d;border-radius:4px;padding:6px 10px;font-size:11px;color:#58a6ff;flex:1;word-break:break-all">Loading…</code>
-      <button type="button" onclick="_copyInstallCmd('ps1-cmd')" style="flex-shrink:0;background:#21262d;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:11px;padding:5px 10px;cursor:pointer">Copy</button>
-    </div>
-  </div>
-  <div style="font-size:11px;color:#8b949e">Runner appears below when connected. Agents-team watchers: <code>/emerge:monitor</code></div>
-  <div id="add-runner-status"></div>
-</div>`;
-}
-
-function _copyInstallCmd(elemId) {
-  const el = document.getElementById(elemId);
-  const text = el ? el.textContent : '';
-  navigator.clipboard.writeText(text).then(() => {
-    const btn = document.querySelector(`button[onclick="_copyInstallCmd('${elemId}')"]`);
-    if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); }
-  }).catch(() => {});
-}
-
-let _installUrlFetchTimer = null;
-function _fetchInstallUrls() {
-  clearTimeout(_installUrlFetchTimer);
-  _installUrlFetchTimer = setTimeout(async () => {
-    try {
-      const r = await fetch('/api/control-plane/runner-install-url');
-      const d = await r.json();
-      if (d.ok) {
-        const bashEl = document.getElementById('bash-cmd');
-        const ps1El = document.getElementById('ps1-cmd');
-        if (bashEl) bashEl.textContent = d.bash || '';
-        if (ps1El) ps1El.textContent = d.powershell || '';
-      }
-    } catch (e) {}
-  }, 300);
-}
-
-function _initAddRunnerPanel() {
-  _fetchInstallUrls();
-  if (_addRunnerPollInterval) return;
-  fetch('/api/control-plane/monitors').then(r => r.json()).then(d => {
-    _addRunnerKnownProfiles = new Set((d.runners || []).map(r => r.runner_profile));
-    _addRunnerPollInterval = setInterval(_pollForNewRunner, 3000);
-  }).catch(() => {});
-}
 
 async function renderMonitorsTab() {
   const panel = document.getElementById('main-panel');
@@ -2193,20 +2113,11 @@ async function renderMonitorsTab() {
     const resp = await fetch('/api/control-plane/monitors');
     const data = await resp.json();
     const runners = data.runners || [];
-    const addRunnerExpanded = runners.length === 0;
-    const addRunnerId = 'add-runner-extra';
     let html = '<div style="padding:16px">';
-    if (addRunnerExpanded) {
-      html += _renderAddRunnerPanel();
-    } else {
-      html += `<div style="margin-bottom:16px"><span style="font-size:11px;color:#8b949e;cursor:pointer;text-decoration:underline" onclick="var el=document.getElementById('${addRunnerId}');if(el)el.style.display=el.style.display==='none'?'block':'none'">＋ Add another runner</span>`;
-      html += `<div id="${addRunnerId}" style="display:none">${_renderAddRunnerPanel()}</div></div>`;
-    }
     if (!runners.length) {
       html += '<div style="color:#8b949e;font-size:12px;margin-bottom:12px">No runners connected yet.</div></div>';
       panel.innerHTML = html;
       _monitorsHasContent = true;
-      _initAddRunnerPanel();
       return;
     }
     html += `<div style="margin-bottom:12px;font-size:12px;color:#8b949e">${runners.length} runner(s) connected</div>`;
@@ -2237,7 +2148,6 @@ async function renderMonitorsTab() {
     html += '</tbody></table></div>';
     panel.innerHTML = html;
     _monitorsHasContent = true;
-    _initAddRunnerPanel();
   } catch (e) {
     panel.innerHTML = `<div style="padding:16px;color:#f85149">Error loading monitors: ${escHtml(String(e))}</div>`;
   }
