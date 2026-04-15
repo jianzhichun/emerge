@@ -1011,7 +1011,6 @@ def run_http(port: int = 8789, bind_host: str | None = None) -> None:
     import atexit
     import threading as _threading
     from scripts.daemon_http import DaemonHTTPServer
-    from scripts.admin.cockpit import CockpitHTTPServer
 
     daemon = EmergeDaemon()
     daemon._http_mode = True  # disable _elicit() blocking
@@ -1030,16 +1029,11 @@ def run_http(port: int = 8789, bind_host: str | None = None) -> None:
         f"Emerge daemon HTTP server running on {srv.bind_host}:{srv.port}",
         flush=True,
     )
-
-    # Start cockpit in-process — no subprocess, shares daemon memory
-    try:
-        cockpit = CockpitHTTPServer(daemon=daemon, port=0)
-        url = cockpit.start()
-        daemon._cockpit_server = cockpit
-        print(f"[emerge] Cockpit: {url}", flush=True)
-        atexit.register(cockpit.stop)
-    except Exception as _e:
-        print(f"[emerge] Cockpit failed to start: {_e}", flush=True)
+    _ui_host = "127.0.0.1" if srv.bind_host in ("0.0.0.0", "::") else srv.bind_host
+    print(
+        f"[emerge] Cockpit: http://{_ui_host}:{srv.port}/ (same port as MCP)",
+        flush=True,
+    )
 
     try:
         _threading.Event().wait()

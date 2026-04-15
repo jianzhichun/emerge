@@ -7,17 +7,15 @@ Always invoke the admin CLI via the **Emerge plugin root** (not the user's open 
 ## Steps
 
 1. **Get cockpit URL**:
-   ```bash
-   cat ~/.emerge/cockpit-url.txt
-   ```
-   If the file is missing (daemon not yet started or cockpit not auto-started):
+   When the Emerge HTTP daemon is running (default from `SessionStart`), **Cockpit is on the same port as MCP** — typically **`http://localhost:8789/`** (same host/port as `plugin.json` `url` for `/mcp`, but open the root `/` in a browser).
+   If the daemon is not running (or you need a standalone cockpit without MCP):
    ```bash
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" serve --open --port 0
    ```
    Read output to extract `Cockpit running at http://localhost:PORT`.
 
 2. **Print URL to user**:
-   Report: "Cockpit running at <URL>"
+   Report: "Cockpit running at <URL>" (prefer daemon URL `http://localhost:8789/` when the daemon is up).
 
 3. **Start global Monitor** (team lead session):
    ```

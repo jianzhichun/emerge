@@ -42,6 +42,29 @@ def test_mcp_post_ping(tmp_path):
     srv.stop()
 
 
+def test_cockpit_root_served_on_daemon_port(tmp_path):
+    """Cockpit HTML is merged into DaemonHTTPServer (GET /)."""
+    srv = _make_server(tmp_path)
+    req = urllib.request.Request(f"http://localhost:{srv.port}/")
+    with urllib.request.urlopen(req, timeout=5) as r:
+        assert r.status == 200
+        ctype = r.headers.get("Content-Type", "").lower()
+        body = r.read().decode("utf-8", errors="replace")
+    assert "text/html" in ctype
+    assert len(body) > 100
+    srv.stop()
+
+
+def test_apis_path_not_routed_to_cockpit(tmp_path):
+    """`/apis` must not match the `/api` prefix (regression guard)."""
+    srv = _make_server(tmp_path)
+    req = urllib.request.Request(f"http://localhost:{srv.port}/apis")
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(req, timeout=5)
+    assert exc.value.code == 404
+    srv.stop()
+
+
 def test_sse_channel_established(tmp_path):
     srv = _make_server(tmp_path)
     lines = []

@@ -88,6 +88,33 @@ class DaemonHTTPServer:
         self._detector = _PatternDetector()
         self._runner_event_buffers: dict[str, deque] = {}
         self._runner_buffers_lock = threading.Lock()
+        # Cockpit UI + /api/* when served on the same port as MCP (see InProcessCockpitBridge)
+        self._cockpit_sse_clients: list[Any] = []
+        self._cockpit_sse_lock = threading.Lock()
+        self._cockpit_injected_html: dict[str, Any] = {}
+        self._cockpit_inject_lock = threading.Lock()
+
+    def cockpit_broadcast(self, event: dict) -> None:
+        """Push SSE event to cockpit browsers connected to /api/sse/status."""
+        data = f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
+        with self._cockpit_sse_lock:
+            dead = []
+            for wfile in self._cockpit_sse_clients:
+                try:
+                    wfile.write(data)
+                    wfile.flush()
+                except OSError:
+                    dead.append(wfile)
+            for wfile in dead:
+                self._cockpit_sse_clients.remove(wfile)
+
+    def _notify_cockpit_broadcast(self, event: dict) -> None:
+        """Tests may set daemon._cockpit_server to a mock; else use merged cockpit SSE."""
+        cockpit = getattr(self._daemon, "_cockpit_server", None)
+        if cockpit is not None:
+            cockpit.broadcast(event)
+        else:
+            self.cockpit_broadcast(event)
 
     @property
     def port(self) -> int:
@@ -196,9 +223,7 @@ class DaemonHTTPServer:
             "machine_id": machine_id,
         })
         self._write_monitor_state()
-        cockpit = getattr(self._daemon, "_cockpit_server", None)
-        if cockpit is not None:
-            cockpit.broadcast({"monitors_updated": True})
+        self._notify_cockpit_broadcast({"monitors_updated": True})
 
     def _on_runner_event(self, payload: dict) -> None:
         runner_profile = str(payload.get("runner_profile", "")).strip()
@@ -279,9 +304,7 @@ class DaemonHTTPServer:
             # Single _write_monitor_state call captures both last_event_ts_ms and last_alert
             self._write_monitor_state()
             if summaries:
-                cockpit = getattr(self._daemon, "_cockpit_server", None)
-                if cockpit is not None:
-                    cockpit.broadcast({"monitors_updated": True})
+                self._notify_cockpit_broadcast({"monitors_updated": True})
 
     def _on_popup_result(self, payload: dict) -> None:
         popup_id = str(payload.get("popup_id", "")).strip()
@@ -406,8 +429,19 @@ def ensure_running_or_launch(
     return "launched"
 
 
+def _is_cockpit_http_path(path: str) -> bool:
+    """True for cockpit routes. Avoids matching /apis, /apix, etc. (prefix /api alone is wrong)."""
+    if path in ("/", "/index.html"):
+        return True
+    return path == "/api" or path.startswith("/api/")
+
+
 def _make_handler(srv: "DaemonHTTPServer"):
-    class _Handler(BaseHTTPRequestHandler):
+    from scripts.admin.cockpit import InProcessCockpitBridge, _CockpitHandler
+
+    _bridge = InProcessCockpitBridge(srv._daemon, srv)
+
+    class _Handler(_CockpitHandler):
         def log_message(self, *args): pass
 
         def _send_json(self, code: int, payload: dict) -> None:
@@ -418,9 +452,21 @@ def _make_handler(srv: "DaemonHTTPServer"):
             self.end_headers()
             self.wfile.write(body)
 
+        def do_OPTIONS(self):  # noqa: N802
+            import urllib.parse as _up
+            path = _up.urlparse(self.path).path
+            if _is_cockpit_http_path(path):
+                self._cockpit = _bridge
+                return _CockpitHandler.do_OPTIONS(self)
+            self.send_error(404)
+
         def do_GET(self):  # noqa: N802
             import urllib.parse as _up
             path = _up.urlparse(self.path).path
+            if _is_cockpit_http_path(path):
+                self._cockpit = _bridge
+                return _CockpitHandler.do_GET(self)
+            self._cockpit = None
             if path == "/mcp":
                 accept = self.headers.get("Accept", "")
                 if "text/event-stream" in accept:
@@ -529,9 +575,7 @@ def _make_handler(srv: "DaemonHTTPServer"):
                         srv._runner_sse_clients.pop(runner_profile, None)
                         srv._connected_runners.pop(runner_profile, None)
                     srv._write_monitor_state()
-                    cockpit = getattr(srv._daemon, "_cockpit_server", None)
-                    if cockpit is not None:
-                        cockpit.broadcast({"monitors_updated": True})
+                    srv._notify_cockpit_broadcast({"monitors_updated": True})
 
         def do_POST(self):  # noqa: N802
             import urllib.parse as _up
@@ -540,6 +584,10 @@ def _make_handler(srv: "DaemonHTTPServer"):
             qs = _up.parse_qs(parsed.query)
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length) if length else b""
+            if _is_cockpit_http_path(path):
+                self._cockpit = _bridge
+                return _CockpitHandler.do_POST(self)
+            self._cockpit = None
             if path == "/mcp":
                 session_id = qs.get("session_id", [None])[0]
                 _tl.session_id = session_id

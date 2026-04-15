@@ -62,6 +62,58 @@ from scripts.admin.control_plane import (
 from scripts.admin.pipeline import cmd_policy_status
 from scripts.admin.runner import cmd_runner_install_url
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _parse_netloc_host_port(netloc: str) -> tuple[str, int | None]:
+    """Split Host / Origin netloc into (host lowercased, port or None)."""
+    netloc = netloc.strip()
+    if not netloc:
+        return ("", None)
+    if netloc.startswith("["):
+        end = netloc.find("]")
+        if end == -1:
+            return (netloc.lower(), None)
+        host_inside = netloc[1:end].lower()
+        tail = netloc[end + 1 :].lstrip(":")
+        if tail.isdigit():
+            return (host_inside, int(tail))
+        return (host_inside, None)
+    if ":" in netloc:
+        host, _, port_s = netloc.rpartition(":")
+        if port_s.isdigit():
+            return (host.lower(), int(port_s))
+    return (netloc.lower(), None)
+
+
+def resolve_cors_allow_origin(origin: str, host_header: str) -> str:
+    """Return Origin to echo in Access-Control-Allow-Origin, or the literal 'null' if disallowed.
+
+    Allows: exact Host match (including LAN IP:port when daemon binds 0.0.0.0), and
+    loopback alias equivalence (localhost vs 127.0.0.1 vs ::1) only when ports match.
+    Does not use a blanket allow-list for 127.0.0.1 (would ignore Host port otherwise).
+    """
+    origin = (origin or "").strip()
+    host_header = (host_header or "").strip()
+    if not origin:
+        return "null"
+    try:
+        p = urllib.parse.urlparse(origin)
+        if p.scheme not in ("http", "https") or not p.netloc:
+            return "null"
+        if p.netloc.lower() == host_header.lower():
+            return origin
+        oh, op = _parse_netloc_host_port(p.netloc)
+        hh, hp = _parse_netloc_host_port(host_header)
+        if op is not None and hp is not None and op == hp:
+            if oh == hh:
+                return origin
+            if oh in _LOOPBACK_HOSTS and hh in _LOOPBACK_HOSTS:
+                return origin
+    except Exception:
+        pass
+    return "null"
+
 
 def _make_cockpit_handler(cockpit: "CockpitHTTPServer"):
     """Return a _CockpitHandler subclass bound to cockpit's instance state."""
@@ -82,11 +134,11 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         pass
 
     def _cors_origin(self) -> str:
-        """Return a safe CORS origin — only allow localhost, never wildcard."""
-        origin = self.headers.get("Origin", "")
-        if origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1"):
-            return origin
-        return "null"  # deny cross-origin requests from other sites
+        """Return a safe CORS Allow-Origin value (see resolve_cors_allow_origin)."""
+        return resolve_cors_allow_origin(
+            self.headers.get("Origin", ""),
+            self.headers.get("Host", ""),
+        )
 
     def do_OPTIONS(self) -> None:
         self.send_response(204)
@@ -376,6 +428,53 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
     def _err(self, code: int) -> None:
         self.send_response(code)
         self.end_headers()
+
+
+class InProcessCockpitBridge:
+    """Presents the same surface as `CockpitHTTPServer` for `_CockpitHandler` when the UI
+    is served from `DaemonHTTPServer` (same TCP port as MCP, typically 8789)."""
+
+    __slots__ = ("_daemon", "_http_srv")
+
+    def __init__(self, daemon: object, http_srv: object) -> None:
+        self._daemon = daemon
+        self._http_srv = http_srv
+
+    @property
+    def _injected_html(self) -> dict:
+        return self._http_srv._cockpit_injected_html
+
+    @property
+    def _inject_lock(self):
+        return self._http_srv._cockpit_inject_lock
+
+    @property
+    def _sse_lock(self):
+        return self._http_srv._cockpit_sse_lock
+
+    @property
+    def _sse_clients(self) -> list:
+        return self._http_srv._cockpit_sse_clients
+
+    def get_monitor_data(self) -> dict:
+        hsrv = self._http_srv
+        with hsrv._runners_lock:
+            items = list(hsrv._connected_runners.items())
+        runners = [
+            {
+                "runner_profile": profile,
+                "connected": True,
+                "connected_at_ms": info.get("connected_at_ms", 0),
+                "last_event_ts_ms": info.get("last_event_ts_ms", 0),
+                "machine_id": info.get("machine_id", ""),
+                "last_alert": info.get("last_alert"),
+            }
+            for profile, info in items
+        ]
+        return {"runners": runners, "team_active": len(runners) > 0}
+
+    def broadcast(self, event: dict) -> None:
+        self._http_srv.cockpit_broadcast(event)
 
 
 class _StandaloneDaemonStub:
