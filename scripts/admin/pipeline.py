@@ -76,7 +76,7 @@ def _normalize_intent_signature(value: str) -> str:
 # Commands
 # ---------------------------------------------------------------------------
 
-def cmd_policy_status() -> dict:
+def cmd_policy_status(session_id: str | None = None) -> dict:
     from scripts.admin.control_plane import _load_hook_state_summary, _resolve_session_id
     state_root = _resolve_state_root()
     registry_path = state_root / "pipelines-registry.json"
@@ -98,7 +98,7 @@ def cmd_policy_status() -> dict:
     pipelines.sort(key=lambda x: (str(x.get("status", "")), str(x.get("key", ""))))
     hook_summary = _load_hook_state_summary()
     return {
-        "session_id": _resolve_session_id(),
+        "session_id": _resolve_session_id(session_id=session_id),
         "state_root": str(_resolve_state_root()),
         "registry_exists": registry_path.exists(),
         "registry_corrupt": registry_corrupt,

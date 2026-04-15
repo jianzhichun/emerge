@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -39,19 +40,79 @@ from scripts.state_tracker import StateTracker, load_tracker, save_tracker  # no
 # Session resolvers
 # ---------------------------------------------------------------------------
 
-def _resolve_session_id() -> str:
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _normalize_session_id(raw: str) -> str:
+    sid = (raw or "").strip()
+    if not sid:
+        raise ValueError("session_id is required")
+    if ".." in sid or "/" in sid or "\\" in sid:
+        raise ValueError("invalid session_id path")
+    if not _SESSION_ID_RE.fullmatch(sid):
+        raise ValueError("invalid session_id format")
+    return sid
+
+
+def _resolve_session_id(session_id: str | None = None) -> str:
+    if session_id:
+        return _normalize_session_id(session_id)
     return derive_session_id(os.environ.get("EMERGE_SESSION_ID"), Path.cwd())
 
 
-def _session_paths() -> tuple[Path, Path, Path]:
+def _session_paths(session_id: str | None = None) -> tuple[Path, Path, Path]:
     state_root = _resolve_state_root()
-    session_id = _resolve_session_id()
-    target_profile = str(os.environ.get("EMERGE_TARGET_PROFILE", "default")).strip() or "default"
-    if target_profile != "default":
-        profile_key = derive_profile_token(target_profile)
-        session_id = f"{session_id}__{profile_key}"
-    session_dir = state_root / session_id
+    sid = _resolve_session_id(session_id=session_id)
+    if not session_id:
+        target_profile = str(os.environ.get("EMERGE_TARGET_PROFILE", "default")).strip() or "default"
+        if target_profile != "default":
+            profile_key = derive_profile_token(target_profile)
+            sid = f"{sid}__{profile_key}"
+    session_dir = state_root / sid
     return session_dir, session_dir / "wal.jsonl", session_dir / "checkpoint.json"
+
+
+def cmd_control_plane_sessions(
+    limit: int = 200,
+    state_root: Path | None = None,
+    current_session_id: str | None = None,
+) -> dict:
+    """List known session directories under state root for cockpit selector."""
+    root = Path(state_root) if state_root else _resolve_state_root()
+    current = _resolve_session_id(session_id=current_session_id) if current_session_id else _resolve_session_id()
+    sessions: list[dict] = []
+    if root.exists():
+        for entry in root.iterdir():
+            if not entry.is_dir():
+                continue
+            sid = entry.name
+            if not _SESSION_ID_RE.fullmatch(sid):
+                continue
+            marker_paths = (
+                entry / "checkpoint.json",
+                entry / "wal.jsonl",
+                entry / "exec-events.jsonl",
+                entry / "pipeline-events.jsonl",
+                entry / "tool-events.jsonl",
+            )
+            existing = [p for p in marker_paths if p.exists()]
+            if not existing:
+                continue
+            last_ts_ms = int(max(p.stat().st_mtime for p in existing) * 1000)
+            sessions.append(
+                {
+                    "session_id": sid,
+                    "last_ts_ms": last_ts_ms,
+                    "has_checkpoint": (entry / "checkpoint.json").exists(),
+                    "has_wal": (entry / "wal.jsonl").exists(),
+                }
+            )
+    sessions.sort(key=lambda x: int(x.get("last_ts_ms", 0)), reverse=True)
+    return {
+        "ok": True,
+        "current_session_id": current,
+        "sessions": sessions[: max(1, int(limit or 200))],
+    }
 
 
 def _load_hook_state_summary() -> dict[str, str]:
@@ -171,9 +232,9 @@ def cmd_control_plane_intents() -> dict:
     return {"ok": True, "intents": list(intents.values())}
 
 
-def cmd_control_plane_session() -> dict:
+def cmd_control_plane_session(session_id: str | None = None) -> dict:
     """Session health: checkpoint + recovery + WAL stats."""
-    session_dir, wal_path, checkpoint_path = _session_paths()
+    session_dir, wal_path, checkpoint_path = _session_paths(session_id=session_id)
     wal_entries = 0
     if wal_path.exists():
         with wal_path.open("r", encoding="utf-8") as f:
@@ -193,7 +254,7 @@ def cmd_control_plane_session() -> dict:
             pass
     return {
         "ok": True,
-        "session_id": _resolve_session_id(),
+        "session_id": _resolve_session_id(session_id=session_id),
         "session_dir": str(session_dir),
         "wal_entries": wal_entries,
         "checkpoint": checkpoint,
@@ -280,9 +341,10 @@ def cmd_control_plane_exec_events(
     since_ms: int = 0,
     intent: str = "",
     intent_prefix: str = "",
+    session_id: str | None = None,
 ) -> dict:
     """Paginated exec events from session."""
-    session_dir, _, _ = _session_paths()
+    session_dir, _, _ = _session_paths(session_id=session_id)
     events_path = session_dir / "exec-events.jsonl"
     events: list[dict] = []
     if events_path.exists():
@@ -309,9 +371,10 @@ def cmd_control_plane_exec_events(
 def cmd_control_plane_tool_events(
     limit: int = 200,
     since_ms: int = 0,
+    session_id: str | None = None,
 ) -> dict:
     """Paginated general CC tool-call events from session (Bash, Read, Grep, etc.)."""
-    session_dir, _, _ = _session_paths()
+    session_dir, _, _ = _session_paths(session_id=session_id)
     events_path = session_dir / "tool-events.jsonl"
     events: list[dict] = []
     if events_path.exists():
@@ -335,9 +398,10 @@ def cmd_control_plane_pipeline_events(
     since_ms: int = 0,
     intent: str = "",
     intent_prefix: str = "",
+    session_id: str | None = None,
 ) -> dict:
     """Paginated pipeline events from session."""
-    session_dir, _, _ = _session_paths()
+    session_dir, _, _ = _session_paths(session_id=session_id)
     events_path = session_dir / "pipeline-events.jsonl"
     events: list[dict] = []
     if events_path.exists():
@@ -531,14 +595,14 @@ def cmd_control_plane_policy_unfreeze(key: str) -> dict:
     return {"ok": True, "key": key, "frozen": False}
 
 
-def cmd_control_plane_session_export() -> dict:
+def cmd_control_plane_session_export(session_id: str | None = None) -> dict:
     pin_plugin_data_path_if_present()
     state_path = Path(default_hook_state_root()) / "state.json"
     tracker = load_tracker(state_path)
-    session_dir, wal_path, checkpoint_path = _session_paths()
+    session_dir, wal_path, checkpoint_path = _session_paths(session_id=session_id)
     snapshot = {
         "state_tracker": tracker.to_dict(),
-        "session_id": _resolve_session_id(),
+        "session_id": _resolve_session_id(session_id=session_id),
     }
     if checkpoint_path.exists():
         try:
@@ -548,7 +612,7 @@ def cmd_control_plane_session_export() -> dict:
     return {"ok": True, "snapshot": snapshot}
 
 
-def cmd_control_plane_session_reset(confirm: str, full: bool = False) -> dict:
+def cmd_control_plane_session_reset(confirm: str, full: bool = False, session_id: str | None = None) -> dict:
     if confirm != "RESET":
         return {"ok": False, "error": "must pass confirm='RESET'"}
     pin_plugin_data_path_if_present()
@@ -567,11 +631,11 @@ def cmd_control_plane_session_reset(confirm: str, full: bool = False) -> dict:
             }
     except Exception:
         pass
-    export = cmd_control_plane_session_export()
+    export = cmd_control_plane_session_export(session_id=session_id)
     save_tracker(state_path, StateTracker())
     removed: list[str] = []
     if full:
-        session_dir, wal_path, checkpoint_path = _session_paths()
+        session_dir, wal_path, checkpoint_path = _session_paths(session_id=session_id)
         recovery_path = session_dir / "recovery.json"
         exec_events_path = session_dir / "exec-events.jsonl"
         pipeline_events_path = session_dir / "pipeline-events.jsonl"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import os
@@ -44,6 +45,26 @@ def resolve_daemon_bind(override: str | None = None) -> str:
             f"(e.g. 127.0.0.1 or 0.0.0.0); got {raw!r}"
         ) from e
     return raw
+
+
+def _runtime_fingerprint() -> str:
+    """Hash key runtime files so ensure-running can detect stale daemon code."""
+    root = Path(__file__).resolve().parents[1]
+    watched = (
+        root / "scripts" / "daemon_http.py",
+        root / "scripts" / "emerge_daemon.py",
+        root / "scripts" / "admin" / "cockpit.py",
+        root / "scripts" / "admin" / "control_plane.py",
+        root / "scripts" / "cockpit_shell.html",
+    )
+    h = hashlib.sha1()
+    for p in watched:
+        try:
+            st = p.stat()
+            h.update(f"{p.name}:{st.st_mtime_ns}:{st.st_size}".encode("utf-8"))
+        except OSError:
+            h.update(f"{p.name}:missing".encode("utf-8"))
+    return h.hexdigest()
 
 
 class DaemonHTTPServer:
@@ -148,6 +169,8 @@ class DaemonHTTPServer:
                 "pid": os.getpid(),
                 "host": self._bind_host,
                 "port": self.port,
+                "version": str(getattr(self._daemon, "_version", "0.0.0")),
+                "code_fingerprint": _runtime_fingerprint(),
             }),
             encoding="utf-8",
         )
@@ -410,13 +433,37 @@ def ensure_running_or_launch(
     """Check if daemon is running via PID file.
     Returns 'already_running', 'launched', or 'not_running'.
     """
+    import signal
+
+    expected_fp = _runtime_fingerprint()
+
     pid_path = pid_path or (Path.home() / ".emerge" / "daemon.pid")
     if pid_path.exists():
         try:
             info = json.loads(pid_path.read_text(encoding="utf-8"))
             pid = int(info["pid"])
             os.kill(pid, 0)
-            return "already_running"
+            if pid == os.getpid():
+                # Called in-process (tests / embeddings). Never self-terminate.
+                return "already_running"
+            running_fp = str(info.get("code_fingerprint", "") or "")
+            if running_fp and running_fp == expected_fp:
+                return "already_running"
+            # Stale daemon code: stop old process so caller can start a fresh one.
+            try:
+                os.kill(pid, signal.SIGTERM)
+                for _ in range(10):
+                    time.sleep(0.1)
+                    try:
+                        os.kill(pid, 0)
+                    except ProcessLookupError:
+                        break
+                else:
+                    os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            pid_path.unlink(missing_ok=True)
+            return "not_running"
         except (ProcessLookupError, PermissionError, KeyError, ValueError, json.JSONDecodeError):
             pid_path.unlink(missing_ok=True)
     if daemon_factory is None:

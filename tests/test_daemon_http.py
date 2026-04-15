@@ -56,6 +56,42 @@ def test_cockpit_root_served_on_daemon_port(tmp_path):
     srv.stop()
 
 
+def test_control_plane_sessions_endpoint_lists_known_sessions(tmp_path):
+    srv = _make_server_with_daemon(tmp_path)
+    session_dir = tmp_path / "repl" / "demo-session"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "wal.jsonl").write_text('{"x":1}\n', encoding="utf-8")
+    req = urllib.request.Request(f"http://localhost:{srv.port}/api/control-plane/sessions")
+    with urllib.request.urlopen(req, timeout=5) as r:
+        payload = json.loads(r.read().decode("utf-8"))
+    assert payload["ok"] is True
+    ids = [x.get("session_id") for x in payload.get("sessions", [])]
+    assert "demo-session" in ids
+    srv.stop()
+
+
+def test_control_plane_session_rejects_invalid_session_id(tmp_path):
+    srv = _make_server_with_daemon(tmp_path)
+    req = urllib.request.Request(
+        f"http://localhost:{srv.port}/api/control-plane/session?session_id=../bad",
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(req, timeout=5)
+    assert exc.value.code == 400
+    srv.stop()
+
+
+def test_policy_status_accepts_explicit_session_id(tmp_path):
+    srv = _make_server_with_daemon(tmp_path)
+    req = urllib.request.Request(
+        f"http://localhost:{srv.port}/api/policy?session_id=session-optimal-1",
+    )
+    with urllib.request.urlopen(req, timeout=5) as r:
+        payload = json.loads(r.read().decode("utf-8"))
+    assert payload.get("session_id") == "session-optimal-1"
+    srv.stop()
+
+
 def test_apis_path_not_routed_to_cockpit(tmp_path):
     """`/apis` must not match the `/api` prefix (regression guard)."""
     srv = _make_server(tmp_path)

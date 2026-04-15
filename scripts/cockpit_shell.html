@@ -9,6 +9,16 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
 .header { background: #161b22; border-bottom: 1px solid #30363d; padding: 8px 16px; display: flex; align-items: center; gap: 12px; }
 .header h1 { font-size: 14px; color: #e6edf3; flex-shrink: 0; }
 .session-info { font-size: 11px; color: #8b949e; margin-left: auto; flex-shrink: 0; }
+.session-picker {
+  margin-left: 8px;
+  font-size: 11px;
+  background: #161b22;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 2px 6px;
+  max-width: 360px;
+}
 .goal-wrap { flex: 1; display: flex; align-items: center; gap: 6px; min-width: 0; }
 .goal-label { font-size: 10px; color: #484f58; flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.8px; }
 .goal-input { flex: 1; background: transparent; border: none; border-bottom: 1px solid #30363d; color: #e6edf3; font-size: 12px; padding: 2px 4px; font-family: inherit; min-width: 0; outline: none; }
@@ -514,6 +524,9 @@ body { background: #0d1117; color: #ccc; font-family: 'SF Mono', 'Consolas', mon
     </div>
     <button class="goal-rollback-btn" onclick="rollbackGoalToSelected()" title="Rollback to selected event">Rollback</button>
   </div>
+  <select id="session-select" class="session-picker" title="Select control-plane session" onchange="onSessionSelectChange(this.value)">
+    <option value="">(loading sessions...)</option>
+  </select>
   <span class="session-info" id="session-info">loading...</span>
 </div>
 
@@ -685,9 +698,41 @@ let sseConnected = false;  // true when EventSource is open
 let serverPending = false; // true when pending-actions.json exists server-side
 let goalHistory = [];
 let selectedGoalEventId = '';
+let selectedSessionId = '';
+let sessionList = [];
 
 let _cpConfirmCallback = null;
 let _cpConfirmKeyword = null;
+
+const _rawFetch = window.fetch.bind(window);
+function _isSessionScopedPath(path) {
+  return path === '/api/policy' || path === '/api/control-plane' || path.startsWith('/api/control-plane/');
+}
+function _withSessionQuery(urlLike) {
+  try {
+    const u = new URL(urlLike, window.location.origin);
+    if (!_isSessionScopedPath(u.pathname)) return urlLike;
+    if (selectedSessionId && !u.searchParams.get('session_id')) {
+      u.searchParams.set('session_id', selectedSessionId);
+    }
+    return (u.origin === window.location.origin)
+      ? (u.pathname + u.search + u.hash)
+      : u.toString();
+  } catch (e) {
+    return urlLike;
+  }
+}
+window.fetch = function(input, init) {
+  if (typeof input === 'string') {
+    return _rawFetch(_withSessionQuery(input), init);
+  }
+  if (input instanceof Request) {
+    const nextUrl = _withSessionQuery(input.url);
+    if (nextUrl === input.url) return _rawFetch(input, init);
+    return _rawFetch(new Request(nextUrl, input), init);
+  }
+  return _rawFetch(input, init);
+};
 
 function cpConfirmShow({ title, desc, keyword, onConfirm }) {
   document.getElementById('cp-confirm-title').textContent = title || 'Confirm Action';
@@ -758,6 +803,7 @@ let _refreshCountdown = REFRESH_INTERVAL_S;
 let _lastRefreshAt = null;
 
 async function init() {
+  await refreshSessions();
   await Promise.all([refreshPolicy(), refreshAssets(), refreshStatus(), refreshGoal(), refreshGoalHistory(), refreshState(), refreshIntents(), refreshReflectionCache()]);
   _lastRefreshAt = new Date();
   applyViewStateFromUrl();
@@ -780,7 +826,7 @@ async function init() {
   });
   _resetRefreshTimer();
   setInterval(async () => {
-    await Promise.all([refreshPolicy(), refreshAssets(), refreshState(), refreshIntents(), refreshReflectionCache()]);
+    await Promise.all([refreshSessions(), refreshPolicy(), refreshAssets(), refreshState(), refreshIntents(), refreshReflectionCache()]);
     _lastRefreshAt = new Date();
     _resetRefreshTimer();
   }, REFRESH_INTERVAL_S * 1000);
@@ -872,6 +918,54 @@ async function refreshStatus() {
     serverPending = !!d.pending;
   } catch(e) {}
   updateSubmitState();
+}
+
+function _renderSessionSelect() {
+  const sel = document.getElementById('session-select');
+  if (!sel) return;
+  const opts = sessionList || [];
+  if (!opts.length) {
+    sel.innerHTML = '<option value="">(no sessions)</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  sel.innerHTML = opts.map(s => {
+    const sid = String(s.session_id || '');
+    const ts = s.last_ts_ms ? new Date(s.last_ts_ms).toLocaleTimeString() : '--';
+    const label = `${sid.slice(0, 36)} · ${ts}`;
+    const selected = sid === selectedSessionId ? ' selected' : '';
+    return `<option value="${escHtml(sid)}"${selected}>${escHtml(label)}</option>`;
+  }).join('');
+}
+
+async function refreshSessions() {
+  try {
+    const r = await _rawFetch('/api/control-plane/sessions');
+    const d = await r.json();
+    sessionList = Array.isArray(d.sessions) ? d.sessions : [];
+    const fromUrl = new URLSearchParams(window.location.search).get('session') || '';
+    const known = new Set(sessionList.map(s => String(s.session_id || '')));
+    if (!selectedSessionId) {
+      selectedSessionId = fromUrl && known.has(fromUrl) ? fromUrl : (d.current_session_id || fromUrl || '');
+    } else if (!known.has(selectedSessionId) && (d.current_session_id || '')) {
+      selectedSessionId = String(d.current_session_id);
+    }
+    _renderSessionSelect();
+  } catch (e) {
+    const sel = document.getElementById('session-select');
+    if (sel) {
+      sel.innerHTML = '<option value="">(session load failed)</option>';
+      sel.disabled = true;
+    }
+  }
+}
+
+async function onSessionSelectChange(nextSessionId) {
+  selectedSessionId = String(nextSessionId || '').trim();
+  syncUrlWithViewState({ push: true });
+  await Promise.all([refreshPolicy(), refreshState(), refreshIntents(), refreshReflectionCache()]);
+  renderCurrentTab();
 }
 
 function updateSubmitState() {
@@ -1236,6 +1330,8 @@ function renderCurrentTab() {
 
 function applyViewStateFromUrl() {
   const params = new URLSearchParams(window.location.search);
+  const requestedSession = (params.get('session') || '').trim();
+  if (requestedSession) selectedSessionId = requestedSession;
   const requestedTab = params.get('tab');
   const connectors = assetsData ? Object.keys(assetsData.connectors || {}) : [];
   const globalTabs = ['audit', 'session', 'state', 'operator', 'monitors'];
@@ -1266,6 +1362,8 @@ function syncUrlWithViewState(opts) {
   } else {
     url.searchParams.set('panel', getActiveConnectorPanel(currentTab));
   }
+  if (selectedSessionId) url.searchParams.set('session', selectedSessionId);
+  else url.searchParams.delete('session');
   if (push) window.history.pushState({}, '', url);
   else window.history.replaceState({}, '', url);
 }
@@ -2223,7 +2321,7 @@ function renderThresholds() {
       `stable_attempts≥<b>${t.stable_min_attempts}</b>`,
     ].map(s => `<span>${s}</span>`).join('');
   document.getElementById('session-info').textContent =
-    `Session: ${(policyData.session_id || '').slice(0, 20)}`;
+    `Session: ${(policyData.session_id || selectedSessionId || '').slice(0, 24)}`;
 }
 
 // ── Settings modal ────────────────────────────────────────────────────────────

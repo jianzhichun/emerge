@@ -41,6 +41,7 @@ from scripts.admin.shared import _resolve_repl_root, _resolve_connector_root
 from scripts.admin.control_plane import (
     _load_hook_state_summary,
     cmd_control_plane_state,
+    cmd_control_plane_sessions,
     cmd_control_plane_intents,
     cmd_control_plane_session,
     cmd_control_plane_hook_state,
@@ -61,6 +62,8 @@ from scripts.admin.control_plane import (
 )
 from scripts.admin.pipeline import cmd_policy_status
 from scripts.admin.runner import cmd_runner_install_url
+
+_SESSION_ID_PARAM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
@@ -148,11 +151,16 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
-        path = urllib.parse.urlparse(self.path).path
+        parsed_url = urllib.parse.urlparse(self.path)
+        path = parsed_url.path
+        qs_all = urllib.parse.parse_qs(parsed_url.query)
+        session_id_q = (qs_all.get("session_id", [""])[0] or "").strip() or None
+        if session_id_q and not _SESSION_ID_PARAM_RE.fullmatch(session_id_q):
+            return self._json({"ok": False, "error": "invalid session_id"}, status=400)
         if path in ("/", "/index.html"):
             self._serve_shell()
         elif path == "/api/policy":
-            self._json(cmd_policy_status())
+            self._json(cmd_policy_status(session_id=session_id_q))
         elif path == "/api/assets":
             ih = self._cockpit._injected_html if self._cockpit is not None else None
             self._json(cmd_assets(injected_html=ih))
@@ -177,33 +185,40 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self._serve_component(path)
         elif path == "/api/control-plane/state":
             self._json(cmd_control_plane_state())
+        elif path == "/api/control-plane/sessions":
+            _state_root = getattr(getattr(self._cockpit, "_http_srv", None), "_state_root", None)
+            _current = getattr(getattr(self._cockpit, "_daemon", None), "_base_session_id", None)
+            self._json(cmd_control_plane_sessions(state_root=_state_root, current_session_id=_current))
         elif path == "/api/control-plane/intents":
             self._json(cmd_control_plane_intents())
         elif path == "/api/control-plane/session":
-            self._json(cmd_control_plane_session())
+            self._json(cmd_control_plane_session(session_id=session_id_q))
         elif path == "/api/control-plane/hook-state":
             self._json(cmd_control_plane_hook_state())
         elif path.startswith("/api/control-plane/exec-events"):
-            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            qs = qs_all
             self._json(cmd_control_plane_exec_events(
                 limit=int(qs.get("limit", ["100"])[0]),
                 since_ms=int(qs.get("since_ms", ["0"])[0]),
                 intent=qs.get("intent", [""])[0],
                 intent_prefix=qs.get("intent_prefix", [""])[0],
+                session_id=session_id_q,
             ))
         elif path.startswith("/api/control-plane/pipeline-events"):
-            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            qs = qs_all
             self._json(cmd_control_plane_pipeline_events(
                 limit=int(qs.get("limit", ["100"])[0]),
                 since_ms=int(qs.get("since_ms", ["0"])[0]),
                 intent=qs.get("intent", [""])[0],
                 intent_prefix=qs.get("intent_prefix", [""])[0],
+                session_id=session_id_q,
             ))
         elif path.startswith("/api/control-plane/tool-events"):
-            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            qs = qs_all
             self._json(cmd_control_plane_tool_events(
                 limit=int(qs.get("limit", ["200"])[0]),
                 since_ms=int(qs.get("since_ms", ["0"])[0]),
+                session_id=session_id_q,
             ))
         elif path == "/api/control-plane/monitors":
             if self._cockpit is not None:
@@ -239,14 +254,14 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/control-plane/span-candidates":
             self._json(cmd_control_plane_span_candidates())
         elif path == "/api/control-plane/reflection-cache":
-            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            qs = qs_all
             try:
                 ttl_ms = int(qs.get("ttl_ms", ["900000"])[0])
             except Exception:
                 ttl_ms = 900000
             self._json(cmd_control_plane_reflection_cache(ttl_ms=ttl_ms))
         elif path.startswith("/api/control-plane/spans"):
-            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            qs = qs_all
             self._json(cmd_control_plane_spans(
                 limit=int(qs.get("limit", ["50"])[0]),
                 intent=qs.get("intent", [""])[0],
@@ -292,7 +307,12 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self._err(404)
 
     def do_POST(self) -> None:
-        path = urllib.parse.urlparse(self.path).path
+        parsed_url = urllib.parse.urlparse(self.path)
+        path = parsed_url.path
+        qs_all = urllib.parse.parse_qs(parsed_url.query)
+        session_id_q = (qs_all.get("session_id", [""])[0] or "").strip() or None
+        if session_id_q and not _SESSION_ID_PARAM_RE.fullmatch(session_id_q):
+            return self._json({"ok": False, "error": "invalid session_id"}, status=400)
         length = int(self.headers.get("Content-Length", 0))
         body: dict = json.loads(self.rfile.read(length)) if length else {}
         if path == "/api/submit":
@@ -356,11 +376,17 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/control-plane/policy/unfreeze":
             self._json(cmd_control_plane_policy_unfreeze(key=str(body.get("key", ""))))
         elif path == "/api/control-plane/session/export":
-            self._json(cmd_control_plane_session_export())
+            self._json(cmd_control_plane_session_export(session_id=session_id_q))
         elif path == "/api/control-plane/session/reset":
             full_v = body.get("full", False)
             full = bool(full_v) if isinstance(full_v, bool) else str(full_v).strip().lower() in {"1", "true", "yes", "on"}
-            self._json(cmd_control_plane_session_reset(confirm=str(body.get("confirm", "")), full=full))
+            self._json(
+                cmd_control_plane_session_reset(
+                    confirm=str(body.get("confirm", "")),
+                    full=full,
+                    session_id=session_id_q,
+                )
+            )
         else:
             self._err(404)
 
