@@ -35,22 +35,26 @@ The runner executes code in its **own process environment** — not in the SSH s
 |---|---|
 | `scripts/remote_runner.py` | HTTP server; executes `icc_exec` only (pipeline tools handled by daemon) |
 | `scripts/runner_watchdog.py` | Keeps runner alive; restarts on crash or `.watchdog-restart` signal |
-| `scripts/repl_admin.py` | CLI: `runner-bootstrap`, `runner-deploy`, `runner-status` |
+| `scripts/repl_admin.py` | CLI: `runner-install-url`, `runner-deploy`, `runner-status` |
 | `scripts/runner_client.py` | Routes requests to runner by `target_profile` |
 
-## Runner Bootstrap (first time)
+## Runner setup (first time)
+
+Operators install from the **daemon** using one copy-paste command (no SSH from the dev machine).
 
 ```bash
-python3 scripts/repl_admin.py runner-bootstrap \
-  --ssh-target <user@host> \
-  --target-profile <profile-key> \
-  --runner-url http://<host>:<port>
-  [--windows]          # use PowerShell-compatible commands
+python3 scripts/repl_admin.py runner-install-url --target-profile <profile-key> --pretty
 ```
 
-Bootstrap: deploys plugin files via SSH tar pipe → starts runner → health checks → persists route in `~/.emerge/runner-map.json`.
+Or open **Cockpit → Monitors → Add Runner** and copy the `curl … | bash` / `irm … | iex` lines. The script downloads the runner bundle from the daemon, writes `~/.emerge/runner-config.json`, installs optional pip deps, and registers autostart (systemd / launchd / Windows Run).
 
-**Bootstrap skips deploy when runner is already healthy** (idempotent). Use `runner-deploy` for subsequent code updates.
+After the operator has run the installer, persist the route on the dev machine if needed:
+
+```bash
+python3 scripts/repl_admin.py runner-config-set --runner-key <profile-key> --runner-url http://<host>:8787
+```
+
+Use `runner-deploy` for subsequent code updates (HTTP push, hot-reload).
 
 ## Development Workflow
 
@@ -134,7 +138,7 @@ reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" ^
 
 **If runner is already running in Session 0**, you must reboot (or log off/on) to get a clean Session 1 start — killing and restarting via SSH will land back in Session 0. After reboot the registry entry auto-starts the runner in the correct session.
 
-The `start_emerge_runner.vbs` (created by `runner-bootstrap`):
+The self-install script can create `start_emerge_runner.vbs` (Windows autostart). Manual equivalent:
 ```vbs
 Set sh = CreateObject("WScript.Shell")
 sh.CurrentDirectory = "<plugin_root>"
@@ -149,7 +153,7 @@ nohup python3 scripts/runner_watchdog.py --host 0.0.0.0 --port <N> \
   > ~/.emerge/watchdog.log 2>&1 &
 ```
 
-No session isolation issues. `runner-bootstrap` handles this automatically.
+No session isolation issues for headless Linux; use the install script or systemd user service from `runner-install-url` output.
 
 ## ExecSession — Persistent Globals and COM Limitations
 
@@ -231,7 +235,7 @@ These two endpoints are consumed by `OperatorMonitor` in the daemon when `EMERGE
 |---|---|
 | SSH exec to run tool-dependent code | SSH context ≠ runner environment. Runner was started for a reason. |
 | SCP/tar pipe to deploy on Windows | Binary corruption. Use `runner-deploy`. |
-| `runner-bootstrap` to push code changes | Bootstrap skips deploy when runner is healthy. Use `runner-deploy`. |
+| Re-running full installer to push code | Use `runner-deploy` for updates; self-install is for first-time setup only. |
 | curl/urllib returns 502 | Local `http_proxy` intercepting. Use `NO_PROXY=<host>` or `ProxyHandler({})`. |
 | Windows: runner starts but COM fails | Runner is in Session 0. Verify with `ProcessIdToSessionId`. Fix: reboot so registry autostart fires in Session 1, or user double-clicks VBS. Never SSH-exec to fix — SSH always creates Session 0. |
 | `schtasks /run` from SSH for GUI runner | Still Session 0. `schtasks /run` ignores the interactive session. Only actual logon triggers Session 1. |

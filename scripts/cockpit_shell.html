@@ -1141,6 +1141,8 @@ function renderTabs() {
 }
 
 let _monitorsPollingInterval = null;
+let _addRunnerPollInterval = null;
+let _addRunnerKnownProfiles = null;
 
 function _startMonitorsPolling() {
   if (_monitorsPollingInterval) return;
@@ -1154,6 +1156,27 @@ function _stopMonitorsPolling() {
     clearInterval(_monitorsPollingInterval);
     _monitorsPollingInterval = null;
   }
+  if (_addRunnerPollInterval) {
+    clearInterval(_addRunnerPollInterval);
+    _addRunnerPollInterval = null;
+  }
+}
+
+async function _pollForNewRunner() {
+  try {
+    const r = await fetch('/api/control-plane/monitors');
+    const d = await r.json();
+    const runners = d.runners || [];
+    const newRunner = runners.find(r => _addRunnerKnownProfiles && !_addRunnerKnownProfiles.has(r.runner_profile));
+    if (newRunner) {
+      clearInterval(_addRunnerPollInterval);
+      _addRunnerPollInterval = null;
+      const statusEl = document.getElementById('add-runner-status');
+      if (statusEl) {
+        statusEl.innerHTML = `<div style="margin-top:10px;color:#3fb950;font-size:12px;font-weight:600">✓ ${escHtml(newRunner.runner_profile)} connected</div>`;
+      }
+    }
+  } catch (e) {}
 }
 
 function switchTab(tab) {
@@ -2021,6 +2044,115 @@ function renderOperatorTab() {
   </div>`;
 }
 
+function _renderAddRunnerPanel() {
+  return `
+<div style="border:1px solid #30363d;border-radius:6px;padding:16px;margin-bottom:16px;background:#0d1117">
+  <div style="font-size:13px;font-weight:600;color:#c9d1d9;margin-bottom:12px">Add Runner</div>
+  <div style="margin-bottom:10px">
+    <label style="font-size:11px;color:#8b949e;display:block;margin-bottom:4px">Profile</label>
+    <select id="runner-profile-select"
+      style="background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;padding:5px 8px;width:220px"
+      onchange="_onProfileSelectChange()">
+      <option value="default">default</option>
+      <option value="__new__">new profile…</option>
+    </select>
+    <input id="runner-profile-input" type="text" placeholder="profile name"
+      style="display:none;margin-top:6px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;padding:5px 8px;width:220px"
+      oninput="_fetchInstallUrls()" />
+  </div>
+  <div style="margin-bottom:10px">
+    <div style="font-size:11px;color:#8b949e;margin-bottom:4px">Linux / macOS</div>
+    <div style="display:flex;align-items:flex-start;gap:8px">
+      <code id="bash-cmd" style="background:#161b22;border:1px solid #30363d;border-radius:4px;padding:6px 10px;font-size:11px;color:#58a6ff;flex:1;word-break:break-all">Loading…</code>
+      <button type="button" onclick="_copyInstallCmd('bash-cmd')" style="flex-shrink:0;background:#21262d;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:11px;padding:5px 10px;cursor:pointer">Copy</button>
+    </div>
+  </div>
+  <div style="margin-bottom:10px">
+    <div style="font-size:11px;color:#8b949e;margin-bottom:4px">Windows PowerShell</div>
+    <div style="display:flex;align-items:flex-start;gap:8px">
+      <code id="ps1-cmd" style="background:#161b22;border:1px solid #30363d;border-radius:4px;padding:6px 10px;font-size:11px;color:#58a6ff;flex:1;word-break:break-all">Loading…</code>
+      <button type="button" onclick="_copyInstallCmd('ps1-cmd')" style="flex-shrink:0;background:#21262d;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:11px;padding:5px 10px;cursor:pointer">Copy</button>
+    </div>
+  </div>
+  <div style="font-size:11px;color:#8b949e">Runner appears below when connected. Agents-team watchers: <code>/emerge:monitor</code></div>
+  <div id="add-runner-status"></div>
+</div>`;
+}
+
+function _copyInstallCmd(elemId) {
+  const el = document.getElementById(elemId);
+  const text = el ? el.textContent : '';
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.querySelector(`button[onclick="_copyInstallCmd('${elemId}')"]`);
+    if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); }
+  }).catch(() => {});
+}
+
+function _onProfileSelectChange() {
+  const sel = document.getElementById('runner-profile-select');
+  const input = document.getElementById('runner-profile-input');
+  if (!sel || !input) return;
+  if (sel.value === '__new__') {
+    input.style.display = 'block';
+    input.focus();
+  } else {
+    input.style.display = 'none';
+  }
+  _fetchInstallUrls();
+}
+
+function _getSelectedProfile() {
+  const sel = document.getElementById('runner-profile-select');
+  if (sel && sel.value === '__new__') {
+    const input = document.getElementById('runner-profile-input');
+    return (input && input.value.trim()) || 'default';
+  }
+  return (sel && sel.value) || 'default';
+}
+
+let _installUrlFetchTimer = null;
+function _fetchInstallUrls() {
+  clearTimeout(_installUrlFetchTimer);
+  _installUrlFetchTimer = setTimeout(async () => {
+    const profile = _getSelectedProfile();
+    try {
+      const r = await fetch('/api/control-plane/runner-install-url?' + new URLSearchParams({ profile }));
+      const d = await r.json();
+      if (d.ok) {
+        const bashEl = document.getElementById('bash-cmd');
+        const ps1El = document.getElementById('ps1-cmd');
+        if (bashEl) bashEl.textContent = d.bash || '';
+        if (ps1El) ps1El.textContent = d.powershell || '';
+      }
+    } catch (e) {}
+  }, 300);
+}
+
+function _initAddRunnerPanel() {
+  // Populate profile dropdown from known runner profiles
+  fetch('/api/control-plane/runner-profiles').then(r => r.json()).then(d => {
+    const sel = document.getElementById('runner-profile-select');
+    if (!sel) return;
+    const known = d.profiles || [];
+    // Preserve existing options (default + new profile…), prepend known profiles
+    const existing = Array.from(sel.options).map(o => o.value).filter(v => v !== '__new__' && v !== 'default');
+    for (const p of known) {
+      if (!existing.includes(p) && p !== 'default') {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = p;
+        sel.insertBefore(opt, sel.options[sel.options.length - 1]); // before "new profile…"
+      }
+    }
+  }).catch(() => {});
+  _fetchInstallUrls();
+  if (_addRunnerPollInterval) return;
+  fetch('/api/control-plane/monitors').then(r => r.json()).then(d => {
+    _addRunnerKnownProfiles = new Set((d.runners || []).map(r => r.runner_profile));
+    _addRunnerPollInterval = setInterval(_pollForNewRunner, 3000);
+  }).catch(() => {});
+}
+
 async function renderMonitorsTab() {
   const panel = document.getElementById('main-panel');
   panel.innerHTML = '<div style="padding:16px;color:#8b949e">Loading monitor state…</div>';
@@ -2028,11 +2160,21 @@ async function renderMonitorsTab() {
     const resp = await fetch('/api/control-plane/monitors');
     const data = await resp.json();
     const runners = data.runners || [];
+    const addRunnerExpanded = runners.length === 0;
+    const addRunnerId = 'add-runner-extra';
+    let html = '<div style="padding:16px">';
+    if (addRunnerExpanded) {
+      html += _renderAddRunnerPanel();
+    } else {
+      html += `<div style="margin-bottom:16px"><span style="font-size:11px;color:#8b949e;cursor:pointer;text-decoration:underline" onclick="var el=document.getElementById('${addRunnerId}');if(el)el.style.display=el.style.display==='none'?'block':'none'">＋ Add another runner</span>`;
+      html += `<div id="${addRunnerId}" style="display:none">${_renderAddRunnerPanel()}</div></div>`;
+    }
     if (!runners.length) {
-      panel.innerHTML = '<div style="padding:24px;color:#8b949e;text-align:center">No runners connected.<br>Use <code>/emerge:monitor</code> to start agents-team mode.</div>';
+      html += '<div style="color:#8b949e;font-size:12px;margin-bottom:12px">No runners connected yet.</div></div>';
+      panel.innerHTML = html;
+      _initAddRunnerPanel();
       return;
     }
-    let html = '<div style="padding:16px">';
     html += `<div style="margin-bottom:12px;font-size:12px;color:#8b949e">${runners.length} runner(s) connected</div>`;
     html += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
     html += '<thead><tr>';
@@ -2060,6 +2202,7 @@ async function renderMonitorsTab() {
     }
     html += '</tbody></table></div>';
     panel.innerHTML = html;
+    _initAddRunnerPanel();
   } catch (e) {
     panel.innerHTML = `<div style="padding:16px;color:#f85149">Error loading monitors: ${escHtml(String(e))}</div>`;
   }

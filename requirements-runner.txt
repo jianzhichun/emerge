@@ -1,0 +1,5 @@
+# Emerge runner runtime dependencies
+# The runner uses primarily Python stdlib — no hard pip deps.
+# Optional: tray icon support (silently skipped if missing).
+pystray>=0.19; sys_platform != "linux"
+Pillow>=9.0; sys_platform != "linux"

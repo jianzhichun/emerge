@@ -6,8 +6,11 @@ Module-specific helpers stay in their own module.
 from __future__ import annotations
 
 import os
+import socket as _socket
 import sys
 from pathlib import Path
+
+_lan_ip_cache: str = ""
 
 _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
@@ -51,6 +54,39 @@ def _resolve_repl_root() -> Path:
     if state_root:
         return Path(state_root).expanduser().resolve()
     return default_exec_root().expanduser().resolve()
+
+
+def _detect_lan_ip() -> str:
+    """Return the machine's outgoing LAN IPv4 address (cached per process).
+
+    Uses a UDP connect trick (no packets sent) to find which interface the OS
+    would use for outgoing traffic. Falls back to hostname resolution.
+    Raises OSError if no non-loopback address is found — callers must surface
+    this as an actionable error rather than generating a broken install URL.
+    """
+    global _lan_ip_cache
+    if _lan_ip_cache:
+        return _lan_ip_cache
+    try:
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+        if ip and not ip.startswith("127."):
+            _lan_ip_cache = ip
+            return _lan_ip_cache
+    except Exception:
+        pass
+    try:
+        ip = _socket.gethostbyname(_socket.gethostname())
+        if ip and not ip.startswith("127."):
+            _lan_ip_cache = ip
+            return _lan_ip_cache
+    except Exception:
+        pass
+    raise OSError(
+        "No routable LAN interface detected. "
+        "Connect to a network or set EMERGE_DAEMON_BIND to the machine's LAN IP."
+    )
 
 
 def _resolve_connector_root() -> Path:

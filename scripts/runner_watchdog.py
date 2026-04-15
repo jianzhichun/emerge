@@ -13,6 +13,7 @@ Usage (from plugin root, in interactive/RDP session):
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -27,10 +28,23 @@ SIGNAL_FILE = ROOT / ".watchdog-restart"
 RESTART_DELAY_S = 3
 POLL_INTERVAL_S = 2
 
+_CONFIG_PATH = Path.home() / ".emerge" / "runner-config.json"
+
+
+def _load_team_lead_url() -> str:
+    try:
+        data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+        return str(data.get("team_lead_url", "") or "").strip().rstrip("/")
+    except (OSError, ValueError, json.JSONDecodeError):
+        return ""
+
 
 def _start_runner(host: str, port: int, python: str) -> subprocess.Popen:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT)
+    tl = _load_team_lead_url()
+    if tl:
+        env["EMERGE_TEAM_LEAD_URL"] = tl
     return subprocess.Popen(
         [python, str(ROOT / "scripts" / "remote_runner.py"), "--host", host, "--port", str(port)],
         cwd=str(ROOT),

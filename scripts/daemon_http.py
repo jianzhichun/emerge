@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import threading
@@ -29,6 +30,22 @@ def get_current_session_id() -> str | None:
     return getattr(_tl, "session_id", None)
 
 
+def resolve_daemon_bind(override: str | None = None) -> str:
+    """Resolve bind address for ThreadingHTTPServer (CLI override, else EMERGE_DAEMON_BIND)."""
+    raw = override if override is not None else os.environ.get("EMERGE_DAEMON_BIND", "127.0.0.1")
+    raw = (raw or "").strip()
+    if not raw:
+        raw = "127.0.0.1"
+    try:
+        ipaddress.ip_address(raw)
+    except ValueError as e:
+        raise ValueError(
+            "EMERGE_DAEMON_BIND / --bind must be a valid IP address "
+            f"(e.g. 127.0.0.1 or 0.0.0.0); got {raw!r}"
+        ) from e
+    return raw
+
+
 class DaemonHTTPServer:
     """HTTP MCP transport for EmergeDaemon (Streamable HTTP).
 
@@ -44,8 +61,10 @@ class DaemonHTTPServer:
         pid_path: Path | None = None,
         event_root: Path | None = None,
         state_root: Path | None = None,
+        bind_host: str | None = None,
     ) -> None:
         self._daemon = daemon
+        self._bind_host = resolve_daemon_bind(bind_host)
         self._port = port
         self._pid_path = pid_path or (Path.home() / ".emerge" / "daemon.pid")
         self._event_root = event_root or (Path.home() / ".emerge" / "operator-events")
@@ -76,9 +95,13 @@ class DaemonHTTPServer:
             return self._port
         return self._server.server_address[1]
 
+    @property
+    def bind_host(self) -> str:
+        return self._bind_host
+
     def start(self) -> None:
         handler = _make_handler(self)
-        self._server = ThreadingHTTPServer(("127.0.0.1", self._port), handler)
+        self._server = ThreadingHTTPServer((self._bind_host, self._port), handler)
         self._port = self._server.server_address[1]
         self._write_pid()
         self._thread = threading.Thread(
@@ -94,7 +117,12 @@ class DaemonHTTPServer:
     def _write_pid(self) -> None:
         self._pid_path.parent.mkdir(parents=True, exist_ok=True)
         self._pid_path.write_text(
-            json.dumps({"pid": os.getpid(), "port": self.port}), encoding="utf-8"
+            json.dumps({
+                "pid": os.getpid(),
+                "host": self._bind_host,
+                "port": self.port,
+            }),
+            encoding="utf-8",
         )
 
     def push_to_session(self, session_id: str, payload: dict) -> bool:
@@ -354,6 +382,7 @@ def ensure_running_or_launch(
     pid_path: Path | None = None,
     port: int = 8789,
     daemon_factory: Any = None,
+    bind_host: str | None = None,
 ) -> str:
     """Check if daemon is running via PID file.
     Returns 'already_running', 'launched', or 'not_running'.
@@ -370,7 +399,9 @@ def ensure_running_or_launch(
     if daemon_factory is None:
         return "not_running"
     daemon_obj = daemon_factory()
-    srv = DaemonHTTPServer(daemon=daemon_obj, port=port, pid_path=pid_path)
+    srv = DaemonHTTPServer(
+        daemon=daemon_obj, port=port, pid_path=pid_path, bind_host=bind_host
+    )
     srv.start()
     return "launched"
 
@@ -403,6 +434,54 @@ def _make_handler(srv: "DaemonHTTPServer"):
                 qs2 = _up2.parse_qs(_up2.urlparse(self.path).query)
                 profile = qs2.get("runner_profile", [""])[0].strip()
                 self._handle_runner_sse(profile)
+            elif path == "/runner-dist/runner.tar.gz":
+                from scripts.admin.runner import _build_runner_tarball
+                _plugin_root = Path(__file__).resolve().parents[1]
+                data = _build_runner_tarball(_plugin_root)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/gzip")
+                self.send_header("Content-Disposition", 'attachment; filename="runner.tar.gz"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            elif path in ("/runner-install.sh", "/runner-install.ps1"):
+                import urllib.parse as _up_ri
+                qs_ri = _up_ri.parse_qs(_up_ri.urlparse(self.path).query)
+                profile = (qs_ri.get("profile", ["default"])[0] or "default").strip() or "default"
+                try:
+                    runner_port = int((qs_ri.get("port") or ["8787"])[0])
+                except ValueError:
+                    runner_port = 8787
+                from scripts.admin.runner import (
+                    _generate_runner_install_ps1,
+                    _generate_runner_install_sh,
+                )
+                from scripts.admin.shared import _detect_lan_ip
+                lan_ip = _detect_lan_ip()
+                dport = srv.port
+                team_lead_url = f"http://{lan_ip}:{dport}".rstrip("/")
+                if path.endswith(".sh"):
+                    body = _generate_runner_install_sh(
+                        team_lead_url=team_lead_url,
+                        profile=profile,
+                        runner_port=runner_port,
+                    ).encode("utf-8")
+                    ctype = "text/x-sh; charset=utf-8"
+                    fname = "runner-install.sh"
+                else:
+                    body = _generate_runner_install_ps1(
+                        team_lead_url=team_lead_url,
+                        profile=profile,
+                        runner_port=runner_port,
+                    ).encode("utf-8")
+                    ctype = "text/plain; charset=utf-8"
+                    fname = "runner-install.ps1"
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
             else:
                 self._send_json(404, {"ok": False, "error": "not_found"})
 

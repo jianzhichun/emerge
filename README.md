@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/version-v0.3.70-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-635%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-642%20passing-brightgreen?logo=pytest)
 
 **Emerge** solves a core problem: AI operators repeat the same work but do not learn from it, so every session re-reasons from scratch. It uses a **dual flywheel** to crystallize repeated work into deterministic pipelines: a **forward flywheel** (`icc_exec`/`icc_span_open` tracking → policy promotion explore→canary→stable → auto-crystallized `.py+.yaml` pipelines → zero-LLM execution), and a **reverse flywheel** (`OperatorMonitor` observes human operators → `PatternDetector` detects repetition → elicitation captures intent → AI takes over).
 
@@ -149,12 +149,25 @@ The runner is a **stateless Python executor** — it accepts `icc_exec` only. Al
 | `GET /status`   | Process info (pid, python, root)         |
 | `GET /logs?n=N` | Last N log lines                         |
 
+**Daemon (team-lead) — operator self-install**
+
+| Endpoint | Purpose |
+| -------- | ------- |
+| `GET /runner-install.sh?profile=<p>&port=<n>` | Generated bash installer (embeds LAN daemon URL) |
+| `GET /runner-install.ps1?profile=<p>&port=<n>` | Generated PowerShell installer |
+| `GET /runner-dist/runner.tar.gz` | Bundle of runner scripts + `requirements-runner.txt` |
+
+CLI: `python3 scripts/repl_admin.py runner-install-url --target-profile <p> --pretty`. Cockpit: `GET /api/control-plane/runner-install-url?profile=<p>`.
+
+Installer URLs point at your machine’s LAN address (`http://<lan-ip>:<port>/…`). The HTTP MCP daemon listens on **loopback by default** (`127.0.0.1`). To let another host download `/runner-install.*` or `/runner-dist/runner.tar.gz`, set **`EMERGE_DAEMON_BIND=0.0.0.0`** (or bind a specific interface IP) and ensure the host firewall allows inbound TCP on the daemon port. Binding all interfaces exposes the MCP endpoint on the LAN — restrict access if needed.
+
 
 **Configuration**
 
 
 | Env var                   | Purpose                                         | Default        |
 | ------------------------- | ----------------------------------------------- | -------------- |
+| `EMERGE_DAEMON_BIND`    | IP address for the HTTP MCP daemon to bind (`0.0.0.0` = all interfaces, for LAN self-install) | `127.0.0.1` |
 | `EMERGE_RUNNER_URL`       | Single default runner                           | —              |
 | `EMERGE_RUNNER_MAP`       | JSON `target_profile → URL`                     | —              |
 | `EMERGE_RUNNER_URLS`      | Comma-separated URL pool                        | —              |
@@ -197,13 +210,11 @@ pythonw scripts/runner_watchdog.py --host 0.0.0.0 --port 8787
 
 > **Windows / GUI workloads** (AutoCAD, ZWCAD, COM objects): launch from an interactive desktop session (RDP/console), not a Windows service. COM objects are session-scoped.
 
-**One-command bootstrap** (deploy → start → health-check → persist route):
+**Operator self-install** (copy-paste on the runner machine — no SSH from the dev machine):
 
 ```bash
-python3 scripts/repl_admin.py runner-bootstrap \
-  --ssh-target "user@10.0.0.11" \
-  --target-profile "cad-win" \
-  --runner-url "http://10.0.0.11:8787"
+python3 scripts/repl_admin.py runner-install-url --target-profile "cad-win" --pretty
+# Or open Cockpit → Monitors → Add Runner and copy the curl / irm commands.
 ```
 
 ### 4. Hook and context flow
@@ -307,7 +318,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 | Operator monitor         | `scripts/operator_monitor.py` — daemon writes `pattern_alert` to `events-{profile}.jsonl`; local observer path writes `local_pattern_alert` to `events-local.jsonl`; `watch_emerge.py` streams these files to watcher agents (old `pattern-alerts-{profile}.json` removed). |
 | Agents-team mode         | `/emerge:monitor` — `TeamCreate` + per-runner watcher agents; stage→action protocol (explore=silent, canary=`runner_notify` choice+timeout, stable=silent exec) |
 | Unified event watcher    | `scripts/watch_emerge.py` — tails global/per-runner/local event streams; `watch_patterns.py` and `watch_pending.py` are shims delegating to it |
-| Ops / bootstrap / cockpit | `scripts/repl_admin.py` (CLI entry point) + `scripts/admin/cockpit.py` (`CockpitHTTPServer` class, in-process when daemon runs, standalone CLI fallback via `_StandaloneDaemonStub`); HTTP cockpit with SSE real-time status + `monitors_updated` events, `cockpit_shell.html` SPA frontend (Overview/Monitors/Audit/Session/State/Operator tabs); `scripts/watch_pending.py` — cockpit submit → CC Monitor stream |
+| Ops / cockpit | `scripts/repl_admin.py` (CLI entry point; `runner-install-url`, `runner-deploy`, `runner-status`) + `scripts/admin/cockpit.py` (`CockpitHTTPServer` class, in-process when daemon runs, standalone CLI fallback via `_StandaloneDaemonStub`); HTTP cockpit with SSE real-time status + `monitors_updated` events, `cockpit_shell.html` SPA frontend (Overview/Monitors with Add Runner / Audit/Session/State/Operator tabs); `scripts/watch_pending.py` — cockpit submit → CC Monitor stream |
 | Memory Hub sync agent    | `scripts/emerge_sync.py`, `scripts/hub_config.py` — bidirectional connector asset sync via orphan-branch git repo; `icc_hub` MCP tool in daemon |
 | Test connector (mock)    | `tests/connectors/mock/pipelines/`                                                                                                             |
 | Slash commands           | `commands/` (`init`, `cockpit`, `monitor`, `runner-status`, `import`, `export`, `hub`)                                                          |
@@ -369,7 +380,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 python -m pytest tests -q
 ```
 
-Current baseline: **635** tests passing.
+Current baseline: **642** tests passing.
 
 ### Runner SSE parser benchmark (optional)
 

@@ -15,8 +15,6 @@ if str(ROOT) not in sys.path:
 
 from scripts.emerge_daemon import EmergeDaemon
 from scripts import repl_admin
-from scripts.admin import runner as runner_admin
-from scripts.admin import runner as runner_admin_impl  # real impl module for monkeypatching
 from scripts.remote_runner import RunnerExecutor, RunnerHTTPHandler, ThreadingHTTPServer
 
 
@@ -320,172 +318,14 @@ def test_repl_admin_runner_config_set_and_status(tmp_path: Path):
     assert status["map"]["mycader-1.zwcad"] == "http://127.0.0.1:8787"
 
 
-def test_runner_bootstrap_requires_target_profile():
-    with pytest.raises(ValueError):
-        repl_admin.cmd_runner_bootstrap(
-            ssh_target="user@host",
-            target_profile="",
-            remote_plugin_root="~/.emerge/plugin",
-            runner_host="0.0.0.0",
-            runner_port=8787,
-            runner_url="http://host:8787",
-            python_bin="python3",
-            deploy=False,
-        )
+def test_runner_install_url_cli_json(monkeypatch):
+    from scripts.admin.runner import cmd_runner_install_url
 
-
-def test_remote_root_expr_expands_home():
-    assert repl_admin._remote_root_expr("~") == "$HOME"
-    assert repl_admin._remote_root_expr("~/plugin") == "$HOME/plugin"
-
-
-def test_runner_bootstrap_shell_commands_quote_remote_root(monkeypatch):
-    """SSH shell strings must shlex-quote remote_root to prevent injection."""
-    import shlex
-    captured: list[list[str]] = []
-
-    def fake_run_checked(command: list[str], *, timeout_s: int = 90) -> str:
-        captured.append(command)
-        return ""
-
-    monkeypatch.setattr(repl_admin, "_run_checked", fake_run_checked)
-    monkeypatch.setattr(
-        repl_admin,
-        "_probe_runner_health",
-        lambda **kwargs: ({"ok": True, "status": "ready"}, ""),
-    )
-    monkeypatch.setattr(repl_admin, "cmd_runner_config_set", lambda **kwargs: {})
-
-    evil_root = "/tmp/test && echo INJECTED"
-    try:
-        repl_admin.cmd_runner_bootstrap(
-            ssh_target="user@host",
-            target_profile="test",
-            remote_plugin_root=evil_root,
-            runner_host="127.0.0.1",
-            runner_port=8787,
-            runner_url="http://host:8787",
-            python_bin="python3",
-            deploy=False,
-        )
-    except Exception:
-        pass  # health or other failures are OK; we only care about command shape
-
-    # All SSH shell strings containing remote_root must have it quoted
-    for cmd in captured:
-        if cmd and cmd[0] == "ssh":
-            shell_str = cmd[-1]
-            if evil_root in shell_str or shlex.quote(evil_root) in shell_str:
-                # The raw unquoted evil string must NOT appear as a standalone token
-                assert "echo INJECTED" not in shell_str or shlex.quote(evil_root) in shell_str
-
-
-def test_runner_bootstrap_rejects_invalid_port():
-    with pytest.raises(ValueError):
-        repl_admin.cmd_runner_bootstrap(
-            ssh_target="user@host",
-            target_profile="mycader-1.zwcad",
-            remote_plugin_root="~/.emerge/plugin",
-            runner_host="0.0.0.0",
-            runner_port=0,
-            runner_url="http://host:8787",
-            python_bin="python3",
-            deploy=False,
-        )
-
-
-def test_runner_bootstrap_sets_route_and_reports_health(tmp_path: Path, monkeypatch):
-    cfg_path = tmp_path / "runner-map.json"
-    monkeypatch.setenv("EMERGE_RUNNER_CONFIG_PATH", str(cfg_path))
-
-    def fake_run_checked(command: list[str]) -> str:
-        if command and command[0] == "ssh" and "echo $!" in command[-1]:
-            return "43210"
-        return ""
-
-    monkeypatch.setattr(runner_admin_impl, "_run_checked", fake_run_checked)
-    calls = {"n": 0}
-
-    def fake_probe_runner_health(**kwargs):  # type: ignore[no-untyped-def]
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {}, "runner unreachable"
-        return {"ok": True, "service": "emerge-remote-runner", "status": "ready"}, ""
-
-    monkeypatch.setattr(runner_admin_impl, "_probe_runner_health", fake_probe_runner_health)
-
-    out = repl_admin.cmd_runner_bootstrap(
-        ssh_target="user@10.0.0.8",
-        target_profile="mycader-1.zwcad",
-        remote_plugin_root="~/.emerge/plugin",
-        runner_host="0.0.0.0",
-        runner_port=8787,
-        runner_url="http://10.0.0.8:8787",
-        python_bin="python3",
-        deploy=False,
-    )
+    monkeypatch.setattr("scripts.admin.runner._detect_lan_ip", lambda: "10.0.0.2")
+    out = cmd_runner_install_url(profile="p1", daemon_port=8789, runner_port=8787)
     assert out["ok"] is True
-    assert out["runner_pid"] == "43210"
-    assert "runner_health_ok" in out["actions"]
-    assert out["config"]["map"]["mycader-1.zwcad"] == "http://10.0.0.8:8787"
-    assert out["reused_existing_runner"] is False
-
-
-def test_runner_bootstrap_reuses_existing_healthy_runner(tmp_path: Path, monkeypatch):
-    cfg_path = tmp_path / "runner-map.json"
-    monkeypatch.setenv("EMERGE_RUNNER_CONFIG_PATH", str(cfg_path))
-
-    def fake_run_checked(command: list[str], *, timeout_s: int = 90) -> str:
-        if command and command[0] == "ssh" and "cat .claude-plugin/plugin.json" in command[-1]:
-            return json.dumps({"name": "emerge", "version": runner_admin_impl._local_plugin_version()})
-        return ""
-
-    monkeypatch.setattr(runner_admin_impl, "_run_checked", fake_run_checked)
-    monkeypatch.setattr(
-        runner_admin_impl,
-        "_probe_runner_health",
-        lambda **kwargs: ({"ok": True, "status": "ready"}, ""),
-    )
-
-    out = repl_admin.cmd_runner_bootstrap(
-        ssh_target="user@10.0.0.8",
-        target_profile="mycader-1.zwcad",
-        remote_plugin_root="~/.emerge/plugin",
-        runner_host="0.0.0.0",
-        runner_port=8787,
-        runner_url="http://10.0.0.8:8787",
-        python_bin="python3",
-        deploy=False,
-    )
-    assert out["ok"] is True
-    assert out["reused_existing_runner"] is True
-    assert "runner_already_healthy" in out["actions"]
-    assert out["version_match"] is True
-
-
-def test_runner_bootstrap_blocks_on_version_mismatch_with_running_runner(monkeypatch):
-    def fake_run_checked(command: list[str], *, timeout_s: int = 90) -> str:
-        if command and command[0] == "ssh" and "cat .claude-plugin/plugin.json" in command[-1]:
-            return json.dumps({"name": "emerge", "version": "0.0.1"})
-        return ""
-
-    monkeypatch.setattr(runner_admin_impl, "_run_checked", fake_run_checked)
-    monkeypatch.setattr(
-        runner_admin_impl,
-        "_probe_runner_health",
-        lambda **kwargs: ({"ok": True, "status": "ready"}, ""),
-    )
-    with pytest.raises(RuntimeError, match="version mismatches"):
-        repl_admin.cmd_runner_bootstrap(
-            ssh_target="user@10.0.0.8",
-            target_profile="mycader-1.zwcad",
-            remote_plugin_root="~/.emerge/plugin",
-            runner_host="0.0.0.0",
-            runner_port=8787,
-            runner_url="http://10.0.0.8:8787",
-            python_bin="python3",
-            deploy=False,
-        )
+    assert "p1" in out["bash"]
+    assert out["team_lead_url"] == "http://10.0.0.2:8789"
 
 
 # ---------------------------------------------------------------------------

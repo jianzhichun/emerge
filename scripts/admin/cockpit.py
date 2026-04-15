@@ -60,6 +60,7 @@ from scripts.admin.control_plane import (
     cmd_control_plane_session_reset,
 )
 from scripts.admin.pipeline import cmd_policy_status
+from scripts.admin.runner import cmd_runner_install_url
 
 
 def _make_cockpit_handler(cockpit: "CockpitHTTPServer"):
@@ -157,6 +158,32 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                 self._json(self._cockpit.get_monitor_data())
             else:
                 self._json(cmd_control_plane_monitors())
+        elif path == "/api/control-plane/runner-profiles":
+            monitor_data = self._cockpit.get_monitor_data() if self._cockpit is not None else cmd_control_plane_monitors()
+            known = [r["runner_profile"] for r in monitor_data.get("runners", []) if r.get("runner_profile")]
+            self._json({"profiles": known})
+        elif path == "/api/control-plane/runner-install-url":
+            qs_riu = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            profile = (qs_riu.get("profile", ["default"])[0] or "default").strip() or "default"
+            try:
+                runner_port = int((qs_riu.get("runner_port") or qs_riu.get("port") or ["8787"])[0])
+            except ValueError:
+                runner_port = 8787
+            daemon_port = 8789
+            if self._cockpit is not None:
+                hsrv = getattr(self._cockpit._daemon, "_http_server", None)
+                if hsrv is not None:
+                    daemon_port = int(hsrv.port)
+            try:
+                self._json(
+                    cmd_runner_install_url(
+                        profile=profile,
+                        runner_port=runner_port,
+                        daemon_port=daemon_port,
+                    )
+                )
+            except OSError as exc:
+                self._json({"ok": False, "error": str(exc)})
         elif path == "/api/control-plane/span-candidates":
             self._json(cmd_control_plane_span_candidates())
         elif path == "/api/control-plane/reflection-cache":

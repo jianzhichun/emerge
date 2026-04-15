@@ -1,21 +1,17 @@
-"""Runner administration — deploy, bootstrap, config, status.
+"""Runner administration — deploy, self-install, config, status.
 
-Functions here handle all SSH-based remote runner operations.  They are
-called by repl_admin.py (CLI) and by CockpitHTTPServer (HTTP API).
-
-Extracted from repl_admin.py to keep each module focused on a single concern.
+Called by repl_admin.py (CLI) and CockpitHTTPServer (HTTP API).
 """
 from __future__ import annotations
 
+import io
 import json
-import shlex
-import subprocess
-import time
+import tarfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-from scripts.admin.shared import _local_plugin_version  # noqa: E402
+from scripts.admin.shared import _detect_lan_ip  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -160,72 +156,6 @@ def cmd_runner_config_unset(*, runner_key: str, clear_default: bool = False) -> 
 
 
 # ---------------------------------------------------------------------------
-# SSH helpers
-# ---------------------------------------------------------------------------
-
-def _run_checked(command: list[str], *, timeout_s: int = 90) -> str:
-    proc = subprocess.run(
-        command,
-        capture_output=True,
-        timeout=timeout_s,
-    )
-    proc.stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
-    proc.stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
-    if proc.returncode != 0:
-        stderr = (proc.stderr or "").strip()
-        stdout = (proc.stdout or "").strip()
-        detail = stderr or stdout or f"exit={proc.returncode}"
-        raise RuntimeError(f"command failed: {' '.join(command)} :: {detail}")
-    return (proc.stdout or "").strip()
-
-
-def _remote_root_expr(raw_root: str) -> str:
-    text = raw_root.strip()
-    if text == "~":
-        return "$HOME"
-    if text.startswith("~/"):
-        suffix = text[2:]
-        return "$HOME/" + shlex.quote(suffix)
-    return shlex.quote(text)
-
-
-def _remote_root_expr_win(raw_root: str) -> str:
-    """Return a PowerShell-safe path expression for Windows SSH targets."""
-    text = raw_root.strip()
-    if text == "~":
-        return "$env:USERPROFILE\\.emerge\\plugin"
-    if text.startswith("~/"):
-        suffix = text[2:].replace("/", "\\")
-        return f"$env:USERPROFILE\\{suffix}"
-    # Absolute path — return as-is (backslash-safe for PowerShell)
-    return text.replace("/", "\\")
-
-
-def _read_remote_plugin_version(*, ssh_target: str, remote_root_expr: str) -> str:
-    read_cmd = f"cd {remote_root_expr} && cat .claude-plugin/plugin.json"
-    raw = _run_checked(["ssh", ssh_target, read_cmd], timeout_s=20)
-    data = json.loads(raw)
-    if not isinstance(data, dict):
-        return ""
-    return str(data.get("version", "") or "").strip()
-
-
-def _probe_runner_health(*, runner_url: str, attempts: int = 5, sleep_s: float = 1.0) -> tuple[dict, str]:
-    from scripts.runner_client import RunnerClient
-    health_error = ""
-    health: dict = {}
-    client = RunnerClient(base_url=runner_url.rstrip("/"), timeout_s=8.0)
-    for _ in range(max(1, attempts)):
-        try:
-            health = client.health()
-            return health, ""
-        except Exception as exc:
-            health_error = str(exc)
-            time.sleep(max(0.0, sleep_s))
-    return {}, health_error
-
-
-# ---------------------------------------------------------------------------
 # Runner deploy
 # ---------------------------------------------------------------------------
 
@@ -327,213 +257,301 @@ def cmd_runner_deploy(
 
 
 # ---------------------------------------------------------------------------
-# Runner bootstrap
+# Runner self-install (operator curl | bash / irm | iex)
 # ---------------------------------------------------------------------------
 
-def cmd_runner_bootstrap(
+_RUNNER_FILES: list[str] = [
+    "scripts/remote_runner.py",
+    "scripts/runner_watchdog.py",
+    "scripts/exec_session.py",
+    "scripts/runner_client.py",
+    "scripts/policy_config.py",
+    "requirements-runner.txt",
+]
+
+
+def _build_runner_tarball(plugin_root: Path) -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for rel in _RUNNER_FILES:
+            p = plugin_root / rel
+            if p.is_file():
+                tar.add(str(p), arcname=rel)
+    return buf.getvalue()
+
+
+def _generate_runner_install_sh(
     *,
-    ssh_target: str,
-    target_profile: str,
-    remote_plugin_root: str,
-    runner_host: str,
+    team_lead_url: str,
+    profile: str,
     runner_port: int,
-    runner_url: str,
-    python_bin: str,
-    deploy: bool,
-    windows: bool = False,
-    team_lead_url: str = "",
+) -> str:
+    p_json = json.dumps(profile)
+    tl_json = json.dumps(team_lead_url.rstrip("/"))
+    return rf"""#!/usr/bin/env bash
+set -euo pipefail
+
+TEAM_LEAD_URL={tl_json}
+PROFILE={p_json}
+RUNNER_PORT="{runner_port}"
+RUNNER_ROOT="$HOME/.emerge/runner"
+
+echo "=== Emerge Runner Installer ==="
+
+USE_CN_MIRROR=0
+if ! curl -s --max-time 3 https://pypi.org > /dev/null 2>&1; then
+  echo "[CN] Using pip mirror: pypi.tuna.tsinghua.edu.cn"
+  USE_CN_MIRROR=1
+fi
+
+PYTHON=""
+for py in python3.12 python3.11 python3.10 python3.9 python3 python; do
+  if command -v "$py" &>/dev/null; then
+    VER=$($py -c "import sys; print(int(sys.version_info >= (3,9)))" 2>/dev/null || echo 0)
+    if [ "$VER" = "1" ]; then PYTHON="$py"; break; fi
+  fi
+done
+
+if [ -z "$PYTHON" ]; then
+  echo "[Install] Python 3.9+ not found. Attempting to install..."
+  if command -v apt-get &>/dev/null; then
+    sudo apt-get install -y python3 python3-pip 2>/dev/null || true
+  elif command -v dnf &>/dev/null; then
+    sudo dnf install -y python3 2>/dev/null || true
+  elif command -v yum &>/dev/null; then
+    sudo yum install -y python3 2>/dev/null || true
+  elif [ "$(uname -s)" = "Darwin" ] && command -v brew &>/dev/null; then
+    brew install python3 2>/dev/null || true
+  fi
+  for py in python3.12 python3.11 python3.10 python3.9 python3 python; do
+    if command -v "$py" &>/dev/null; then
+      VER=$($py -c "import sys; print(int(sys.version_info >= (3,9)))" 2>/dev/null || echo 0)
+      if [ "$VER" = "1" ]; then PYTHON="$py"; break; fi
+    fi
+  done
+fi
+if [ -z "$PYTHON" ]; then
+  echo "[Install] Python 3.9+ install failed — install python3 manually and re-run." >&2
+  exit 1
+fi
+
+echo "[OK] $($PYTHON --version)"
+
+mkdir -p "$RUNNER_ROOT"
+curl -fsSL "$TEAM_LEAD_URL/runner-dist/runner.tar.gz" | tar -xzf - -C "$RUNNER_ROOT"
+
+PIP_ARGS=""
+if [ "$USE_CN_MIRROR" = "1" ]; then
+  PIP_ARGS="--index-url https://pypi.tuna.tsinghua.edu.cn/simple"
+fi
+if [ -f "$RUNNER_ROOT/requirements-runner.txt" ]; then
+  $PYTHON -m pip install $PIP_ARGS -r "$RUNNER_ROOT/requirements-runner.txt" 2>/dev/null || true
+fi
+
+mkdir -p "$HOME/.emerge"
+cat > "$HOME/.emerge/runner-config.json" <<JSON
+{{
+  "team_lead_url": {tl_json},
+  "runner_profile": {p_json},
+  "port": {runner_port},
+  "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)"
+}}
+JSON
+
+OS="$(uname -s)"
+if [ "$OS" = "Darwin" ]; then
+  PYTHON_BIN="$(command -v "$PYTHON")"
+  PLIST="$HOME/Library/LaunchAgents/com.emerge.runner.plist"
+  mkdir -p "$HOME/Library/LaunchAgents"
+  cat > "$PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.emerge.runner</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$PYTHON_BIN</string>
+    <string>$RUNNER_ROOT/scripts/runner_watchdog.py</string>
+    <string>--host</string><string>0.0.0.0</string>
+    <string>--port</string><string>$RUNNER_PORT</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>EMERGE_TEAM_LEAD_URL</key><string>$TEAM_LEAD_URL</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>WorkingDirectory</key><string>$RUNNER_ROOT</string>
+</dict></plist>
+PLIST
+  launchctl bootout gui/"$(id -u)" "$PLIST" 2>/dev/null || true
+  launchctl bootstrap gui/"$(id -u)" "$PLIST"
+  echo "[OK] macOS LaunchAgent registered"
+else
+  PYTHON_BIN="$(command -v "$PYTHON")"
+  SERVICE_DIR="$HOME/.config/systemd/user"
+  mkdir -p "$SERVICE_DIR"
+  cat > "$SERVICE_DIR/emerge-runner.service" <<SERVICE
+[Unit]
+Description=Emerge Runner
+After=network.target
+
+[Service]
+ExecStart="$PYTHON_BIN" "$RUNNER_ROOT/scripts/runner_watchdog.py" --host 0.0.0.0 --port $RUNNER_PORT
+WorkingDirectory=$RUNNER_ROOT
+Restart=always
+Environment="EMERGE_TEAM_LEAD_URL=$TEAM_LEAD_URL"
+
+[Install]
+WantedBy=default.target
+SERVICE
+  systemctl --user daemon-reload 2>/dev/null || true
+  systemctl --user enable --now emerge-runner 2>/dev/null || true
+  echo "[OK] systemd user service configured (if available)"
+fi
+
+sleep 2
+if curl -s --max-time 5 "http://localhost:$RUNNER_PORT/health" 2>/dev/null | grep -q 'true'; then
+  echo "[OK] Runner healthy at http://localhost:$RUNNER_PORT"
+else
+  echo "[Warn] Check: curl http://localhost:$RUNNER_PORT/health"
+fi
+
+echo "=== Done. Profile $PROFILE → $TEAM_LEAD_URL ==="
+"""
+
+
+def _generate_runner_install_ps1(
+    *,
+    team_lead_url: str,
+    profile: str,
+    runner_port: int,
+) -> str:
+    # Use PS1 single-quoted literals: safe for URLs (no interpolation, '' escapes literal ')
+    ps1_tl = "'" + team_lead_url.rstrip("/").replace("'", "''") + "'"
+    prof_esc = json.dumps(profile)  # JSON string doubles as PS1 double-quoted literal (URLs have no $)
+    return f"""$ErrorActionPreference = "Stop"
+
+$TEAM_LEAD_URL = {ps1_tl}
+$RUNNER_NAME = {prof_esc}
+$RUNNER_PORT = {runner_port}
+$RUNNER_ROOT = "$env:USERPROFILE\\.emerge\\runner"
+
+Write-Host "=== Emerge Runner Installer ===" -ForegroundColor Cyan
+
+$USE_CN_MIRROR = $false
+try {{
+    $null = Invoke-WebRequest -Uri "https://pypi.org" -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
+}} catch {{
+    Write-Host "[CN] Using pip mirror: pypi.tuna.tsinghua.edu.cn"
+    $USE_CN_MIRROR = $true
+}}
+
+$PYTHON = $null
+foreach ($py in @("python", "python3")) {{
+    try {{
+        $ver = & $py -c "import sys; print(int(sys.version_info >= (3,9)))" 2>$null
+        if ($ver.Trim() -eq "1") {{ $PYTHON = $py; break }}
+    }} catch {{}}
+}}
+
+if (-not $PYTHON) {{
+    Write-Host "[Install] Python 3.9+ not found. Attempting install via winget..." -ForegroundColor Yellow
+    try {{
+        winget install --id Python.Python.3.11 --silent --accept-package-agreements --accept-source-agreements 2>$null | Out-Null
+        $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")
+        foreach ($py in @("python", "python3")) {{
+            try {{
+                $ver = & $py -c "import sys; print(int(sys.version_info >= (3,9)))" 2>$null
+                if ($ver.Trim() -eq "1") {{ $PYTHON = $py; break }}
+            }} catch {{}}
+        }}
+    }} catch {{}}
+}}
+if (-not $PYTHON) {{
+    Write-Host "[Install] Python 3.9+ required. Install from https://www.python.org and re-run." -ForegroundColor Red
+    exit 1
+}}
+
+Write-Host "[OK] $(& $PYTHON --version)"
+
+New-Item -Force -ItemType Directory -Path $RUNNER_ROOT | Out-Null
+$tarPath = "$env:TEMP\\emerge-runner.tar.gz"
+Invoke-WebRequest -Uri "$TEAM_LEAD_URL/runner-dist/runner.tar.gz" -OutFile $tarPath
+tar -xzf $tarPath -C $RUNNER_ROOT
+
+$pipArgs = @()
+if ($USE_CN_MIRROR) {{ $pipArgs = @("--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple") }}
+$req = Join-Path $RUNNER_ROOT "requirements-runner.txt"
+if (Test-Path $req) {{ & $PYTHON -m pip install @pipArgs -r $req 2>$null | Out-Null }}
+
+New-Item -Force -ItemType Directory -Path "$env:USERPROFILE\\.emerge" | Out-Null
+$cfg = @{{
+    team_lead_url = $TEAM_LEAD_URL
+    runner_profile = $RUNNER_NAME
+    port = $RUNNER_PORT
+    installed_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+}} | ConvertTo-Json -Depth 3
+$cfg | Out-File -FilePath "$env:USERPROFILE\\.emerge\\runner-config.json" -Encoding utf8
+
+$pythonPath = (Get-Command $PYTHON -ErrorAction SilentlyContinue).Source
+if (-not $pythonPath) {{ $pythonPath = $PYTHON }}
+$vbsPath = "$env:USERPROFILE\\.emerge\\start_emerge_runner.vbs"
+$vbs = @"
+Set sh = CreateObject("WScript.Shell")
+sh.CurrentDirectory = "$RUNNER_ROOT"
+sh.Run Chr(34) & "$pythonPath" & Chr(34) & " " & Chr(34) & "$RUNNER_ROOT\\scripts\\runner_watchdog.py" & Chr(34) & " --host 0.0.0.0 --port $RUNNER_PORT", 0, False
+"@
+$vbs | Out-File -FilePath $vbsPath -Encoding ascii
+
+$regKey = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+Set-ItemProperty -Path $regKey -Name "EmergeRunner" -Value "wscript.exe `"$vbsPath`""
+Write-Host "[OK] Registry autostart: EmergeRunner"
+
+try {{
+    winget --version | Out-Null
+}} catch {{}}
+
+Start-Process "wscript.exe" -ArgumentList "`"$vbsPath`""
+
+Start-Sleep 4
+try {{
+    $h = Invoke-RestMethod -Uri "http://localhost:$RUNNER_PORT/health" -TimeoutSec 5
+    if ($h.ok) {{ Write-Host "[OK] Runner healthy" -ForegroundColor Green }}
+}} catch {{
+    Write-Host "[Warn] Runner may still be starting."
+}}
+
+Write-Host "=== Done. Profile $RUNNER_NAME -> $TEAM_LEAD_URL ===" -ForegroundColor Cyan
+"""
+
+
+def cmd_runner_install_url(
+    *,
+    profile: str = "default",
+    runner_port: int = 8787,
+    daemon_port: int = 8789,
 ) -> dict:
-    ssh_target = ssh_target.strip()
-    target_profile = target_profile.strip()
-    remote_plugin_root = remote_plugin_root.strip()
-    python_bin = python_bin.strip() or ("python" if windows else "python3")
-    if not ssh_target:
-        raise ValueError("--ssh-target is required")
-    if not target_profile:
-        raise ValueError("--target-profile is required")
-    if not remote_plugin_root:
-        raise ValueError("--remote-plugin-root is required")
+    """Return copy-paste install commands for Linux/macOS and Windows."""
+    profile = (profile or "default").strip() or "default"
+    if runner_port <= 0 or runner_port > 65535:
+        raise ValueError("runner_port must be in 1..65535")
+    if daemon_port <= 0 or daemon_port > 65535:
+        raise ValueError("daemon_port must be in 1..65535")
+    lan_ip = _detect_lan_ip()
+    team_lead_url = f"http://{lan_ip}:{daemon_port}".rstrip("/")
+    from urllib.parse import quote
 
-    if not runner_url.strip():
-        host_part = ssh_target.split("@")[-1]
-        host_part = host_part.split(":")[0]
-        runner_url = f"http://{host_part}:{int(runner_port)}"
-    if int(runner_port) <= 0 or int(runner_port) > 65535:
-        raise ValueError("--runner-port must be in 1..65535")
-
-    actions: list[str] = []
-    local_version = _local_plugin_version()
-    remote_version = ""
-    runner_reused = False
-    if windows:
-        remote_root = _remote_root_expr_win(remote_plugin_root)
-        mkdir_cmd = f'powershell -Command "New-Item -Force -ItemType Directory -Path \\"{remote_root}\\" | Out-Null"'
-    else:
-        remote_root = _remote_root_expr(remote_plugin_root)
-        mkdir_cmd = f"mkdir -p {remote_root}"
-    _run_checked(["ssh", ssh_target, mkdir_cmd])
-    actions.append("remote_root_ready")
-
-    try:
-        remote_version = _read_remote_plugin_version(
-            ssh_target=ssh_target,
-            remote_root_expr=remote_root,
-        )
-        actions.append("remote_version_detected")
-    except Exception:
-        remote_version = ""
-
-    pre_health, pre_health_error = _probe_runner_health(
-        runner_url=runner_url,
-        attempts=2,
-        sleep_s=0.5,
-    )
-    if not pre_health_error and pre_health:
-        if remote_version and local_version and remote_version != local_version:
-            raise RuntimeError(
-                "runner already reachable but remote plugin version mismatches local version; "
-                "stop remote runner first or change runner-url/port before bootstrap"
-            )
-        cfg = cmd_runner_config_set(
-            runner_key=target_profile,
-            runner_url=runner_url,
-            as_default=False,
-        )
-        actions.append("runner_already_healthy")
-        actions.append("runner_route_persisted")
-        runner_reused = True
-        return {
-            "ok": True,
-            "ssh_target": ssh_target,
-            "target_profile": target_profile,
-            "remote_plugin_root": remote_plugin_root,
-            "runner_url": runner_url,
-            "runner_pid": "",
-            "actions": actions,
-            "health": pre_health,
-            "config": cfg,
-            "reused_existing_runner": runner_reused,
-            "local_plugin_version": local_version,
-            "remote_plugin_version": remote_version,
-            "version_match": (not remote_version) or (remote_version == local_version),
-        }
-
-    if deploy:
-        tar_args = [
-            "tar",
-            "-czf",
-            "-",
-            "--exclude=.git",
-            "--exclude=.worktrees",
-            "--exclude=.plugin-data",
-            "--exclude=.pytest_cache",
-            "--exclude=__pycache__",
-            "--exclude=.venv",
-            ".",
-        ]
-        if windows:
-            # Windows tar (bsdtar) supports piped stdin; mkdir via PowerShell first
-            untar_cmd = (
-                f'powershell -Command "New-Item -Force -ItemType Directory -Path \\"{remote_root}\\" | Out-Null; '
-                f'$input | tar -xzf - -C \\"{remote_root}\\""'
-            )
-        else:
-            untar_cmd = f"mkdir -p {remote_root} && tar -xzf - -C {remote_root}"
-        proc_tar = subprocess.Popen(
-            tar_args,
-            cwd=str(ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=False,
-        )
-        proc_ssh = subprocess.Popen(
-            ["ssh", ssh_target, untar_cmd],
-            stdin=proc_tar.stdout,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=False,
-        )
-        assert proc_tar.stdout is not None
-        proc_tar.stdout.close()
-        ssh_out_b, ssh_err_b = proc_ssh.communicate()
-        ssh_out = ssh_out_b.decode("utf-8", errors="replace") if ssh_out_b else ""
-        ssh_err = ssh_err_b.decode("utf-8", errors="replace") if ssh_err_b else ""
-        tar_err = proc_tar.stderr.read().decode("utf-8", errors="replace") if proc_tar.stderr else ""
-        tar_rc = proc_tar.wait()
-        if tar_rc != 0:
-            raise RuntimeError(f"local tar failed: {tar_err.strip() or f'exit={tar_rc}'}")
-        if proc_ssh.returncode != 0:
-            detail = (ssh_err or ssh_out or "").strip() or f"exit={proc_ssh.returncode}"
-            raise RuntimeError(f"remote deploy failed: {detail}")
-        actions.append("remote_assets_deployed")
-        remote_version = local_version
-
-    if windows:
-        py_check = f'powershell -Command "cd \\"{remote_root}\\"; {python_bin} -V"'
-        _run_checked(["ssh", ssh_target, py_check])
-        actions.append("remote_python_verified")
-        log_path = f"{remote_root}\\remote-runner.log"
-        start_cmd = (
-            f'powershell -Command "'
-            f'cd \\"{remote_root}\\"; '
-            f'Start-Process -FilePath {python_bin} '
-            f'-ArgumentList \\"scripts/remote_runner.py --host {runner_host} --port {int(runner_port)}\\" '
-            f'-RedirectStandardOutput \\"{log_path}\\" '
-            f'-WindowStyle Hidden; '
-            f'Write-Host started"'
-        )
-    else:
-        py_check = f"cd {shlex.quote(remote_root)} && {shlex.quote(python_bin)} -V"
-        _run_checked(["ssh", ssh_target, py_check])
-        actions.append("remote_python_verified")
-        start_cmd = (
-            f"mkdir -p $HOME/.emerge && cd {shlex.quote(remote_root)} && "
-            f"nohup {shlex.quote(python_bin)} scripts/remote_runner.py "
-            f"--host {shlex.quote(runner_host)} --port {int(runner_port)} "
-            "> ~/.emerge/remote-runner.log 2>&1 < /dev/null & echo $!"
-        )
-    pid_text = _run_checked(["ssh", ssh_target, start_cmd])
-    pid = pid_text.splitlines()[-1].strip() if pid_text else ""
-    actions.append("remote_runner_started")
-
-    health, health_error = _probe_runner_health(
-        runner_url=runner_url,
-        attempts=5,
-        sleep_s=1.0,
-    )
-    if health_error:
-        raise RuntimeError(f"runner health check failed ({runner_url}): {health_error}")
-    actions.append("runner_health_ok")
-
-    cfg = cmd_runner_config_set(
-        runner_key=target_profile,
-        runner_url=runner_url,
-        as_default=False,
-    )
-    actions.append("runner_route_persisted")
-
-    if team_lead_url:
-        import json as _json
-        runner_cfg = _json.dumps({
-            "team_lead_url": team_lead_url.rstrip("/"),
-            "runner_profile": target_profile,
-        }, indent=2)
-        write_cfg_cmd = f"mkdir -p ~/.emerge && printf '%s' {shlex.quote(runner_cfg)} > ~/.emerge/runner-config.json"
-        _run_checked(["ssh", ssh_target, write_cfg_cmd])
-        actions.append("runner_config_written")
-
+    q = quote(profile, safe="")
+    qp = quote(str(runner_port), safe="")
+    base = f"{team_lead_url}/runner-install"
+    bash_cmd = f'curl -fsSL "{base}.sh?profile={q}&port={qp}" | bash'
+    ps_cmd = f'irm "{base}.ps1?profile={q}&port={qp}" | iex'
     return {
         "ok": True,
-        "ssh_target": ssh_target,
-        "target_profile": target_profile,
-        "remote_plugin_root": remote_plugin_root,
-        "runner_url": runner_url,
-        "runner_pid": pid,
-        "actions": actions,
-        "health": health,
-        "config": cfg,
-        "reused_existing_runner": runner_reused,
-        "local_plugin_version": local_version,
-        "remote_plugin_version": remote_version,
-        "version_match": (not remote_version) or (remote_version == local_version),
+        "profile": profile,
+        "runner_port": runner_port,
+        "daemon_port": daemon_port,
+        "team_lead_url": team_lead_url,
+        "bash": bash_cmd,
+        "powershell": ps_cmd,
     }
+

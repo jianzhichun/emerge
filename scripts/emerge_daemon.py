@@ -1006,7 +1006,7 @@ class EmergeDaemon:
         return self._elicit_results.pop(elicit_id, None)
 
 
-def run_http(port: int = 8789) -> None:
+def run_http(port: int = 8789, bind_host: str | None = None) -> None:
     """Start emerge daemon in HTTP MCP server mode with in-process cockpit."""
     import atexit
     import threading as _threading
@@ -1021,10 +1021,15 @@ def run_http(port: int = 8789) -> None:
     atexit.register(daemon.stop_event_router)
 
     pid_path = Path.home() / ".emerge" / "daemon.pid"
-    srv = DaemonHTTPServer(daemon=daemon, port=port, pid_path=pid_path)
+    srv = DaemonHTTPServer(
+        daemon=daemon, port=port, pid_path=pid_path, bind_host=bind_host
+    )
     daemon._http_server = srv
     srv.start()
-    print(f"Emerge daemon HTTP server running on port {srv.port}", flush=True)
+    print(
+        f"Emerge daemon HTTP server running on {srv.bind_host}:{srv.port}",
+        flush=True,
+    )
 
     # Start cockpit in-process — no subprocess, shares daemon memory
     try:
@@ -1049,6 +1054,13 @@ if __name__ == "__main__":
     _p = _ap.ArgumentParser()
     _p.add_argument("--http", action="store_true", help="Run as HTTP MCP server")
     _p.add_argument("--port", type=int, default=8789)
+    _p.add_argument(
+        "--bind",
+        type=str,
+        default=None,
+        metavar="ADDR",
+        help="Bind address for HTTP MCP (overrides EMERGE_DAEMON_BIND; default 127.0.0.1)",
+    )
     _p.add_argument("--ensure-running", action="store_true",
                     help="Launch daemon if not already running, then exit")
     _args = _p.parse_args()
@@ -1063,8 +1075,8 @@ if __name__ == "__main__":
             print("already_running")
         else:
             # Not running — start HTTP daemon (blocks until killed)
-            run_http(port=_args.port)
+            run_http(port=_args.port, bind_host=_args.bind)
     elif _args.http:
-        run_http(port=_args.port)
+        run_http(port=_args.port, bind_host=_args.bind)
     else:
-        run_http(port=_args.port)
+        run_http(port=_args.port, bind_host=_args.bind)

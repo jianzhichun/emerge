@@ -64,6 +64,7 @@ def test_pid_file_written(tmp_path):
     assert pid_path.exists()
     info = json.loads(pid_path.read_text())
     assert info["port"] == srv.port
+    assert info.get("host") == "127.0.0.1"
     srv.stop()
     # PID file removed on stop
     assert not pid_path.exists()
@@ -264,3 +265,33 @@ def test_broadcast_called_on_pattern_detection(tmp_path):
     assert any(b.get("monitors_updated") for b in broadcasts), \
         "broadcast(monitors_updated=True) must be called after pattern detection"
     srv.stop()
+
+
+def test_daemon_bind_all_interfaces_reachable_on_loopback(tmp_path):
+    """0.0.0.0 bind still accepts connections to 127.0.0.1."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.daemon_http import DaemonHTTPServer
+
+    class _StubDaemon:
+        def handle_jsonrpc(self, req):
+            if req.get("method") == "ping":
+                return {"jsonrpc": "2.0", "id": req.get("id"), "result": {}}
+            return {"jsonrpc": "2.0", "id": req.get("id"),
+                    "error": {"code": -32601, "message": "not implemented"}}
+
+    srv = DaemonHTTPServer(
+        daemon=_StubDaemon(), port=0, pid_path=tmp_path / "d.pid",
+        bind_host="0.0.0.0",
+    )
+    srv.start()
+    time.sleep(0.1)
+    resp = _post_mcp(srv.port, {"jsonrpc": "2.0", "id": 1, "method": "ping"})
+    assert resp["result"] == {}
+    srv.stop()
+
+
+def test_resolve_daemon_bind_rejects_invalid():
+    from scripts.daemon_http import resolve_daemon_bind
+    with pytest.raises(ValueError, match="valid IP"):
+        resolve_daemon_bind("not-an-ip")

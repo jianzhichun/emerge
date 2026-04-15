@@ -142,7 +142,7 @@ Written on the operator machine after successful install:
 ```json
 {
   "team_lead_url": "http://192.168.1.100:8789",
-  "profile": "mycader-1",
+  "runner_profile": "mycader-1",
   "port": 8787,
   "installed_at": "2026-04-15T10:00:00Z"
 }

@@ -12,11 +12,11 @@ Execution rules:
   - RED baseline (what is missing now)
   - GREEN minimum bootstrap
   - REFACTOR guardrails
-4. If remote execution is required, bootstrap remote runner first:
-  - run bootstrap command from local plugin root:
-    - `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" runner-bootstrap --ssh-target "<user@host>" --target-profile "<target_profile>" --runner-url "http://<target>:8787"`
-  - this command performs: remote deploy (default), python check, runner start, health probe, local runner-map persist
-  - behavior is idempotent: if runner is already healthy and version matches, bootstrap reuses existing runner
+4. If remote execution is required, set up the runner first (operator self-install — no SSH from CC):
+  - generate install commands from local plugin root:
+    - `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" runner-install-url --target-profile "<target_profile>" --pretty`
+  - send the printed `curl ... | bash` or `irm ... | iex` to the operator; they run it on the target machine (installs deps, writes `~/.emerge/runner-config.json`, starts runner)
+  - optionally use Cockpit → Monitors tab → Add Runner to copy the same URLs
   - run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" runner-status --pretty`
   - if unreachable, do not continue pipeline initialization blindly
 5. If required context is missing, ask only minimal clarifying questions.

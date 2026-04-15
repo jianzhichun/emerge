@@ -6,7 +6,7 @@ All business logic lives in the sub-packages:
   scripts/admin/control_plane.py — all cmd_control_plane_* functions
   scripts/admin/pipeline.py  — pipeline/connector operations
   scripts/admin/cockpit.py   — CockpitHTTPServer and HTTP handlers
-  scripts/admin/runner.py    — runner SSH deploy / bootstrap / config
+  scripts/admin/runner.py    — runner deploy, self-install URLs, config
 """
 from __future__ import annotations
 
@@ -96,18 +96,13 @@ from scripts.admin.cockpit import (  # noqa: E402
 from scripts.admin.runner import (  # noqa: E402
     cmd_runner_status,
     cmd_runner_deploy,
-    cmd_runner_bootstrap,
+    cmd_runner_install_url,
     cmd_runner_config_status,
     cmd_runner_config_set,
     cmd_runner_config_unset,
     render_runner_status_pretty,
     _load_runner_config,
     _save_runner_config,
-    _run_checked,
-    _remote_root_expr,
-    _remote_root_expr_win,
-    _read_remote_plugin_version,
-    _probe_runner_health,
 )
 
 
@@ -127,7 +122,7 @@ def main() -> None:
             "runner-config-status",
             "runner-config-set",
             "runner-config-unset",
-            "runner-bootstrap",
+            "runner-install-url",
             "runner-deploy",
             "pipeline-delete",
             "pipeline-set",
@@ -143,25 +138,13 @@ def main() -> None:
     parser.add_argument("--runner-url", default="", help="Runner URL")
     parser.add_argument("--as-default", action="store_true", help="Set default runner URL")
     parser.add_argument("--clear-default", action="store_true", help="Clear default runner URL")
-    parser.add_argument("--ssh-target", default="", help="SSH target for bootstrap (user@host)")
-    parser.add_argument("--target-profile", default="", help="Target profile key")
-    parser.add_argument("--remote-plugin-root", default="~/.emerge/plugin", help="Remote plugin root")
-    parser.add_argument("--runner-host", default="0.0.0.0", help="Remote runner bind host")
+    parser.add_argument("--target-profile", default="", help="Target profile key (runner map / install URL)")
     parser.add_argument("--runner-port", type=int, default=8787, help="Remote runner bind port")
-    parser.add_argument("--python-bin", default="python3", help="Remote Python executable")
     parser.add_argument(
-        "--team-lead-url", default="",
-        help="Team lead daemon URL (e.g. http://192.168.1.100:8789)",
-    )
-    parser.add_argument(
-        "--skip-deploy",
-        action="store_true",
-        help="Skip remote deploy and reuse existing remote plugin root",
-    )
-    parser.add_argument(
-        "--windows",
-        action="store_true",
-        help="Use Windows-compatible (PowerShell) commands for bootstrap (SSH target is Windows)",
+        "--daemon-port",
+        type=int,
+        default=8789,
+        help="Daemon HTTP port for runner-install-url (team-lead URL generation)",
     )
     parser.add_argument("--pipeline-key", default="", help="Pipeline key for pipeline-delete/pipeline-set (e.g. mock.read.layers)")
     parser.add_argument("--set", dest="set_fields", action="append", metavar="FIELD=VALUE",
@@ -193,19 +176,17 @@ def main() -> None:
             runner_key=str(args.runner_key),
             clear_default=bool(args.clear_default),
         )
-    elif args.command == "runner-bootstrap":
-        out = cmd_runner_bootstrap(
-            ssh_target=str(args.ssh_target),
-            target_profile=str(args.target_profile),
-            remote_plugin_root=str(args.remote_plugin_root),
-            runner_host=str(args.runner_host),
+    elif args.command == "runner-install-url":
+        out = cmd_runner_install_url(
+            profile=str(args.target_profile) or "default",
             runner_port=int(args.runner_port),
-            runner_url=str(args.runner_url),
-            python_bin=str(args.python_bin),
-            deploy=not bool(args.skip_deploy),
-            windows=bool(args.windows),
-            team_lead_url=str(args.team_lead_url),
+            daemon_port=int(args.daemon_port),
         )
+        if args.pretty and out.get("ok"):
+            print(f"Team lead (generated): {out.get('team_lead_url', '')}")
+            print(f"Linux/macOS:\n  {out.get('bash', '')}\n")
+            print(f"Windows PowerShell:\n  {out.get('powershell', '')}")
+            return
     elif args.command == "runner-deploy":
         out = cmd_runner_deploy(
             runner_url=str(args.runner_url),

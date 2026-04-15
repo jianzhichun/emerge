@@ -69,6 +69,12 @@ class RunnerExecutor:
             self._runner_profile = str(data.get("runner_profile", "")).strip()
         except (OSError, ValueError):
             pass
+        env_tl = os.environ.get("EMERGE_TEAM_LEAD_URL", "").strip().rstrip("/")
+        if env_tl:
+            self._team_lead_url = env_tl
+        env_rp = os.environ.get("EMERGE_RUNNER_PROFILE", "").strip()
+        if env_rp:
+            self._runner_profile = env_rp
         # Forward queue: one background worker avoids spawning one thread per event.
         self._forward_q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1024)
         self._forward_worker = threading.Thread(

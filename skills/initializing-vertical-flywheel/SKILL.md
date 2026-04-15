@@ -40,13 +40,13 @@ No bootstrap completion claim without RED and GREEN evidence.
   - created/updated assets
   - next verification actions
 
-## Remote Runner Bootstrap (When Needed)
+## Remote runner setup (when needed)
 If the user context indicates remote execution, initialize runner connectivity first.
 
 Minimum steps:
-1. Execute automated bootstrap from local plugin root:
-   - `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" runner-bootstrap --ssh-target "<user@host>" --target-profile "<target_profile>" --runner-url "http://<target>:8787"`
-2. `runner-bootstrap` performs remote deploy/start/check/persist automatically.
+1. Generate install URLs from local plugin root (or Cockpit Monitors → Add Runner):
+   - `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" runner-install-url --target-profile "<target_profile>" --pretty`
+2. Send the printed command to the operator; they run it on the target machine (self-install).
 3. Verify with one `icc_exec` smoke call before creating vertical assets.
 4. Verify admin health signal:
    - `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" runner-status --pretty`

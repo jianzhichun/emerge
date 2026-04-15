@@ -71,7 +71,7 @@ def test_init_command_has_valid_description_frontmatter():
     assert "## description:" not in init_md
     assert "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" in init_md
     assert "runner-status" in init_md
-    assert "runner-bootstrap" in init_md
+    assert "runner-install-url" in init_md
     assert "init_ok" in init_md and "degraded" in init_md and "blocked" in init_md
 
 
