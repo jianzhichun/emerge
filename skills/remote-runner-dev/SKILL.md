@@ -19,7 +19,7 @@ Dev machine                       Remote machine (any OS)
 emerge project dir    deploy ─►   <plugin_root>/scripts/
   scripts/           icc_exec      runner_watchdog.py  (daemon)
   connectors/          HTTP ─►       └─ remote_runner.py (port <N>)
-  scripts/repl_admin.py                   └─ executes icc_exec/read/write
+  scripts/repl_admin.py                   └─ executes icc_exec calls
                                           └─ has access to local tools,
                                              GUI, COM objects, hardware
 ```
@@ -190,7 +190,7 @@ POST /operator-event                                      # append one event to 
 GET  /operator-events?machine_id=&since_ms=&limit=        # read events since ts
 ```
 
-The runner accepts **only `icc_exec`** requests on `/run`. Pipeline operations (`icc_read`, `icc_write`) are handled by the daemon: it loads pipeline `.py` + `.yaml` locally, builds self-contained inline code, and sends it as `icc_exec`. Connector files never need to exist on the runner machine.
+The runner accepts **only `icc_exec`** requests on `/run`. Pipeline bridge execution is handled by the daemon (`icc_span_open` when stable): it loads pipeline `.py` + `.yaml` locally, builds self-contained inline code, and sends it as `icc_exec`. Connector files never need to exist on the runner machine.
 
 Request / response shape for `/run`:
 ```json

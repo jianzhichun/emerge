@@ -61,7 +61,7 @@ Minimum steps:
 | `GET /status` | Process info (pid, uptime, root) |
 | `GET /logs?n=N` | Last N log lines |
 
-Runner accepts **only `icc_exec`**. `icc_read`/`icc_write` pipeline execution is handled by the daemon (loads files locally, sends as inline `icc_exec`). Request shape: `{"tool_name": "icc_exec", "arguments": {"code": "...", "target_profile": "...", "no_replay": false}}`.
+Runner accepts **only `icc_exec`**. Pipeline bridge execution is handled by the daemon (loads files locally, sends as inline `icc_exec`). Request shape: `{"tool_name": "icc_exec", "arguments": {"code": "...", "target_profile": "...", "no_replay": false}}`.
 
 ## Connector Location Rule
 
@@ -136,7 +136,7 @@ Do not treat `PipelineEngine` unit tests alone as sufficient proof.
 
 For RED and GREEN phases, tests must exercise MCP-facing tool paths:
 
-- `icc_exec` (primary tool — `icc_read`/`icc_write` are deprecated and removed from the MCP schema)
+- `icc_exec` (primary exploration tool — pipeline bridge execution is via `icc_span_open` when stable)
 
 Minimum expectation:
 
