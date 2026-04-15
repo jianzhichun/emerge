@@ -78,7 +78,13 @@ def main() -> None:
             if notes_path.exists():
                 notes_text = notes_path.read_text(encoding="utf-8").strip()
                 if notes_text:
-                    parts.append(f"[Connector:{name} NOTES]\n{notes_text[:1200]}")
+                    if len(notes_text) > 1200:
+                        excerpt = notes_text[:1200]
+                        parts.append(
+                            f"[Connector:{name} NOTES (truncated — full: {notes_path})]\n{excerpt}"
+                        )
+                    else:
+                        parts.append(f"[Connector:{name} NOTES]\n{notes_text}")
     except Exception:
         pass
 

@@ -110,9 +110,11 @@ class SpanHandlers:
                     "intent_signature": intent_signature,
                     "existing_intents": _items,
                     "message": (
-                        f"New intent for {_connector}. "
-                        f"Existing: {', '.join(_items)}. "
-                        "Re-call with this intent to confirm, or use an existing one."
+                        f"Safety gate: '{intent_signature}' is a new intent for connector '{_connector}'. "
+                        f"Existing intents: {', '.join(_items)}. "
+                        "If this is intentional, re-call icc_span_open with the exact same "
+                        "intent_signature to confirm — the span will open normally. "
+                        "Or switch to an existing intent above."
                     ),
                 })
 

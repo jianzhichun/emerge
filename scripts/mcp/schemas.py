@@ -161,13 +161,13 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "code": {"type": "string", "description": "Python code to execute (inline_code mode)"},
-                    "mode": {"type": "string", "enum": ["inline_code", "script_ref"], "default": "inline_code"},
+                    "code": {"type": "string", "description": "Python code to execute. Required when mode='inline_code' (the default)."},
+                    "mode": {"type": "string", "enum": ["inline_code", "script_ref"], "default": "inline_code", "description": "Execution mode. 'inline_code' requires 'code'; 'script_ref' requires 'script_ref'."},
                     "target_profile": {"type": "string", "description": "Execution profile / remote runner key", "default": "default"},
                     "intent_signature": {"type": "string", "description": "Stable dot-notation identifier for this exec pattern (e.g. zwcad.read.state). Required for flywheel tracking. Use connector://notes to see existing intents before choosing."},
                     "description": {"type": "string", "description": "Human-readable description of what this intent does. Stored in registry and surfaced in connector://notes. Only needed the first time a new intent is introduced."},
                     "no_replay": {"type": "boolean", "description": "If true, exclude this call from WAL replay and crystallization. Use for side-effectful calls only.", "default": False},
-                    "script_ref": {"type": "string", "description": "Path to script file (script_ref mode)"},
+                    "script_ref": {"type": "string", "description": "Path to script file. Required when mode='script_ref'."},
                     "script_args": {"type": "object", "description": "Arguments injected as __args in script scope"},
                     "result_var": {"type": "string", "description": "Optional variable name to extract from exec globals as structured JSON in response (e.g. '__result')."},
                     "base_pipeline_id": {"type": "string", "description": "Pipeline id for flywheel bridge routing (e.g. mock.read.layers)"},

@@ -44,8 +44,8 @@ def main() -> None:
             "decision": "block",
             "reason": (
                 f"emerge: active span for '{sig}' is still open. "
-                "Call icc_span_close(outcome='aborted') before stopping, "
-                "or the flywheel WAL will have an incomplete record."
+                "Call icc_span_close(outcome='aborted') to close it (safe — no data lost, "
+                "marks the span incomplete in the WAL), then stop."
             ),
         }
     else:

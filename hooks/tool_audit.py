@@ -56,10 +56,11 @@ def _maybe_span_nudge(tool_name: str, state_path: Path) -> str:
         return ""
     short = _short_tool_name(tool_name)
     return (
-        f"[Span nudge] You just used `{short}` without an active span. "
-        "If this task will repeat, open a span at the start next time: "
-        'icc_span_open(intent_signature="connector.mode.name") '
-        "→ execute → icc_span_close(outcome=success|failure|aborted)."
+        f"[Span nudge] You used `{short}` without an active span. "
+        "Wrapping reusable tool sequences in a span turns them into zero-LLM pipelines. "
+        "Example: icc_span_open(intent_signature='lark.read.get-doc') "
+        f"→ {short}/other tools → icc_span_close(outcome='success'). "
+        "Format: <connector>.(read|write).<name>"
     )
 
 
