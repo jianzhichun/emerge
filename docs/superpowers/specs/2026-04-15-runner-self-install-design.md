@@ -161,7 +161,7 @@ python3 scripts/repl_admin.py runner-install-url --profile mycader-1
 # Windows:     irm  "http://192.168.1.100:8789/runner-install.ps1?profile=mycader-1" | iex
 ```
 
-Also exposed as `GET /api/control-plane/runner-install-url?profile=<p>` in cockpit API, so the cockpit can display it in the Monitors tab.
+Also exposed as `GET /api/control-plane/runner-install-url?profile=<p>` in cockpit API.
 
 ### 8. requirements-runner.txt (new file)
 
@@ -199,18 +199,49 @@ The install script runs `pip install -r requirements-runner.txt` with `--ignore-
 5. CC sees runner online in runner-status / cockpit Monitors tab.
 ```
 
+### 9. Cockpit "Add Runner" panel (cockpit_shell.html)
+
+The Monitors tab gains an "Add Runner" section. When no runners are online, it shows prominently; when runners exist, it collapses to a small "＋ Add another runner" link.
+
+Content (style matches existing cockpit dark theme):
+
+```
+┌─ Add Runner ──────────────────────────────────────────────┐
+│  Profile:  [mycader-1      ▼]  (dropdown of known profiles│
+│            + "new profile…" option)                        │
+│                                                            │
+│  Linux / macOS                                   [Copy]    │
+│  curl "http://192.168.1.x:8789/runner-install.sh?…" | bash│
+│                                                            │
+│  Windows PowerShell                              [Copy]    │
+│  irm  "http://192.168.1.x:8789/runner-install.ps1?…" | iex│
+│                                                            │
+│  Runner will appear here once it connects.                 │
+└────────────────────────────────────────────────────────────┘
+```
+
+- Profile dropdown populated from `GET /api/control-plane/runner-install-url?profile=<p>`
+- URLs refresh when profile changes (JS fetch)
+- Copy button uses `navigator.clipboard.writeText`
+- Panel polls `GET /api/control-plane/monitors` every 3s; when a new runner appears, shows a green "✓ mycader-1 connected" badge and stops polling
+
 ## What stays the same
 
 - `runner-deploy` — CC pushes updated scripts to runner via HTTP, unchanged
-- `runner-bootstrap` — SSH-based path for dev/power users, still works
 - `runner-status` — unchanged
 - `remote_runner.py` / `runner_watchdog.py` — unchanged (no new deps)
 
+## What gets removed
+
+- `cmd_runner_bootstrap` in `scripts/admin/runner.py` — deleted (SSH deploy path replaced by self-install)
+- `runner-bootstrap` subcommand in `scripts/repl_admin.py` — deleted
+- All `runner-bootstrap` references in skills and commands — replaced with self-install flow
+
 ## Skills and commands to update after implementation
 
-- `skills/remote-runner-dev/SKILL.md`: add "Operator Self-Install" section before Bootstrap; keep runner-bootstrap as "Developer/SSH path"
-- `skills/initializing-vertical-flywheel/SKILL.md`: replace runner-bootstrap step with self-install URL for operator onboarding
-- `commands/init.md`: show self-install URL path as primary, SSH as advanced
+- `skills/remote-runner-dev/SKILL.md`: replace Bootstrap section with self-install; document cockpit Add Runner panel; keep runner-deploy/runner-status unchanged
+- `skills/initializing-vertical-flywheel/SKILL.md`: replace runner-bootstrap step with cockpit Add Runner panel flow
+- `commands/init.md`: replace runner-bootstrap step with self-install URL / cockpit panel
 
 ## Files to create / modify
 
@@ -218,12 +249,13 @@ The install script runs `pip install -r requirements-runner.txt` with `--ignore-
 |---|---|
 | `scripts/daemon_http.py` | Add `/runner-install.sh`, `/runner-install.ps1`, `/runner-dist/runner.tar.gz` endpoints |
 | `scripts/admin/shared.py` | Add `_detect_lan_ip()` |
-| `scripts/admin/runner.py` | Add `cmd_runner_install_url()` |
+| `scripts/admin/runner.py` | Add `cmd_runner_install_url()`; delete `cmd_runner_bootstrap()` |
 | `scripts/admin/api.py` | Add `/api/control-plane/runner-install-url` endpoint |
-| `scripts/repl_admin.py` | Add `runner-install-url` subcommand |
+| `scripts/repl_admin.py` | Add `runner-install-url` subcommand; delete `runner-bootstrap` subcommand |
 | `scripts/runner_watchdog.py` | Read `~/.emerge/runner-config.json` for `EMERGE_TEAM_LEAD_URL` |
-| `requirements-runner.txt` | New: minimal runner runtime deps |
-| `skills/remote-runner-dev/SKILL.md` | Add self-install section |
-| `skills/initializing-vertical-flywheel/SKILL.md` | Update runner bootstrap step |
-| `commands/init.md` | Update operator onboarding path |
-| `tests/test_runner_self_install.py` | New: test endpoint generation, LAN IP detection, tarball contents |
+| `requirements-runner.txt` | New: optional pystray/Pillow deps |
+| `cockpit_shell.html` | Add "Add Runner" panel to Monitors tab |
+| `skills/remote-runner-dev/SKILL.md` | Replace Bootstrap with self-install; add cockpit panel docs |
+| `skills/initializing-vertical-flywheel/SKILL.md` | Update runner onboarding step |
+| `commands/init.md` | Replace runner-bootstrap step |
+| `tests/test_runner_self_install.py` | New: LAN IP detection, tarball contents, install script generation, cockpit API |
