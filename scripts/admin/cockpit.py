@@ -52,6 +52,7 @@ from scripts.admin.control_plane import (
     cmd_control_plane_span_candidates,
     cmd_control_plane_reflection_cache,
     cmd_control_plane_monitors,
+    cmd_control_plane_runner_events,
     cmd_control_plane_delta_reconcile,
     cmd_control_plane_risk_update,
     cmd_control_plane_risk_add,
@@ -225,13 +226,20 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                 self._json(self._cockpit.get_monitor_data())
             else:
                 self._json(cmd_control_plane_monitors())
+        elif path == "/api/control-plane/runner-events":
+            qs_re = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            profile = (qs_re.get("profile") or [""])[0]
+            try:
+                limit = min(int((qs_re.get("limit") or ["20"])[0]), 100)
+            except ValueError:
+                limit = 20
+            self._json(cmd_control_plane_runner_events(profile=profile, limit=limit))
         elif path == "/api/control-plane/runner-profiles":
             monitor_data = self._cockpit.get_monitor_data() if self._cockpit is not None else cmd_control_plane_monitors()
             known = [r["runner_profile"] for r in monitor_data.get("runners", []) if r.get("runner_profile")]
             self._json({"profiles": known})
         elif path == "/api/control-plane/runner-install-url":
             qs_riu = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            profile = (qs_riu.get("profile", ["default"])[0] or "default").strip() or "default"
             try:
                 runner_port = int((qs_riu.get("runner_port") or qs_riu.get("port") or ["8787"])[0])
             except ValueError:
@@ -244,7 +252,6 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             try:
                 self._json(
                     cmd_runner_install_url(
-                        profile=profile,
                         runner_port=runner_port,
                         daemon_port=daemon_port,
                     )
