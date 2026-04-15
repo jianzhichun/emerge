@@ -237,6 +237,22 @@ flowchart LR
   Agent --> ST
 ```
 
+### Context injection budget
+
+Hook injections are bounded and on-demand. Actual overhead per turn:
+
+| Trigger | Payload | Size |
+|---|---|---|
+| Every turn (UserPromptSubmit) | FLYWHEEL_TOKEN recovery token | ~213 chars (empty), scales with active deltas/risks |
+| Turn 1 only | Reflection summary (stable ≤ 8, canary ≤ 3, recent ≤ 5) | 0 if no intents, ~300–500 chars when active |
+| Every 5 turns, no active span | Span reminder | ~110 chars |
+| First encounter per connector (InstructionsLoaded) | Full NOTES.md content | ≤ 1200 chars, once per connector per session |
+| PreCompact / PostCompact | Reflection + FLYWHEEL_TOKEN | Same as above, triggered by context pressure |
+
+Delta/Risk context is budget-capped: `format_additional_context(budget_chars=N)` allocates at most 1/3 of the budget to risks, newest-first. Content beyond the budget is collapsed to a count with a pointer to `state://deltas`.
+
+The dominant context consumers are the conversation history and `CLAUDE.md` (user-authored). Hook injections are negligible by comparison.
+
 
 
 ## MCP surface
