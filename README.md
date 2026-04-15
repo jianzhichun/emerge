@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/version-v0.3.65-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-564%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-605%20passing-brightgreen?logo=pytest)
 
 **Emerge** solves a core problem: AI operators repeat the same work but do not learn from it, so every session re-reasons from scratch. It uses a **dual flywheel** to crystallize repeated work into deterministic pipelines: a **forward flywheel** (`icc_exec`/`icc_span_open` tracking → policy promotion explore→canary→stable → auto-crystallized `.py+.yaml` pipelines → zero-LLM execution), and a **reverse flywheel** (`OperatorMonitor` observes human operators → `PatternDetector` detects repetition → elicitation captures intent → AI takes over).
 
@@ -355,7 +355,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 python -m pytest tests -q
 ```
 
-Current baseline: **564** tests passing.
+Current baseline: **605** tests passing.
 
 Documentation release checklist: `docs/doc-consistency-checklist.md`
 
