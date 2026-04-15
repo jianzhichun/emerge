@@ -13,11 +13,7 @@ from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
 
 
 def main() -> None:
-    payload_text = sys.stdin.read().strip()
-    try:
-        payload = json.loads(payload_text) if payload_text else {}
-    except Exception:
-        payload = {}
+    sys.stdin.read()  # consume stdin (unused by SessionEnd)
 
     pin_plugin_data_path_if_present()
     state_root = Path(default_hook_state_root())

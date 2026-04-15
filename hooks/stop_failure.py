@@ -48,14 +48,22 @@ def main() -> None:
         tracker.state.pop("active_span_id", None)
         tracker.state.pop("active_span_intent", None)
         save_tracker(state_path, tracker)
+        cleared = True
     except Exception:
-        pass
+        cleared = False
 
-    msg = (
-        f"StopFailure ({error_type}): active span {active_span_id} "
-        f"({active_span_intent}) cleared. "
-        "SessionStart will clean up span-candidates on next session."
-    )
+    if cleared:
+        msg = (
+            f"StopFailure ({error_type}): active span {active_span_id} "
+            f"({active_span_intent}) cleared. "
+            "SessionStart will clean up span-candidates on next session."
+        )
+    else:
+        msg = (
+            f"StopFailure ({error_type}): active span {active_span_id} "
+            f"({active_span_intent}) found but save failed — "
+            "SessionStart will clean up on next session."
+        )
     print(json.dumps({"systemMessage": msg}))
 
 

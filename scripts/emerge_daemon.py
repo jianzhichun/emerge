@@ -188,7 +188,17 @@ class EmergeDaemon:
         return self._runner_router_cache
 
     def _span_run_pipeline(self, mode: str, arguments: dict[str, Any]) -> tuple[dict[str, Any], str]:
-        """Resolve runner/local and execute pipeline; return (result, exec_path)."""
+        """Execute a pipeline for SpanHandlers and return (result_dict, execution_path).
+
+        Exists separately from _run_connector_pipeline because the two have different
+        calling contracts:
+        - _span_run_pipeline: used by SpanHandlers; returns (result, path) tuple;
+          does NOT record pipeline events (caller records them).
+        - _run_connector_pipeline: used by icc_exec; records events internally;
+          returns a full MCP response dict, not a bare result.
+        Do NOT consolidate — different return types and recording semantics are
+        load-bearing for the flywheel bridge and span promotion paths.
+        """
         _rr = self._get_runner_router()
         _client = _rr.find_client(arguments) if _rr else None
         if _client is not None:

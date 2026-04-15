@@ -33,7 +33,7 @@ def _now_ms() -> int:
 
 
 def _goal_control_root() -> Path:
-    return Path(os.environ.get("CLAUDE_PLUGIN_DATA", str(default_hook_state_root())))
+    return default_hook_state_root()
 
 
 def _goal_snapshot_path(root: Path) -> Path:

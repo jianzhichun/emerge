@@ -963,7 +963,7 @@ def test_increment_human_fix_increments_unified_key(tmp_path):
         (session_dir / "candidates.json").write_text(json.dumps(candidates))
 
         daemon = EmergeDaemon(root=ROOT)
-        daemon._increment_human_fix("zwcad.read.state")
+        daemon._flywheel.increment_human_fix("zwcad.read.state")
 
         updated = json.loads((session_dir / "candidates.json").read_text())["candidates"]
         assert updated["zwcad.read.state"]["human_fixes"] == 1
@@ -1218,9 +1218,8 @@ def test_has_synthesizable_wal_entry_checks_profile_wal(tmp_path):
             "no_replay": False,
         })
         # _has_synthesizable_wal_entry with correct profile must find it
-        assert daemon._has_synthesizable_wal_entry("test.read.profiled", "gpu-worker") is True
-        # Default profile WAL does NOT have it
-        assert daemon._has_synthesizable_wal_entry("test.read.profiled", "default") is False
+        assert daemon._flywheel.has_synthesizable_wal_entry("test.read.profiled", "gpu-worker") is True
+        assert daemon._flywheel.has_synthesizable_wal_entry("test.read.profiled", "default") is False
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
@@ -1993,7 +1992,7 @@ def test_crystallize_scans_all_session_dirs(tmp_path: Path):
 
 
 def test_has_synthesizable_wal_entry_scans_all_sessions(tmp_path: Path):
-    """_has_synthesizable_wal_entry must find WAL entries from previous daemon sessions."""
+    """has_synthesizable_wal_entry must find WAL entries from previous daemon sessions."""
     daemon = EmergeDaemon(root=ROOT)
     daemon._state_root = tmp_path
 
@@ -2018,8 +2017,8 @@ def test_has_synthesizable_wal_entry_scans_all_sessions(tmp_path: Path):
     # Current session has NO WAL
     daemon._base_session_id = "current-session-999"
 
-    found = daemon._has_synthesizable_wal_entry("myconn.read.state")
-    assert found, "_has_synthesizable_wal_entry must scan all session dirs, not just current"
+    found = daemon._flywheel.has_synthesizable_wal_entry("myconn.read.state")
+    assert found, "has_synthesizable_wal_entry must scan all session dirs, not just current"
 
 
 def test_connector_import_rejects_path_traversal(tmp_path: Path):
@@ -2339,8 +2338,7 @@ def test_span_approve_errors_when_pending_missing(tmp_path, monkeypatch):
     # No _pending file exists
     result = daemon.call_tool("icc_span_approve", {"intent_signature": "lark.write.create-doc"})
     assert result.get("isError") is True
-    import json
-    assert "_pending" in json.loads(result["content"][0]["text"]).get("message", "")
+    assert "_pending" in result["content"][0]["text"]
 
 
 # ── deprecation + connector://spans ───────────────────────────────────────────
@@ -2380,7 +2378,7 @@ def test_frozen_pipeline_skips_auto_promotion(tmp_path, monkeypatch):
     daemon = EmergeDaemon(root=ROOT)
     key = "mock.read.frozen-test"
     for _ in range(19):
-        daemon._record_exec_event(
+        daemon._flywheel.record_exec_event(
             arguments={
                 "intent_signature": key,
                 "script_ref": "s",
@@ -2399,7 +2397,7 @@ def test_frozen_pipeline_skips_auto_promotion(tmp_path, monkeypatch):
     reg_path.write_text(json.dumps(data))
     old_status = data["pipelines"][key]["status"]
     assert old_status == "explore"
-    daemon._record_exec_event(
+    daemon._flywheel.record_exec_event(
         arguments={"intent_signature": key, "script_ref": "s", "description": ""},
         result={"content": [{"type": "text", "text": "{}"}]},
         target_profile="default",
@@ -2413,7 +2411,7 @@ def test_frozen_pipeline_skips_auto_promotion(tmp_path, monkeypatch):
 
 
 def test_concurrent_exec_events_do_not_lose_attempts(tmp_path, monkeypatch):
-    """Two threads calling _record_exec_event concurrently must not lose counts."""
+    """Two threads calling record_exec_event concurrently must not lose counts."""
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     daemon = EmergeDaemon()
     base_args = {
@@ -2427,7 +2425,7 @@ def test_concurrent_exec_events_do_not_lose_attempts(tmp_path, monkeypatch):
 
     def record():
         try:
-            daemon._record_exec_event(
+            daemon._flywheel.record_exec_event(
                 arguments=base_args,
                 result=fake_result,
                 target_profile="default",
@@ -2477,7 +2475,7 @@ def test_bridge_failure_records_consecutive_failure(tmp_path, monkeypatch):
         }
     })
 
-    # Also seed candidates.json so _record_pipeline_event can update it
+    # Also seed candidates.json so record_pipeline_event can update it
     session_dir = tmp_path / daemon._base_session_id
     session_dir.mkdir(parents=True, exist_ok=True)
     atomic_write_json(session_dir / "candidates.json", {
@@ -2641,7 +2639,7 @@ def test_stable_transition_writes_to_sync_queue(tmp_path, monkeypatch):
         "recent_outcomes": [1] * STABLE_MIN_ATTEMPTS,
         "last_ts_ms": int(time.time() * 1000),
     }
-    daemon._update_pipeline_registry(candidate_key="gmail.read.fetch", entry=entry)
+    daemon._flywheel.update_pipeline_registry(candidate_key="gmail.read.fetch", entry=entry)
 
     events = consume_sync_events(lambda e: e.get("event") == "stable")
     assert any(e.get("connector") == "gmail" for e in events), \
@@ -3442,10 +3440,7 @@ def test_registry_write_emits_list_changed_notification(tmp_path, monkeypatch):
     pushed = []
     daemon._write_mcp_push = lambda p: pushed.append(p)
 
-    # Trigger a registry write via _update_pipeline_registry
-    # We need to call it with valid args — look at the signature: candidate_key, entry
-    # Seed a candidate first to trigger a registry update
-    daemon._update_pipeline_registry(
+    daemon._flywheel.update_pipeline_registry(
         candidate_key="gmail.read.fetch",
         entry={
             "attempts": 1,

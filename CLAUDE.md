@@ -43,7 +43,11 @@ python3 scripts/emerge_sync.py sync gmail
 
 **Single execution path for pipelines**: `PipelineEngine` is called in-process by the span bridge (`icc_span_open` when stable). When `RunnerRouter` resolves a client, the daemon builds a self-contained inline `exec()` payload and POSTs to the remote runner. The runner never receives pipeline files — switching machines is a URL change only.
 
-**Auto-crystallize**: `icc_exec` synthesis_ready triggers daemon to auto-extract WAL code and write `.py`+`.yaml` pipeline (intent_signature encodes connector/mode/name). Skipped if file exists; `icc_crystallize` manual call can force-overwrite.
+**Auto-crystallize**: `icc_exec` synthesis_ready triggers daemon to auto-extract WAL code and write `.py`+`.yaml` pipeline (intent_signature encodes connector/mode/name). Skipped if file exists; `icc_crystallize` manual call can force-overwrite. Logic lives in `scripts/crystallizer.py` (`PipelineCrystallizer`); daemon delegates via thin `_crystallize`/`_auto_crystallize`/`_generate_span_skeleton` wrappers.
+
+**Tool dispatch**: `EmergeDaemon.call_tool` uses a `_TOOL_DISPATCH` dict → `_handle_<tool>` methods. Each tool handler is an independent method — no if/elif chain. Adding a new tool: add entry to `_TOOL_DISPATCH` + implement `_handle_<tool>`.
+
+**Shared utilities in `policy_config.py`**: `resolve_connector_root()` (EMERGE_CONNECTOR_ROOT env or `~/.emerge/connectors`), `load_json_object(path, root_key)` (safe JSON load with empty-dict fallback), `USER_CONNECTOR_ROOT` constant, `REFLECTION_CACHE_TTL_MS` constant. All files should import these instead of inlining the patterns.
 
 **Span path**: `icc_span_open` → [any MCP tool calls, PostToolUse records] → `icc_span_close` → span-wal + span-candidates update policy. At stable, auto-generates Python skeleton to `_pending/`. `icc_span_approve` moves skeleton to real dir and generates YAML, activating the bridge.
 
@@ -53,9 +57,9 @@ python3 scripts/emerge_sync.py sync gmail
 
 **Span Protocol injection**: SessionStart and PreCompact inject a static span protocol directive (~150 chars) instructing the model to wrap reusable multi-step tool sequences in `icc_span_open`/`icc_span_close`. UserPromptSubmit does NOT inject the directive — only the FLYWHEEL_TOKEN carries `active_span_id`/`active_span_intent` (or null) per turn.
 
-**Daemon intent gate**: `icc_span_open` returns `{status: "confirm_needed"}` (not error) when `intent_signature` is new and the connector already has existing span intents in `span-candidates.json`. The model must re-call with the same intent to confirm. Gate tracked via `self._intent_gate: set[str]` (in-process, self-cleaning on daemon restart). Fires at most once per new intent per daemon lifecycle. Existing intents capped at 5 in the response. Does not fire for the first intent of a connector or for intents already in span-candidates.
+**Daemon intent gate**: `icc_span_open` returns `{status: "confirm_needed"}` (not error) when `intent_signature` is new and the connector already has existing span intents in `span-candidates.json`. The model must re-call with the same intent to confirm. Gate tracked via `self._intent_gate: set[str]` (persisted to `state_root/intent-gate.json` via atomic write; survives daemon restarts). Fires at most once per new intent per daemon lifecycle. Existing intents capped at 5 in the response. Does not fire for the first intent of a connector or for intents already in span-candidates.
 
-**Span reflection injection**: `SpanTracker.format_reflection()` composes a compact "Muscle memory" summary from `span-candidates.json` (stable/canary policy) and recent `span-wal/spans.jsonl` outcomes. Hooks call `format_reflection_with_cache()` first: fresh deep cache (`reflection-cache/global.json`, TTL 15m) is preferred, otherwise fallback to lightweight reflection. `PreCompact` always injects reflection into `systemMessage`; `UserPromptSubmit` injects it once at `turn_count == 20` to prime long sessions before compaction. Reflection output is capped (stable<=8, canary<=3, recent<=5) so token cost stays bounded.
+**Span reflection injection**: `SpanTracker.format_reflection()` composes a compact "Muscle memory" summary from `span-candidates.json` (stable/canary policy) and recent `span-wal/spans.jsonl` outcomes. Hooks call `format_reflection_with_cache()` first: fresh deep cache (`reflection-cache/global.json`, TTL 15m) is preferred, otherwise fallback to lightweight reflection. `PreCompact` always injects reflection into `systemMessage`; `UserPromptSubmit` injects it once at `turn_count == 1` to prime the session early. Reflection output is capped (stable<=8, canary<=3, recent<=5) so token cost stays bounded.
 
 **`icc_read`/`icc_write` deleted**: fully removed — no dispatch, no schema, no internal compat path. Use `icc_span_open` bridge for pipeline execution, `icc_exec` for exploration.
 

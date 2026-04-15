@@ -15,6 +15,8 @@ if str(ROOT) not in sys.path:
 
 from scripts.emerge_daemon import EmergeDaemon
 from scripts import repl_admin
+from scripts import runner_admin
+from scripts.admin import runner as runner_admin_impl  # real impl module for monkeypatching
 from scripts.remote_runner import RunnerExecutor, RunnerHTTPHandler, ThreadingHTTPServer
 
 
@@ -401,7 +403,7 @@ def test_runner_bootstrap_sets_route_and_reports_health(tmp_path: Path, monkeypa
             return "43210"
         return ""
 
-    monkeypatch.setattr(repl_admin, "_run_checked", fake_run_checked)
+    monkeypatch.setattr(runner_admin_impl, "_run_checked", fake_run_checked)
     calls = {"n": 0}
 
     def fake_probe_runner_health(**kwargs):  # type: ignore[no-untyped-def]
@@ -410,7 +412,7 @@ def test_runner_bootstrap_sets_route_and_reports_health(tmp_path: Path, monkeypa
             return {}, "runner unreachable"
         return {"ok": True, "service": "emerge-remote-runner", "status": "ready"}, ""
 
-    monkeypatch.setattr(repl_admin, "_probe_runner_health", fake_probe_runner_health)
+    monkeypatch.setattr(runner_admin_impl, "_probe_runner_health", fake_probe_runner_health)
 
     out = repl_admin.cmd_runner_bootstrap(
         ssh_target="user@10.0.0.8",
@@ -435,12 +437,12 @@ def test_runner_bootstrap_reuses_existing_healthy_runner(tmp_path: Path, monkeyp
 
     def fake_run_checked(command: list[str], *, timeout_s: int = 90) -> str:
         if command and command[0] == "ssh" and "cat .claude-plugin/plugin.json" in command[-1]:
-            return json.dumps({"name": "emerge", "version": repl_admin._local_plugin_version()})
+            return json.dumps({"name": "emerge", "version": runner_admin_impl._local_plugin_version()})
         return ""
 
-    monkeypatch.setattr(repl_admin, "_run_checked", fake_run_checked)
+    monkeypatch.setattr(runner_admin_impl, "_run_checked", fake_run_checked)
     monkeypatch.setattr(
-        repl_admin,
+        runner_admin_impl,
         "_probe_runner_health",
         lambda **kwargs: ({"ok": True, "status": "ready"}, ""),
     )
@@ -467,9 +469,9 @@ def test_runner_bootstrap_blocks_on_version_mismatch_with_running_runner(monkeyp
             return json.dumps({"name": "emerge", "version": "0.0.1"})
         return ""
 
-    monkeypatch.setattr(repl_admin, "_run_checked", fake_run_checked)
+    monkeypatch.setattr(runner_admin_impl, "_run_checked", fake_run_checked)
     monkeypatch.setattr(
-        repl_admin,
+        runner_admin_impl,
         "_probe_runner_health",
         lambda **kwargs: ({"ok": True, "status": "ready"}, ""),
     )

@@ -20,7 +20,7 @@ def test_cmd_control_plane_state_returns_deltas_and_risks(tmp_path):
     _make_state_json(tmp_path, deltas=[
         {"message": "test delta", "intent_signature": "mock.read.x"},
     ], risks=["test risk"])
-    with patch("scripts.repl_admin.default_hook_state_root", return_value=str(tmp_path)):
+    with patch("scripts.admin.control_plane.default_hook_state_root", return_value=str(tmp_path)):
         result = cmd_control_plane_state()
     assert result["ok"]
     assert len(result["deltas"]) == 1
@@ -35,7 +35,7 @@ def test_cmd_control_plane_delta_reconcile(tmp_path):
     tracker = StateTracker()
     delta_id = tracker.add_delta(message="test", intent_signature="mock.read.x")
     save_tracker(tmp_path / "state.json", tracker)
-    with patch("scripts.repl_admin.default_hook_state_root", return_value=str(tmp_path)):
+    with patch("scripts.admin.control_plane.default_hook_state_root", return_value=str(tmp_path)):
         result = cmd_control_plane_delta_reconcile(delta_id=delta_id, outcome="confirm")
     assert result["ok"]
     assert result["outcome"] == "confirm"
@@ -47,7 +47,7 @@ def test_cmd_control_plane_risk_update(tmp_path):
     tracker.add_risk("test risk")
     save_tracker(tmp_path / "state.json", tracker)
     risk_id = tracker.to_dict()["open_risks"][0]["risk_id"]
-    with patch("scripts.repl_admin.default_hook_state_root", return_value=str(tmp_path)):
+    with patch("scripts.admin.control_plane.default_hook_state_root", return_value=str(tmp_path)):
         result = cmd_control_plane_risk_update(risk_id=risk_id, action="handle", reason="fixed")
     assert result["ok"]
 
@@ -56,7 +56,7 @@ def test_cmd_control_plane_policy_freeze(tmp_path):
     from scripts.repl_admin import cmd_control_plane_policy_freeze
     reg = {"pipelines": {"mock.read.layers": {"status": "explore"}}}
     (tmp_path / "pipelines-registry.json").write_text(json.dumps(reg))
-    with patch("scripts.repl_admin._resolve_state_root", return_value=tmp_path):
+    with patch("scripts.admin.control_plane._resolve_state_root", return_value=tmp_path):
         result = cmd_control_plane_policy_freeze(key="mock.read.layers")
     assert result["ok"]
     updated = json.loads((tmp_path / "pipelines-registry.json").read_text())
@@ -72,7 +72,7 @@ def test_cmd_control_plane_session_reset_requires_confirm(tmp_path):
 
 def test_cmd_control_plane_reflection_cache_missing(tmp_path):
     from scripts.repl_admin import cmd_control_plane_reflection_cache
-    with patch("scripts.repl_admin._resolve_state_root", return_value=tmp_path):
+    with patch("scripts.admin.control_plane._resolve_state_root", return_value=tmp_path):
         result = cmd_control_plane_reflection_cache()
     assert result["ok"] is True
     assert result["exists"] is False
@@ -94,8 +94,8 @@ def test_cmd_control_plane_reflection_cache_fresh(tmp_path):
         ),
         encoding="utf-8",
     )
-    with patch("scripts.repl_admin._resolve_state_root", return_value=tmp_path), \
-         patch("scripts.repl_admin.time.time", return_value=now_ms / 1000):
+    with patch("scripts.admin.control_plane._resolve_state_root", return_value=tmp_path), \
+         patch("scripts.admin.control_plane.time.time", return_value=now_ms / 1000):
         result = cmd_control_plane_reflection_cache(ttl_ms=900000)
     assert result["ok"] is True
     assert result["exists"] is True
@@ -114,8 +114,8 @@ def test_cmd_control_plane_reflection_cache_stale(tmp_path):
         json.dumps({"generated_at_ms": generated_ms, "summary_text": "stale cache"}),
         encoding="utf-8",
     )
-    with patch("scripts.repl_admin._resolve_state_root", return_value=tmp_path), \
-         patch("scripts.repl_admin.time.time", return_value=now_ms / 1000):
+    with patch("scripts.admin.control_plane._resolve_state_root", return_value=tmp_path), \
+         patch("scripts.admin.control_plane.time.time", return_value=now_ms / 1000):
         result = cmd_control_plane_reflection_cache(ttl_ms=900000)
     assert result["ok"] is True
     assert result["exists"] is True
@@ -129,7 +129,7 @@ def test_cmd_control_plane_reflection_cache_invalid_json(tmp_path):
     cache_dir = tmp_path / "reflection-cache"
     cache_dir.mkdir(parents=True)
     (cache_dir / "global.json").write_text("{broken", encoding="utf-8")
-    with patch("scripts.repl_admin._resolve_state_root", return_value=tmp_path):
+    with patch("scripts.admin.control_plane._resolve_state_root", return_value=tmp_path):
         result = cmd_control_plane_reflection_cache()
     assert result["ok"] is True
     assert result["exists"] is True
@@ -150,8 +150,8 @@ def test_cmd_control_plane_session_reset_full_clears_session_artifacts(tmp_path)
     for name in ["wal.jsonl", "checkpoint.json", "recovery.json", "exec-events.jsonl", "pipeline-events.jsonl"]:
         (session_dir / name).write_text("x", encoding="utf-8")
 
-    with patch("scripts.repl_admin.default_hook_state_root", return_value=str(hook_state)), \
-         patch("scripts.repl_admin._session_paths", return_value=(session_dir, session_dir / "wal.jsonl", session_dir / "checkpoint.json")):
+    with patch("scripts.admin.control_plane.default_hook_state_root", return_value=str(hook_state)), \
+         patch("scripts.admin.control_plane._session_paths", return_value=(session_dir, session_dir / "wal.jsonl", session_dir / "checkpoint.json")):
         result = cmd_control_plane_session_reset(confirm="RESET", full=True)
 
     assert result["ok"] is True

@@ -165,7 +165,7 @@ def test_exec_success_not_reversed_by_policy_bookkeeping_failure(tmp_path: Path)
         def _raise(*args, **kwargs):  # type: ignore[no-untyped-def]
             raise RuntimeError("registry broken")
 
-        daemon._record_exec_event = _raise  # type: ignore[method-assign]
+        daemon._flywheel.record_exec_event = _raise  # type: ignore[method-assign]
         out = daemon.call_tool("icc_exec", {"code": "print('ok')"})
         assert out.get("isError") is not True
         assert "ok" in out["content"][0]["text"]

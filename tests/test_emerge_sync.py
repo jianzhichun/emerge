@@ -17,6 +17,33 @@ from scripts.emerge_sync import (
     _load_spans_timestamps,
 )
 from scripts.hub_config import save_hub_config
+from scripts.policy_config import STABLE_MIN_ATTEMPTS
+
+
+def _stable_span_entry(intent_key: str, last_ts_ms: int = 1000) -> dict:
+    """Build a span-candidates entry that meets stable promotion thresholds."""
+    return {
+        "intent_signature": intent_key,
+        "attempts": STABLE_MIN_ATTEMPTS,
+        "successes": STABLE_MIN_ATTEMPTS,
+        "human_fixes": 0,
+        "consecutive_failures": 0,
+        "recent_outcomes": [1] * STABLE_MIN_ATTEMPTS,
+        "last_ts_ms": last_ts_ms,
+    }
+
+
+def _explore_span_entry(intent_key: str, last_ts_ms: int = 999) -> dict:
+    """Build a span-candidates entry that stays in explore."""
+    return {
+        "intent_signature": intent_key,
+        "attempts": 2,
+        "successes": 2,
+        "human_fixes": 0,
+        "consecutive_failures": 0,
+        "recent_outcomes": [1, 1],
+        "last_ts_ms": last_ts_ms,
+    }
 
 
 def test_file_to_intent_sig_read():
@@ -31,20 +58,22 @@ def test_file_to_intent_sig_unknown_depth_returns_empty():
     assert _file_to_intent_sig("cloud-server", Path("get_instances.py")) == ""
 
 
-def test_load_candidate_timestamps_returns_stable_only(tmp_path):
+def test_load_candidate_timestamps_returns_stable_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     candidates = {
-        "candidates": {
-            "cs.read.a": {"status": "stable", "last_ts_ms": 500},
-            "cs.read.b": {"status": "explore", "last_ts_ms": 999},
+        "spans": {
+            "cs.read.a": _stable_span_entry("cs.read.a", last_ts_ms=500),
+            "cs.read.b": _explore_span_entry("cs.read.b", last_ts_ms=999),
         }
     }
     (tmp_path / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
-    ts = _load_candidate_timestamps(tmp_path)
+    ts = _load_candidate_timestamps("cs")
     assert ts == {"cs.read.a": 500}
 
 
-def test_load_candidate_timestamps_missing_file(tmp_path):
-    assert _load_candidate_timestamps(tmp_path) == {}
+def test_load_candidate_timestamps_missing_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    assert _load_candidate_timestamps("cs") == {}
 
 
 def test_load_spans_timestamps_parses_spans_json(tmp_path):
@@ -60,16 +89,19 @@ def test_load_spans_timestamps_missing_file(tmp_path):
 
 @pytest.fixture()
 def connector_home(tmp_path, monkeypatch):
-    """Fake ~/.emerge/connectors and hub worktree for tests."""
+    """Fake ~/.emerge/connectors, hub worktree, and state root for tests."""
     connectors = tmp_path / "connectors"
     worktree = tmp_path / "hub-worktree"
+    state_root = tmp_path / "state"
     worktree.mkdir()
+    state_root.mkdir()
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connectors))
     monkeypatch.setenv("EMERGE_HUB_HOME", str(tmp_path))
-    return connectors, worktree
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(state_root))
+    return connectors, worktree, state_root
 
 
-def _make_connector(connectors: Path, name: str) -> None:
+def _make_connector(connectors: Path, name: str, state_root: Path) -> None:
     base = connectors / name
     (base / "pipelines" / "read").mkdir(parents=True)
     (base / "pipelines" / "read" / "fetch.py").write_text("# fetch", encoding="utf-8")
@@ -77,25 +109,25 @@ def _make_connector(connectors: Path, name: str) -> None:
     (base / "NOTES.md").write_text("# Notes", encoding="utf-8")
     intent_key = f"{name}.read.fetch"
     candidates = {
-        "candidates": {
-            intent_key: {"intent_signature": intent_key, "status": "stable", "last_ts_ms": 1000}
+        "spans": {
+            intent_key: _stable_span_entry(intent_key, last_ts_ms=1000),
         }
     }
-    (base / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+    (state_root / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
 
 
 def test_export_copies_pipelines_and_notes(connector_home):
-    connectors, worktree = connector_home
-    _make_connector(connectors, "gmail")
-    export_vertical("gmail", connectors_root=connectors, hub_worktree=worktree)
+    connectors, worktree, state_root = connector_home
+    _make_connector(connectors, "gmail", state_root)
+    export_vertical("gmail", connectors_root_path=connectors, hub_worktree=worktree)
     assert (worktree / "connectors" / "gmail" / "pipelines" / "read" / "fetch.py").exists()
     assert (worktree / "connectors" / "gmail" / "NOTES.md").exists()
 
 
 def test_export_generates_spans_json_from_stable_candidates(connector_home):
-    connectors, worktree = connector_home
-    _make_connector(connectors, "gmail")
-    export_vertical("gmail", connectors_root=connectors, hub_worktree=worktree)
+    connectors, worktree, state_root = connector_home
+    _make_connector(connectors, "gmail", state_root)
+    export_vertical("gmail", connectors_root_path=connectors, hub_worktree=worktree)
     spans_path = worktree / "connectors" / "gmail" / "spans.json"
     assert spans_path.exists()
     spans = json.loads(spans_path.read_text())
@@ -103,19 +135,19 @@ def test_export_generates_spans_json_from_stable_candidates(connector_home):
 
 
 def test_import_overwrites_local_pipelines(connector_home):
-    connectors, worktree = connector_home
+    connectors, worktree, state_root = connector_home
     hub_dir = worktree / "connectors" / "gmail" / "pipelines" / "read"
     hub_dir.mkdir(parents=True)
     (hub_dir / "fetch.py").write_text("# remote version", encoding="utf-8")
     (hub_dir / "fetch.yaml").write_text("connector: gmail", encoding="utf-8")
     (worktree / "connectors" / "gmail" / "NOTES.md").write_text("# Remote Notes", encoding="utf-8")
-    import_vertical("gmail", connectors_root=connectors, hub_worktree=worktree)
+    import_vertical("gmail", connectors_root_path=connectors, hub_worktree=worktree)
     local_py = connectors / "gmail" / "pipelines" / "read" / "fetch.py"
     assert local_py.read_text(encoding="utf-8") == "# remote version"
 
 
 def test_import_merges_spans_json_newer_wins(connector_home):
-    connectors, worktree = connector_home
+    connectors, worktree, state_root = connector_home
     local_dir = connectors / "gmail"
     local_dir.mkdir(parents=True)
     local_spans = {"spans": {"gmail.read.fetch": {"intent_signature": "gmail.read.fetch", "last_ts_ms": 100}}}
@@ -129,7 +161,7 @@ def test_import_merges_spans_json_newer_wins(connector_home):
         }
     }
     (hub_dir / "spans.json").write_text(json.dumps(hub_spans), encoding="utf-8")
-    import_vertical("gmail", connectors_root=connectors, hub_worktree=worktree)
+    import_vertical("gmail", connectors_root_path=connectors, hub_worktree=worktree)
     merged = json.loads((local_dir / "spans.json").read_text())
     assert merged["spans"]["gmail.read.fetch"]["last_ts_ms"] == 999
     assert "gmail.read.send" in merged["spans"]
@@ -137,7 +169,7 @@ def test_import_merges_spans_json_newer_wins(connector_home):
 
 def test_export_spans_json_merges_remote_spans(connector_home):
     """Exporting B's spans must not erase A's spans already in the worktree."""
-    connectors, worktree = connector_home
+    connectors, worktree, state_root = connector_home
 
     # A's spans already live in the worktree
     hub_conn_dir = worktree / "connectors" / "cloud-server"
@@ -153,22 +185,17 @@ def test_export_spans_json_merges_remote_spans(connector_home):
     }
     (hub_conn_dir / "spans.json").write_text(json.dumps(existing_spans), encoding="utf-8")
 
-    # B has a different stable pipeline
     base = connectors / "cloud-server"
     (base / "pipelines" / "read").mkdir(parents=True)
     (base / "pipelines" / "read" / "get_quota.py").write_text("# quota", encoding="utf-8")
     candidates = {
-        "candidates": {
-            "cloud-server.read.get_quota": {
-                "intent_signature": "cloud-server.read.get_quota",
-                "status": "stable",
-                "last_ts_ms": 2000,
-            }
+        "spans": {
+            "cloud-server.read.get_quota": _stable_span_entry("cloud-server.read.get_quota", last_ts_ms=2000),
         }
     }
-    (base / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+    (state_root / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
 
-    export_vertical("cloud-server", connectors_root=connectors, hub_worktree=worktree)
+    export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
     spans = json.loads((hub_conn_dir / "spans.json").read_text())["spans"]
     assert "cloud-server.read.list_vms" in spans, "A's span must be preserved"
@@ -177,7 +204,7 @@ def test_export_spans_json_merges_remote_spans(connector_home):
 
 def test_export_vertical_preserves_remote_only_pipeline(connector_home):
     """A's pipeline already in worktree must survive B exporting a different pipeline."""
-    connectors, worktree = connector_home
+    connectors, worktree, state_root = connector_home
 
     # A's pipeline already in worktree (with spans.json to provide remote timestamp)
     hub_conn = worktree / "connectors" / "cloud-server"
@@ -195,13 +222,13 @@ def test_export_vertical_preserves_remote_only_pipeline(connector_home):
     (base / "pipelines" / "read").mkdir(parents=True)
     (base / "pipelines" / "read" / "get_quota.py").write_text("# B's get_quota", encoding="utf-8")
     b_candidates = {
-        "candidates": {
-            "cloud-server.read.get_quota": {"status": "stable", "last_ts_ms": 2000}
+        "spans": {
+            "cloud-server.read.get_quota": _stable_span_entry("cloud-server.read.get_quota", last_ts_ms=2000),
         }
     }
-    (base / "span-candidates.json").write_text(json.dumps(b_candidates), encoding="utf-8")
+    (state_root / "span-candidates.json").write_text(json.dumps(b_candidates), encoding="utf-8")
 
-    export_vertical("cloud-server", connectors_root=connectors, hub_worktree=worktree)
+    export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
     # A's pipeline must survive
     assert (hub_conn / "pipelines" / "read" / "list_vms.py").read_text() == "# A's list_vms"
@@ -211,7 +238,7 @@ def test_export_vertical_preserves_remote_only_pipeline(connector_home):
 
 def test_export_vertical_local_wins_when_newer(connector_home):
     """When local last_ts_ms > remote last_ts_ms for the same pipeline, local version overwrites."""
-    connectors, worktree = connector_home
+    connectors, worktree, state_root = connector_home
 
     # Remote (worktree) has older version
     hub_conn = worktree / "connectors" / "cloud-server"
@@ -224,25 +251,24 @@ def test_export_vertical_local_wins_when_newer(connector_home):
     }
     (hub_conn / "spans.json").write_text(json.dumps(old_spans), encoding="utf-8")
 
-    # Local has newer version
     base = connectors / "cloud-server"
     (base / "pipelines" / "read").mkdir(parents=True)
     (base / "pipelines" / "read" / "fetch.py").write_text("# new local", encoding="utf-8")
     candidates = {
-        "candidates": {
-            "cloud-server.read.fetch": {"status": "stable", "last_ts_ms": 999}
+        "spans": {
+            "cloud-server.read.fetch": _stable_span_entry("cloud-server.read.fetch", last_ts_ms=999),
         }
     }
-    (base / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+    (state_root / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
 
-    export_vertical("cloud-server", connectors_root=connectors, hub_worktree=worktree)
+    export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
     assert (hub_conn / "pipelines" / "read" / "fetch.py").read_text() == "# new local"
 
 
 def test_export_vertical_remote_wins_when_newer(connector_home):
     """When remote last_ts_ms > local last_ts_ms, local must NOT overwrite the remote pipeline."""
-    connectors, worktree = connector_home
+    connectors, worktree, state_root = connector_home
 
     # Remote has a newer version
     hub_conn = worktree / "connectors" / "cloud-server"
@@ -255,18 +281,17 @@ def test_export_vertical_remote_wins_when_newer(connector_home):
     }
     (hub_conn / "spans.json").write_text(json.dumps(new_spans), encoding="utf-8")
 
-    # Local has older version
     base = connectors / "cloud-server"
     (base / "pipelines" / "read").mkdir(parents=True)
     (base / "pipelines" / "read" / "fetch.py").write_text("# stale local", encoding="utf-8")
     candidates = {
-        "candidates": {
-            "cloud-server.read.fetch": {"status": "stable", "last_ts_ms": 50}
+        "spans": {
+            "cloud-server.read.fetch": _stable_span_entry("cloud-server.read.fetch", last_ts_ms=50),
         }
     }
-    (base / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+    (state_root / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
 
-    export_vertical("cloud-server", connectors_root=connectors, hub_worktree=worktree)
+    export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
     # Remote version must be untouched
     assert (hub_conn / "pipelines" / "read" / "fetch.py").read_text() == "# newer remote"
@@ -274,20 +299,19 @@ def test_export_vertical_remote_wins_when_newer(connector_home):
 
 def test_export_vertical_skips_explore_state_pipeline(connector_home):
     """Pipelines without a stable candidate must NOT be exported to the hub."""
-    connectors, worktree = connector_home
+    connectors, worktree, state_root = connector_home
 
     base = connectors / "cloud-server"
     (base / "pipelines" / "read").mkdir(parents=True)
     (base / "pipelines" / "read" / "draft.py").write_text("# explore draft", encoding="utf-8")
-    # Only explore candidate — not stable
     candidates = {
-        "candidates": {
-            "cloud-server.read.draft": {"status": "explore", "last_ts_ms": 500}
+        "spans": {
+            "cloud-server.read.draft": _explore_span_entry("cloud-server.read.draft", last_ts_ms=500),
         }
     }
-    (base / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+    (state_root / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
 
-    export_vertical("cloud-server", connectors_root=connectors, hub_worktree=worktree)
+    export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
     hub_conn = worktree / "connectors" / "cloud-server"
     assert not (hub_conn / "pipelines" / "read" / "draft.py").exists(), \
@@ -296,20 +320,20 @@ def test_export_vertical_skips_explore_state_pipeline(connector_home):
 
 def test_export_vertical_copies_yaml_companion(connector_home):
     """When a .py is exported, the sibling .yaml must follow."""
-    connectors, worktree = connector_home
+    connectors, worktree, state_root = connector_home
 
     base = connectors / "cloud-server"
     (base / "pipelines" / "read").mkdir(parents=True)
     (base / "pipelines" / "read" / "fetch.py").write_text("# fetch", encoding="utf-8")
     (base / "pipelines" / "read" / "fetch.yaml").write_text("connector: cs", encoding="utf-8")
     candidates = {
-        "candidates": {
-            "cloud-server.read.fetch": {"status": "stable", "last_ts_ms": 100}
+        "spans": {
+            "cloud-server.read.fetch": _stable_span_entry("cloud-server.read.fetch", last_ts_ms=100),
         }
     }
-    (base / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+    (state_root / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
 
-    export_vertical("cloud-server", connectors_root=connectors, hub_worktree=worktree)
+    export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
     hub_conn = worktree / "connectors" / "cloud-server"
     assert (hub_conn / "pipelines" / "read" / "fetch.yaml").read_text() == "connector: cs"
@@ -317,7 +341,7 @@ def test_export_vertical_copies_yaml_companion(connector_home):
 
 def test_export_vertical_removes_stale_yaml_when_local_has_none(connector_home):
     """If local .py overwrites remote but local has no .yaml, the old remote .yaml is cleaned up."""
-    connectors, worktree = connector_home
+    connectors, worktree, state_root = connector_home
 
     # Remote worktree has an old .yaml
     hub_conn = worktree / "connectors" / "cloud-server"
@@ -334,13 +358,13 @@ def test_export_vertical_removes_stale_yaml_when_local_has_none(connector_home):
     (base / "pipelines" / "read").mkdir(parents=True)
     (base / "pipelines" / "read" / "fetch.py").write_text("# new local", encoding="utf-8")
     candidates = {
-        "candidates": {
-            "cloud-server.read.fetch": {"status": "stable", "last_ts_ms": 999}
+        "spans": {
+            "cloud-server.read.fetch": _stable_span_entry("cloud-server.read.fetch", last_ts_ms=999),
         }
     }
-    (base / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+    (state_root / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
 
-    export_vertical("cloud-server", connectors_root=connectors, hub_worktree=worktree)
+    export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
     assert (hub_conn / "pipelines" / "read" / "fetch.py").read_text() == "# new local"
     assert not (hub_conn / "pipelines" / "read" / "fetch.yaml").exists(), \
@@ -405,8 +429,8 @@ def test_git_fetch_and_detect_no_changes(git_setup):
 def test_git_push_commits_and_updates_remote(git_setup, connector_home):
     from scripts.emerge_sync import git_push
     bare_remote, worktree, hub_home = git_setup
-    connectors, _ = connector_home
-    _make_connector(connectors, "gmail")
+    connectors, _, state_root = connector_home
+    _make_connector(connectors, "gmail", state_root)
     _init_hub_worktree(worktree, str(bare_remote))
 
     hub_dir = worktree / "connectors" / "gmail"
@@ -423,31 +447,29 @@ def test_git_push_commits_and_updates_remote(git_setup, connector_home):
 def test_push_flow_exports_and_pushes(git_setup, connector_home):
     from scripts.emerge_sync import push_flow
     bare_remote, worktree, hub_home = git_setup
-    connectors, _ = connector_home
-    _make_connector(connectors, "gmail")
+    connectors, _, state_root = connector_home
+    _make_connector(connectors, "gmail", state_root)
     _init_hub_worktree(worktree, str(bare_remote))
 
-    result = push_flow("gmail", connectors_root=connectors, hub_worktree=worktree)
+    result = push_flow("gmail", connectors_root_path=connectors, hub_worktree=worktree)
     assert result["ok"] is True
 
 
 def test_pull_flow_imports_remote_changes(git_setup, connector_home):
     from scripts.emerge_sync import pull_flow, push_flow
     bare_remote, worktree_a, hub_home = git_setup
-    connectors_a, _ = connector_home
+    connectors_a, _, state_root = connector_home
 
-    # Initialize BOTH worktrees before machine A pushes so machine B is behind after the push
     connectors_b = hub_home / "connectors_b"
     worktree_b = hub_home / "worktree_b"
     _init_hub_worktree(worktree_a, str(bare_remote))
     _init_hub_worktree(worktree_b, str(bare_remote))
 
-    # Machine A pushes new content — remote now has files that machine B doesn't
-    _make_connector(connectors_a, "gmail")
-    push_flow("gmail", connectors_root=connectors_a, hub_worktree=worktree_a)
+    _make_connector(connectors_a, "gmail", state_root)
+    push_flow("gmail", connectors_root_path=connectors_a, hub_worktree=worktree_a)
 
     # Machine B pulls the new content
-    result = pull_flow("gmail", connectors_root=connectors_b, hub_worktree=worktree_b)
+    result = pull_flow("gmail", connectors_root_path=connectors_b, hub_worktree=worktree_b)
     assert result["ok"] is True
     assert (connectors_b / "gmail" / "pipelines" / "read" / "fetch.py").exists()
 
@@ -458,12 +480,11 @@ def test_apply_pending_resolutions_theirs_writes_remote_version(git_setup, conne
     from scripts.hub_config import load_pending_conflicts, save_pending_conflicts, new_conflict_id
 
     bare_remote, worktree, hub_home = git_setup
-    connectors, _ = connector_home
+    connectors, _, state_root = connector_home
 
-    # Seed the remote with a known file via Machine A
     _init_hub_worktree(worktree, str(bare_remote))
-    _make_connector(connectors, "gmail")
-    push_flow("gmail", connectors_root=connectors, hub_worktree=worktree)
+    _make_connector(connectors, "gmail", state_root)
+    push_flow("gmail", connectors_root_path=connectors, hub_worktree=worktree)
 
     # Simulate a conflict record where the user chose "theirs"
     conflict_file = "connectors/gmail/NOTES.md"
@@ -507,11 +528,11 @@ def test_apply_pending_resolutions_ours_marks_applied_without_git_change(git_set
     from scripts.hub_config import load_pending_conflicts, save_pending_conflicts, new_conflict_id
 
     bare_remote, worktree, hub_home = git_setup
-    connectors, _ = connector_home
+    connectors, _, state_root = connector_home
 
     _init_hub_worktree(worktree, str(bare_remote))
-    _make_connector(connectors, "gmail")
-    push_flow("gmail", connectors_root=connectors, hub_worktree=worktree)
+    _make_connector(connectors, "gmail", state_root)
+    push_flow("gmail", connectors_root_path=connectors, hub_worktree=worktree)
 
     original_content = (worktree / "connectors" / "gmail" / "NOTES.md").read_text(encoding="utf-8")
 
@@ -540,11 +561,11 @@ def test_run_stable_events_skips_pull_when_push_conflicts(git_setup, connector_h
     """When push_flow records a conflict for a connector, pull_flow for the same connector
     must be skipped in the same cycle to avoid duplicating conflict records."""
     from unittest.mock import patch, MagicMock
-    from scripts.emerge_sync import _run_stable_events
+    from scripts.sync.sync_flow import _run_stable_events
     from scripts.hub_config import append_sync_event, load_pending_conflicts, save_hub_config
 
     bare_remote, worktree, hub_home = git_setup
-    connectors, _ = connector_home
+    connectors, _, state_root = connector_home
     monkeypatch.setenv("EMERGE_HUB_HOME", str(hub_home))
 
     save_hub_config({
@@ -568,9 +589,9 @@ def test_run_stable_events_skips_pull_when_push_conflicts(git_setup, connector_h
         pull_call_count += 1
         return {"ok": True, "action": "up_to_date"}
 
-    with patch("scripts.emerge_sync.push_flow", fake_push_flow), \
-         patch("scripts.emerge_sync.pull_flow", fake_pull_flow), \
-         patch("scripts.emerge_sync._apply_pending_resolutions", return_value=False):
+    with patch("scripts.sync.sync_flow.push_flow", fake_push_flow), \
+         patch("scripts.sync.sync_flow.pull_flow", fake_pull_flow), \
+         patch("scripts.sync.sync_flow.apply_pending_resolutions", return_value=False):
         _run_stable_events()
 
     assert pull_call_count == 0, (
@@ -584,12 +605,13 @@ def test_run_event_loop_fires_stable_events_on_queue_write(tmp_path, monkeypatch
     import threading
 
     fired = threading.Event()
-    monkeypatch.setattr(emerge_sync, "_run_stable_events", lambda: fired.set())
-    monkeypatch.setattr(emerge_sync, "_run_pull_cycle", lambda: None)
+    import scripts.sync.sync_flow as _sync_flow
+    monkeypatch.setattr(_sync_flow, "_run_stable_events", lambda: fired.set())
+    monkeypatch.setattr(_sync_flow, "_run_pull_cycle", lambda: None)
 
     queue = tmp_path / "sync-queue.jsonl"
-    monkeypatch.setattr(emerge_sync, "sync_queue_path", lambda: queue)
-    monkeypatch.setattr(emerge_sync, "load_hub_config",
+    monkeypatch.setattr(_sync_flow, "sync_queue_path", lambda: queue)
+    monkeypatch.setattr(_sync_flow, "load_hub_config",
                         lambda: {"poll_interval_seconds": 999})
 
     stop = threading.Event()
@@ -608,10 +630,11 @@ def test_run_event_loop_pull_cycle_fires_on_timer(tmp_path, monkeypatch):
     import threading
 
     pulled = threading.Event()
-    monkeypatch.setattr(emerge_sync, "_run_stable_events", lambda: None)
-    monkeypatch.setattr(emerge_sync, "_run_pull_cycle", lambda: pulled.set())
-    monkeypatch.setattr(emerge_sync, "sync_queue_path", lambda: tmp_path / "q.jsonl")
-    monkeypatch.setattr(emerge_sync, "load_hub_config",
+    import scripts.sync.sync_flow as _sync_flow
+    monkeypatch.setattr(_sync_flow, "_run_stable_events", lambda: None)
+    monkeypatch.setattr(_sync_flow, "_run_pull_cycle", lambda: pulled.set())
+    monkeypatch.setattr(_sync_flow, "sync_queue_path", lambda: tmp_path / "q.jsonl")
+    monkeypatch.setattr(_sync_flow, "load_hub_config",
                         lambda: {"poll_interval_seconds": 1})  # 1s for test speed
 
     stop = threading.Event()

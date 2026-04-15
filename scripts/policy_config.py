@@ -18,6 +18,12 @@ STABLE_MIN_VERIFY_RATE = 0.99
 ROLLBACK_CONSECUTIVE_FAILURES = 2
 WINDOW_SIZE = 20
 
+PIPELINE_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]*\.(read|write)\.[a-z][a-z0-9_./-]*$")
+
+REFLECTION_CACHE_TTL_MS = 15 * 60 * 1000  # 15 minutes
+
+USER_CONNECTOR_ROOT = Path("~/.emerge/connectors").expanduser()
+
 
 def default_emerge_home() -> Path:
     return Path.home() / ".emerge"
@@ -45,7 +51,6 @@ def resolve_plugin_data_root() -> Path:
     2. Contents of ~/.emerge/plugin_data_path (written by setup hook)
     3. Fallback: ~/.emerge/hook-state (legacy / dev environments)
     """
-    import os as _os
     env = _os.environ.get("CLAUDE_PLUGIN_DATA", "").strip()
     if env:
         return Path(env)
@@ -259,7 +264,6 @@ def truncate_jsonl_if_needed(path: "Path", max_lines: int, trigger_ratio: float 
             return
         trimmed = "\n".join(lines[-max_lines:]) + "\n"
         import tempfile as _tempfile
-        import os as _os
         fd, tmp_path_str = _tempfile.mkstemp(
             prefix=f"{path.stem}-", suffix=".jsonl.tmp", dir=str(path.parent)
         )
@@ -276,4 +280,28 @@ def truncate_jsonl_if_needed(path: "Path", max_lines: int, trigger_ratio: float 
                 _os.unlink(_tmp)
     except Exception:
         pass  # Non-fatal — truncation is a performance optimization only
+
+
+def resolve_connector_root() -> Path:
+    """Return active connector root: EMERGE_CONNECTOR_ROOT env var or ~/.emerge/connectors."""
+    env = _os.environ.get("EMERGE_CONNECTOR_ROOT", "").strip()
+    return Path(env).expanduser() if env else USER_CONNECTOR_ROOT
+
+
+def load_json_object(path: "Path", *, root_key: str) -> dict:
+    """Load a JSON object file, returning ``{root_key: {}}`` when missing or corrupt.
+
+    Raises ``ValueError`` if the file exists but is not a JSON object.
+    """
+    if not path.exists():
+        return {root_key: {}}
+    try:
+        data = _json.loads(path.read_text(encoding="utf-8"))
+    except _json.JSONDecodeError:
+        return {root_key: {}}
+    if not isinstance(data, dict):
+        raise ValueError(f"{path.name} must be a JSON object")
+    if root_key not in data or not isinstance(data[root_key], dict):
+        data[root_key] = {}
+    return data
 

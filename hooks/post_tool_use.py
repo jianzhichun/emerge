@@ -5,6 +5,7 @@ a separate PostToolUse matcher. This script only runs for emerge-specific tools.
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -20,8 +21,6 @@ from scripts.goal_control_plane import init_goal_control_plane  # noqa: E402
 from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
 from scripts.span_tracker import is_read_only_tool  # noqa: E402
 from scripts.state_tracker import (  # noqa: E402
-    LEVEL_CORE_CRITICAL,
-    LEVEL_CORE_SECONDARY,
     LEVEL_PERIPHERAL,
     load_tracker,
     save_tracker,
@@ -99,7 +98,11 @@ def _record_span_action(
     _buf = state_root / "active-span-actions.jsonl"
     try:
         with _buf.open("a", encoding="utf-8") as _f:
-            _f.write(json.dumps(_action, ensure_ascii=True) + "\n")
+            fcntl.flock(_f, fcntl.LOCK_EX)
+            try:
+                _f.write(json.dumps(_action, ensure_ascii=True) + "\n")
+            finally:
+                fcntl.flock(_f, fcntl.LOCK_UN)
     except Exception:
         pass
     return _active_span_id, _active_span_intent

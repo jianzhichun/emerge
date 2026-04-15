@@ -171,6 +171,7 @@ def main() -> None:
         if active_span_id:
             # Span action WAL (used for span close + crystallization)
             try:
+                import fcntl
                 args_raw = json.dumps(tool_input, sort_keys=True, ensure_ascii=True)
                 args_hash = hashlib.sha256(args_raw.encode()).hexdigest()[:16]
                 action = {
@@ -180,7 +181,11 @@ def main() -> None:
                     "ts_ms": int(time.time() * 1000),
                 }
                 with (state_root / "active-span-actions.jsonl").open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(action, ensure_ascii=True) + "\n")
+                    fcntl.flock(f, fcntl.LOCK_EX)
+                    try:
+                        f.write(json.dumps(action, ensure_ascii=True) + "\n")
+                    finally:
+                        fcntl.flock(f, fcntl.LOCK_UN)
             except Exception:
                 pass
 

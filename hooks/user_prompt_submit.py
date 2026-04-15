@@ -10,13 +10,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.goal_control_plane import EVENT_HOOK_PAYLOAD, init_goal_control_plane  # noqa: E402
-from scripts.policy_config import default_exec_root, default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
+from scripts.policy_config import REFLECTION_CACHE_TTL_MS, default_exec_root, default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
 from scripts.span_tracker import SpanTracker  # noqa: E402
 from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
 
 _REFLECTION_TURN_THRESHOLD = 1
 _SPAN_REMINDER_INTERVAL = 5
-_REFLECTION_CACHE_TTL_MS = 15 * 60 * 1000
 
 
 def _drain_pending_actions(state_root: Path) -> str:
@@ -37,7 +36,7 @@ def _drain_pending_actions(state_root: Path) -> str:
         try:
             p.rename(delivered)
         except OSError:
-            pass
+            continue
         return format_pending_actions(actions)
     return ""
 
@@ -87,19 +86,28 @@ def main() -> None:
         reflection = SpanTracker(
             state_root=exec_root,
             hook_state_root=state_root,
-        ).format_reflection_with_cache(cache_ttl_ms=_REFLECTION_CACHE_TTL_MS)
+        ).format_reflection_with_cache(cache_ttl_ms=REFLECTION_CACHE_TTL_MS)
         if reflection:
             context_text = reflection + "\n\n" + context_text
 
-    # Every N turns: remind CC to open a span if none is active
+    # Every N turns: remind CC to open a span if none is active.
+    # Skip turn-5 reminder when tool_audit already sent a one-shot nudge this session.
     active_span_id = str(tracker.state.get("active_span_id", "") or "")
     if not active_span_id and turn_count > 1 and turn_count % _SPAN_REMINDER_INTERVAL == 0:
-        reminder = (
-            "[Span] No active span. "
-            "If this turn involves tool use, open one first: "
-            'icc_span_open(intent_signature="connector.mode.name").'
-        )
-        context_text = reminder + "\n\n" + context_text
+        _skip_reminder = False
+        if turn_count == _SPAN_REMINDER_INTERVAL:
+            try:
+                _raw = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+                _skip_reminder = bool(_raw.get("_span_nudge_sent"))
+            except Exception:
+                pass
+        if not _skip_reminder:
+            reminder = (
+                "[Span] No active span. "
+                "If this turn involves tool use, open one first: "
+                'icc_span_open(intent_signature="connector.mode.name").'
+            )
+            context_text = reminder + "\n\n" + context_text
     if _mutated:
         save_tracker(state_path, tracker)
 

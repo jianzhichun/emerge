@@ -7,7 +7,6 @@ Output contract: no hookSpecificOutput (TaskCompleted not in allowed list).
 """
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 

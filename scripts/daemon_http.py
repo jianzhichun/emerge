@@ -332,6 +332,8 @@ class DaemonHTTPServer:
             with _tf.NamedTemporaryFile("w", dir=path.parent, delete=False,
                                         suffix=".tmp", encoding="utf-8") as tf:
                 json.dump(state, tf)
+                tf.flush()
+                os.fsync(tf.fileno())
                 tf_path = tf.name
             os.replace(tf_path, path)
         except OSError:

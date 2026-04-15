@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 import threading
 from collections import deque
 from pathlib import Path

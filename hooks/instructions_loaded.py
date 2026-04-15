@@ -30,7 +30,7 @@ def main() -> None:
     except Exception:
         payload = {}
 
-    from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present
+    from scripts.policy_config import REFLECTION_CACHE_TTL_MS, default_hook_state_root, pin_plugin_data_path_if_present
     pin_plugin_data_path_if_present()
     state_root = Path(default_hook_state_root())
 
@@ -41,10 +41,10 @@ def main() -> None:
         from scripts.state_tracker import load_tracker
         tracker = load_tracker(state_root / "state.json")
         span_id = tracker.state.get("active_span_id")
-        span_intent = tracker.state.get("active_span_intent")
-        if span_id and span_intent:
+        span_intent = tracker.state.get("active_span_intent") or ""
+        if span_id:
             parts.append(
-                f"[Span active: {span_intent}] "
+                f"[Span active: {span_intent or span_id}] "
                 "Do NOT call icc_span_open — call icc_span_close when done."
             )
     except Exception:
@@ -52,17 +52,24 @@ def main() -> None:
 
     # 2. Compact reflection (warm cache only — don't compute on every file load)
     try:
+        import os
         from scripts.span_tracker import SpanTracker
         from scripts.policy_config import default_exec_root
-        st = SpanTracker(state_root=Path(default_exec_root()))
-        reflection = st.format_reflection_with_cache(cache_ttl_ms=15 * 60 * 1000)
+        exec_root = Path(os.environ.get("EMERGE_STATE_ROOT", str(default_exec_root())))
+        st = SpanTracker(state_root=exec_root, hook_state_root=state_root)
+        reflection = st.format_reflection_with_cache(cache_ttl_ms=REFLECTION_CACHE_TTL_MS)
         if reflection:
             parts.append(reflection)
     except Exception:
         pass
 
-    # 3. Connector NOTES.md — if the file loaded is a .claude/rules/connector-*.md,
-    #    also inject the live NOTES.md in case it was updated since session start.
+    # 3. Connector NOTES.md — fires when CC lazily loads a .claude/rules/connector-*.md file.
+    #    session_start.py writes those files with a 400-char stub; the stub's only purpose
+    #    is to trigger this lazy load. Here we inject the full NOTES.md (up to 1200 chars)
+    #    as the actual operational payload. The asymmetry (400 stub vs 1200 here) is
+    #    intentional: the stub is a navigation hint, not a context payload.
+    #    InstructionsLoaded fires at most once per rules file per session, so token cost
+    #    is bounded to one injection per connector encountered during the session.
     try:
         file_path = str(payload.get("file_path", ""))
         if "/rules/connector-" in file_path and file_path.endswith(".md"):

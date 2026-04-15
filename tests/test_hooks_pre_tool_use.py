@@ -166,3 +166,126 @@ def test_icc_span_approve_invalid_intent_signature_blocks():
     reason = hook_out.get("permissionDecisionReason", "")
     assert "icc_span_approve" in reason
     assert "invalid" in reason
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for extracted per-tool validator functions
+# ---------------------------------------------------------------------------
+
+def test_validate_icc_exec_valid():
+    from hooks.pre_tool_use import _validate_icc_exec
+    assert _validate_icc_exec({"mode": "inline_code", "code": "x=1"}, "zwcad.read.state") is None
+
+def test_validate_icc_exec_missing_code():
+    from hooks.pre_tool_use import _validate_icc_exec
+    err = _validate_icc_exec({"mode": "inline_code", "code": ""}, "zwcad.read.state")
+    assert err is not None and "code" in err
+
+def test_validate_icc_exec_missing_sig():
+    from hooks.pre_tool_use import _validate_icc_exec
+    err = _validate_icc_exec({"mode": "inline_code", "code": "x=1"}, "")
+    assert err is not None and "intent_signature" in err
+
+def test_validate_icc_exec_two_part_sig():
+    from hooks.pre_tool_use import _validate_icc_exec
+    err = _validate_icc_exec({"mode": "inline_code", "code": "x=1"}, "zwcad.state")
+    assert err is not None and "2 parts" in err
+
+def test_validate_icc_exec_invalid_mode():
+    from hooks.pre_tool_use import _validate_icc_exec
+    err = _validate_icc_exec({"mode": "bad_mode", "code": "x=1"}, "zwcad.read.state")
+    assert err is not None and "mode" in err
+
+def test_validate_icc_exec_invalid_result_var():
+    from hooks.pre_tool_use import _validate_icc_exec
+    err = _validate_icc_exec({"mode": "inline_code", "code": "x=1", "result_var": "123bad"}, "zwcad.read.state")
+    assert err is not None and "result_var" in err
+
+def test_validate_icc_exec_valid_script_ref():
+    from hooks.pre_tool_use import _validate_icc_exec
+    assert _validate_icc_exec({"mode": "script_ref", "script_ref": "my_script.py"}, "zwcad.read.state") is None
+
+def test_validate_icc_reconcile_valid():
+    from hooks.pre_tool_use import _validate_icc_reconcile
+    assert _validate_icc_reconcile({"delta_id": "d-1", "outcome": "confirm"}) is None
+
+def test_validate_icc_reconcile_missing_delta_id():
+    from hooks.pre_tool_use import _validate_icc_reconcile
+    err = _validate_icc_reconcile({"delta_id": "", "outcome": "confirm"})
+    assert err is not None and "delta_id" in err
+
+def test_validate_icc_reconcile_bad_outcome():
+    from hooks.pre_tool_use import _validate_icc_reconcile
+    err = _validate_icc_reconcile({"delta_id": "d-1", "outcome": "wrong"})
+    assert err is not None and "outcome" in err
+
+def test_validate_icc_crystallize_valid():
+    from hooks.pre_tool_use import _validate_icc_crystallize
+    assert _validate_icc_crystallize(
+        {"connector": "zwcad", "pipeline_name": "my-pipe", "mode": "read"},
+        "zwcad.read.my-pipe",
+    ) is None
+
+def test_validate_icc_crystallize_unsafe_connector():
+    from hooks.pre_tool_use import _validate_icc_crystallize
+    err = _validate_icc_crystallize(
+        {"connector": "ZWCAD", "pipeline_name": "p", "mode": "read"}, "zwcad.read.p"
+    )
+    assert err is not None and "connector" in err
+
+def test_validate_icc_crystallize_path_traversal():
+    from hooks.pre_tool_use import _validate_icc_crystallize
+    err = _validate_icc_crystallize(
+        {"connector": "zwcad", "pipeline_name": "../evil", "mode": "read"}, "zwcad.read.x"
+    )
+    assert err is not None and "pipeline_name" in err
+
+def test_validate_icc_span_open_valid():
+    from hooks.pre_tool_use import _validate_icc_span_open
+    assert _validate_icc_span_open({}, "lark.read.get-doc") is None
+
+def test_validate_icc_span_open_missing_sig():
+    from hooks.pre_tool_use import _validate_icc_span_open
+    err = _validate_icc_span_open({}, "")
+    assert err is not None and "intent_signature" in err
+
+def test_validate_icc_span_close_valid():
+    from hooks.pre_tool_use import _validate_icc_span_close
+    for outcome in ("success", "failure", "aborted"):
+        assert _validate_icc_span_close({"outcome": outcome}) is None
+
+def test_validate_icc_span_close_bad_outcome():
+    from hooks.pre_tool_use import _validate_icc_span_close
+    err = _validate_icc_span_close({"outcome": "done"})
+    assert err is not None and "outcome" in err
+
+def test_validate_icc_span_approve_valid():
+    from hooks.pre_tool_use import _validate_icc_span_approve
+    assert _validate_icc_span_approve({}, "zwcad.write.apply") is None
+
+def test_validate_icc_span_approve_missing_sig():
+    from hooks.pre_tool_use import _validate_icc_span_approve
+    err = _validate_icc_span_approve({}, "")
+    assert err is not None and "intent_signature" in err
+
+def test_validate_icc_goal_rollback_valid():
+    from hooks.pre_tool_use import _validate_icc_goal_rollback
+    assert _validate_icc_goal_rollback({"target_event_id": "evt-abc"}) is None
+
+def test_validate_icc_goal_rollback_missing():
+    from hooks.pre_tool_use import _validate_icc_goal_rollback
+    err = _validate_icc_goal_rollback({})
+    assert err is not None and "target_event_id" in err
+
+def test_normalize_sig_no_change():
+    from hooks.pre_tool_use import _normalize_sig
+    sig, frm, to = _normalize_sig("zwcad.read.state")
+    assert sig == "zwcad.read.state"
+    assert frm is None and to is None
+
+def test_normalize_sig_lowercases():
+    from hooks.pre_tool_use import _normalize_sig
+    sig, frm, to = _normalize_sig("ZWCAD.READ.State")
+    assert sig == "zwcad.read.state"
+    assert frm == "ZWCAD.READ.State"
+    assert to == "zwcad.read.state"
