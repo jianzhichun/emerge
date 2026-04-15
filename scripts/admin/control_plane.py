@@ -4,6 +4,7 @@ All cmd_control_plane_* functions live here.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -534,6 +535,73 @@ def cmd_control_plane_monitors(state_root=None) -> dict:
         }
     except (OSError, json.JSONDecodeError):
         return {"runners": [], "team_active": False}
+
+
+_PROFILE_RE = re.compile(r"^[a-zA-Z0-9_.\-]{1,64}$")
+
+
+def cmd_control_plane_runner_events(profile: str, limit: int = 20) -> dict:
+    """Return per-runner events, activity buckets, and today's stats."""
+    if not profile or not _PROFILE_RE.match(profile):
+        return {"ok": False, "error": "invalid profile"}
+    limit = min(int(limit), 100)
+    repl_root = Path(os.environ.get("EMERGE_REPL_ROOT", "") or _resolve_repl_root())
+    events_path = repl_root / f"events-{profile}.jsonl"
+    _empty: dict = {"ok": True, "events": [], "activity": [0] * 10, "today_events": 0, "today_alerts": 0}
+    if not events_path.exists():
+        return _empty
+    try:
+        raw = events_path.read_text(encoding="utf-8")
+    except OSError:
+        return _empty
+
+    lines = raw.splitlines()
+    # Parse all lines (needed for today_events/today_alerts and activity)
+    all_parsed = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            all_parsed.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+    now_ms = int(time.time() * 1000)
+    # Activity: divide last 3600s into 10 buckets of 360s each
+    bucket_ms = 360_000
+    window_start_ms = now_ms - 3_600_000
+    activity = [0] * 10
+
+    today_start_ms = int(
+        datetime.datetime.combine(
+            datetime.datetime.now(datetime.timezone.utc).date(),
+            datetime.time.min,
+            tzinfo=datetime.timezone.utc,
+        ).timestamp() * 1000
+    )
+    today_events = 0
+    today_alerts = 0
+    for ev in all_parsed:
+        ts = ev.get("ts_ms", 0)
+        if ts >= today_start_ms:
+            today_events += 1
+            if ev.get("type") == "pattern_alert":
+                today_alerts += 1
+        # Activity buckets
+        if ts >= window_start_ms:
+            idx = min(int((ts - window_start_ms) // bucket_ms), 9)
+            activity[idx] += 1
+
+    # Return last `limit` events newest-first
+    events_sorted = sorted(all_parsed, key=lambda e: e.get("ts_ms", 0), reverse=True)
+    return {
+        "ok": True,
+        "events": events_sorted[:limit],
+        "activity": activity,
+        "today_events": today_events,
+        "today_alerts": today_alerts,
+    }
 
 
 # ---------------------------------------------------------------------------
