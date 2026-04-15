@@ -4,6 +4,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -138,13 +139,13 @@ _SIG_TOOLS: frozenset[str] = frozenset({
     "__icc_exec", "__icc_crystallize", "__icc_span_open", "__icc_span_approve",
 })
 
-_SIG_VALIDATORS: dict[str, object] = {
+_SIG_VALIDATORS: dict[str, Callable[[dict, str], str | None]] = {
     "__icc_exec":         _validate_icc_exec,
     "__icc_crystallize":  _validate_icc_crystallize,
     "__icc_span_open":    _validate_icc_span_open,
     "__icc_span_approve": _validate_icc_span_approve,
 }
-_PLAIN_VALIDATORS: dict[str, object] = {
+_PLAIN_VALIDATORS: dict[str, Callable[[dict], str | None]] = {
     "__icc_reconcile":     _validate_icc_reconcile,
     "__icc_span_close":    _validate_icc_span_close,
     "__icc_goal_rollback": _validate_icc_goal_rollback,
@@ -245,9 +246,9 @@ def main() -> None:
 
     error_msg: str | None = None
     if suffix in _SIG_VALIDATORS:
-        error_msg = _SIG_VALIDATORS[suffix](arguments, sig)  # type: ignore[operator]
+        error_msg = _SIG_VALIDATORS[suffix](arguments, sig)
     elif suffix in _PLAIN_VALIDATORS:
-        error_msg = _PLAIN_VALIDATORS[suffix](arguments)  # type: ignore[operator]
+        error_msg = _PLAIN_VALIDATORS[suffix](arguments)
 
     if error_msg is not None:
         sig_to = None

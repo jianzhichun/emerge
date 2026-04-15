@@ -100,7 +100,7 @@ def _record_span_action(
         with _buf.open("a", encoding="utf-8") as _f:
             fcntl.flock(_f, fcntl.LOCK_EX)
             try:
-                _f.write(json.dumps(_action, ensure_ascii=True) + "\n")
+                _f.write(json.dumps(_action, ensure_ascii=False) + "\n")
             finally:
                 fcntl.flock(_f, fcntl.LOCK_UN)
     except Exception:

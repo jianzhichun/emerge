@@ -56,7 +56,7 @@ def main() -> None:
             "ts_ms": int(time.time() * 1000),
         }
         with (wal_dir / "spans.jsonl").open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=True) + "\n")
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
         pass
 

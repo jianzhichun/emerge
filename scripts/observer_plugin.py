@@ -74,6 +74,9 @@ class _GenericFallback(ObserverPlugin):
         return {"ok": False, "error": "generic observer cannot execute — crystallize a vertical adapter first"}
 
 
+_SAFE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
 class AdapterRegistry:
     """Loads ObserverPlugin instances: built-in generic observers + crystallized vertical adapters."""
 
@@ -92,14 +95,12 @@ class AdapterRegistry:
                         names.append(d.name)
         return [{"name": n} for n in names]
 
-    _SAFE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-
     def get_plugin(self, name: str) -> ObserverPlugin:
         if name in self._cache:
             return self._cache[name]
 
         # Reject names that could escape the adapter/observer directories.
-        if not self._SAFE_NAME_RE.match(name):
+        if not _SAFE_NAME_RE.match(name):
             fallback = _GenericFallback()
             self._cache[name] = fallback
             return fallback

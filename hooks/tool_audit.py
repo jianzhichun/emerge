@@ -150,7 +150,7 @@ def main() -> None:
         session_dir.mkdir(parents=True, exist_ok=True)
         events_path = session_dir / "tool-events.jsonl"
         with events_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=True) + "\n")
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
         truncate_jsonl_if_needed(events_path, max_lines=5_000)
     except Exception:
         pass
@@ -183,7 +183,7 @@ def main() -> None:
                 with (state_root / "active-span-actions.jsonl").open("a", encoding="utf-8") as f:
                     fcntl.flock(f, fcntl.LOCK_EX)
                     try:
-                        f.write(json.dumps(action, ensure_ascii=True) + "\n")
+                        f.write(json.dumps(action, ensure_ascii=False) + "\n")
                     finally:
                         fcntl.flock(f, fcntl.LOCK_UN)
             except Exception:

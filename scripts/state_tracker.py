@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from scripts.policy_config import atomic_write_json
+
 
 LEVEL_CORE_CRITICAL = "core_critical"
 LEVEL_CORE_SECONDARY = "core_secondary"
@@ -501,5 +503,4 @@ def load_tracker(path: Path) -> StateTracker:
 
 
 def save_tracker(path: Path, tracker: StateTracker) -> None:
-    from scripts.policy_config import atomic_write_json
     atomic_write_json(path, _normalize_state(tracker.to_dict()))
