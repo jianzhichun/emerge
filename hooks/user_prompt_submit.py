@@ -104,8 +104,9 @@ def main() -> None:
         if not _skip_reminder:
             reminder = (
                 "[Span] No active span. "
-                "If this turn involves tool use, open one first: "
-                'icc_span_open(intent_signature="connector.mode.name").'
+                "If this turn involves repeatable tool use, open one first: "
+                "icc_span_open(intent_signature='<connector>.(read|write).<name>') "
+                "e.g. 'lark.read.get-doc'."
             )
             context_text = reminder + "\n\n" + context_text
     if _mutated:
