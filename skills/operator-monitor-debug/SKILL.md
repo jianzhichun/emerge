@@ -14,10 +14,17 @@ curl http://<runner-host>:8787/health
 # Expected: {"ok": true, "uptime_s": N}
 ```
 
-### 2. Is EMERGE_OPERATOR_MONITOR enabled?
+### 2. Is OperatorMonitor running?
 
-Check that `EMERGE_OPERATOR_MONITOR=1` is set in the daemon environment.
-The daemon does NOT start `OperatorMonitor` unless this var is set.
+`OperatorMonitor` auto-starts when a runner is configured (`runner-map.json` has
+at least one entry) **OR** when `EMERGE_OPERATOR_MONITOR=1` is set in the daemon
+environment. Check which condition applies:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" runner-status --pretty
+# If runners are listed → OperatorMonitor should have auto-started.
+# If no runners are listed and EMERGE_OPERATOR_MONITOR=1 is absent → it won't start.
+```
 
 ### 3. Are events reaching the EventBus?
 
@@ -57,15 +64,19 @@ Check `EMERGE_MONITOR_MACHINES` matches the profile names configured in the runn
 
 ### 6. Is the pattern alert reaching CC?
 
-Pattern alerts are delivered via `watch_patterns.py` (Monitor tool, persistent).
-When a pattern is detected, the daemon writes `pattern-alerts.json` to the state root.
-The Monitor script polls this file, prints a formatted alert to stdout, and renames it
-to `.processed.json`. CC streams stdout into the conversation automatically.
+Pattern alerts are delivered via `watch_emerge.py --runner-profile <profile>` (Monitor
+tool, persistent). When a pattern fires, `DaemonHTTPServer._on_runner_event` writes a
+`pattern_alert` entry directly to `events-{profile}.jsonl`. The Monitor script tails
+this file and prints formatted alerts to stdout; CC streams stdout into the conversation.
 
 Check:
-1. Is `watch_patterns.py` running as a persistent Monitor? (launched by `/emerge:cockpit` step 4)
-2. Does `pattern-alerts.json` exist in the state root? If so, the daemon wrote it but the Monitor hasn't consumed it.
-3. Check Monitor logs for the formatted alert output.
+1. Is `watch_emerge.py --runner-profile <profile>` running as a persistent Monitor?
+   (launched by `/emerge:cockpit` step 4 via the `watch_patterns.py` shim)
+2. Does `~/.emerge/repl/events-{profile}.jsonl` contain recent `pattern_alert` entries?
+   ```bash
+   grep '"type": "pattern_alert"' ~/.emerge/repl/events-<profile>.jsonl | tail -5
+   ```
+3. If entries exist but CC didn't see them: the Monitor may have stopped — restart it.
 
 ### 7. Common fixes
 
@@ -74,5 +85,5 @@ Check:
 | EventBus empty | Verify `ObserverPlugin.start()` called; check OS accessibility permissions |
 | PatternDetector never fires | Lower `FREQ_THRESHOLD` or check event `session_role` field |
 | Elicitation never appears | Verify daemon has elicitation capability in MCP handshake; check thread is non-main |
-| Pattern alert not delivered | Verify `watch_patterns.py` Monitor is running; check `pattern-alerts.json` exists in state root |
-| OperatorMonitor not starting | Confirm `EMERGE_OPERATOR_MONITOR=1` in daemon env, not runner env |
+| Pattern alert not delivered | Verify `watch_emerge.py --runner-profile <p>` Monitor is running; check `events-{profile}.jsonl` for `pattern_alert` entries |
+| OperatorMonitor not starting | Confirm runner is configured (`runner-status --pretty`) OR `EMERGE_OPERATOR_MONITOR=1` in daemon env |

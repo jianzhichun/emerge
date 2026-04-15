@@ -123,7 +123,7 @@ Run, in order:
 
 Initialization is complete only when:
 
-- read and write calls succeed through `icc_read/icc_write`
+- read and write `icc_exec` calls succeed (using the connector's `intent_signature`)
 - policy status includes the new pipeline key (shape: `pipeline::<connector>.<mode>.<pipeline>`)
 - when remote mode is used, at least one call is confirmed through runner dispatch
 - tests and lint pass.
@@ -136,14 +136,12 @@ Do not treat `PipelineEngine` unit tests alone as sufficient proof.
 
 For RED and GREEN phases, tests must exercise MCP-facing tool paths:
 
-- `icc_exec`
-- `icc_read`
-- `icc_write`
+- `icc_exec` (primary tool — `icc_read`/`icc_write` are deprecated and removed from the MCP schema)
 
 Minimum expectation:
 
-1. At least one failing-then-passing test through `EmergeDaemon.call_tool(...)` or JSON-RPC `tools/call` for each path used by the init flow.
-2. At least one integration assertion that policy registry changes after `icc_read/icc_write` calls.
+1. At least one failing-then-passing test through `EmergeDaemon.call_tool(...)` or JSON-RPC `tools/call` for each intent used by the init flow.
+2. At least one integration assertion that policy registry changes after `icc_exec` calls.
 3. If flywheel bridge is used, include a failing-then-passing test for bridge key updates (`flywheel::...`).
 
 ## Quick Reference
@@ -169,7 +167,7 @@ Minimum expectation:
 - "I can skip baseline and start implementation."
 - "I will hardcode environment assumptions from my local setup."
 - "I can declare success without verification output."
-- "I added files but did not run `icc_read/icc_write` integration tests."
+- "I added files but did not run `icc_exec` integration tests."
 
 Any red flag means stop and return to RED.
 

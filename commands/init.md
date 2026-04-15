@@ -27,6 +27,6 @@ Execution rules:
   - next recommended action
 
 Status rules:
-- `init_ok`: runner reachable (if needed), assets created, `icc_read`/`icc_write` smoke checks pass.
+- `init_ok`: runner reachable (if needed), assets created, `icc_exec` smoke checks pass.
 - `degraded`: partial success (assets created but verification failed or policy degraded).
 - `blocked`: missing prerequisites (runner unreachable, missing host context, or required toolchain absent).
