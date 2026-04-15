@@ -5,6 +5,7 @@ import json
 import logging
 import logging.handlers
 import os
+import queue
 import sys
 import threading
 import time
@@ -68,6 +69,14 @@ class RunnerExecutor:
             self._runner_profile = str(data.get("runner_profile", "")).strip()
         except (OSError, ValueError):
             pass
+        # Forward queue: one background worker avoids spawning one thread per event.
+        self._forward_q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1024)
+        self._forward_worker = threading.Thread(
+            target=self._forward_worker_loop,
+            daemon=True,
+            name="RunnerEventForwarder",
+        )
+        self._forward_worker.start()
 
     def write_operator_event(self, event: dict) -> None:
         machine_id = str(event.get("machine_id", "")).strip()
@@ -81,11 +90,19 @@ class RunnerExecutor:
 
         # Forward to team lead daemon (fire-and-forget, non-blocking)
         if self._team_lead_url and self._runner_profile:
-            threading.Thread(
-                target=self._forward_event_to_daemon,
-                args=(event,),
-                daemon=True,
-            ).start()
+            try:
+                self._forward_q.put_nowait(event)
+            except queue.Full:
+                logging.warning("runner forward queue full — dropping event")
+
+    def _forward_worker_loop(self) -> None:
+        while True:
+            event = self._forward_q.get()
+            try:
+                self._forward_event_to_daemon(event)
+            except Exception:
+                # Fire-and-forget path should never crash the worker.
+                pass
 
     def _forward_event_to_daemon(self, event: dict) -> bool:
         """Forward event to team lead daemon. Best-effort, never blocks operator.
@@ -141,9 +158,9 @@ class RunnerExecutor:
 
         No-op if:
         - pystray or Pillow are not installed (logs a warning), or
-        - no team-lead URL is configured (tray would be non-functional).
+        - team-lead URL / runner profile is missing (tray would be non-functional).
         """
-        if not self._team_lead_url:
+        if not (self._team_lead_url and self._runner_profile):
             return
         try:
             import pystray
@@ -446,30 +463,47 @@ class RunnerSSEClient:
                 req = _ur.Request(url, headers={"Accept": "text/event-stream"})
                 with _ur.urlopen(req, timeout=None) as resp:
                     backoff = 1.0
-                    buf = ""
-                    while not self._stop.is_set():
-                        chunk = resp.read(1)
-                        if not chunk:
-                            break
-                        buf += chunk.decode("utf-8", errors="replace")
-                        if "\n\n" in buf:
-                            parts = buf.split("\n\n")
-                            buf = parts[-1]
-                            for part in parts[:-1]:
-                                for line in part.splitlines():
-                                    if line.startswith("data: "):
-                                        try:
-                                            cmd = json.loads(line[6:])
-                                            threading.Thread(
-                                                target=self._dispatch_command,
-                                                args=(cmd,), daemon=True
-                                            ).start()
-                                        except json.JSONDecodeError:
-                                            pass
+                    self._consume_sse_stream(resp)
             except (_ue.URLError, OSError):
                 if not self._stop.is_set():
                     self._stop.wait(timeout=min(backoff, 30))
                     backoff = min(backoff * 2, 30)
+
+    def _consume_sse_stream(self, resp: Any) -> None:
+        """Consume one SSE response stream using line-based framing."""
+        event_lines: list[str] = []
+        while not self._stop.is_set():
+            raw = resp.readline()
+            if not raw:
+                break
+            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+            if not line:
+                self._handle_sse_event(event_lines)
+                event_lines.clear()
+                continue
+            if line.startswith(":"):
+                continue  # comment / keepalive
+            event_lines.append(line)
+
+    def _handle_sse_event(self, event_lines: list[str]) -> None:
+        if not event_lines:
+            return
+        data_parts: list[str] = []
+        for line in event_lines:
+            if line.startswith("data:"):
+                data_parts.append(line[5:].lstrip())
+        if not data_parts:
+            return
+        payload = "\n".join(data_parts)
+        try:
+            cmd = json.loads(payload)
+        except json.JSONDecodeError:
+            return
+        threading.Thread(
+            target=self._dispatch_command,
+            args=(cmd,),
+            daemon=True,
+        ).start()
 
     def _dispatch_command(self, cmd: dict) -> None:
         cmd_type = cmd.get("type")

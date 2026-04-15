@@ -15,6 +15,15 @@ _KEEPALIVE_INTERVAL_S = 20.0
 _tl = threading.local()  # _tl.session_id: str | None — set per HTTP request
 
 
+def _validate_machine_id(machine_id: str) -> None:
+    """Reject machine_id values that could escape the event root via path traversal."""
+    if not machine_id or machine_id != machine_id.strip():
+        raise ValueError("machine_id is required and must not have leading/trailing whitespace")
+    p = Path(machine_id)
+    if p.name != machine_id or ".." in machine_id or "/" in machine_id or "\\" in machine_id:
+        raise ValueError(f"Invalid machine_id: {machine_id!r}")
+
+
 def get_current_session_id() -> str | None:
     """Return the session_id of the currently-executing HTTP request thread."""
     return getattr(_tl, "session_id", None)
@@ -168,6 +177,7 @@ class DaemonHTTPServer:
         machine_id = str(payload.get("machine_id", "")).strip()
         ts_ms = int(time.time() * 1000)
         if machine_id:
+            _validate_machine_id(machine_id)
             machine_dir = self._event_root / machine_id
             machine_dir.mkdir(parents=True, exist_ok=True)
             with (machine_dir / "events.jsonl").open("a", encoding="utf-8") as f:

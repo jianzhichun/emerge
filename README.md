@@ -3,7 +3,7 @@
 ![Version](https://img.shields.io/badge/version-v0.3.69-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-628%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-635%20passing-brightgreen?logo=pytest)
 
 **Emerge** solves a core problem: AI operators repeat the same work but do not learn from it, so every session re-reasons from scratch. It uses a **dual flywheel** to crystallize repeated work into deterministic pipelines: a **forward flywheel** (`icc_exec`/`icc_span_open` tracking → policy promotion explore→canary→stable → auto-crystallized `.py+.yaml` pipelines → zero-LLM execution), and a **reverse flywheel** (`OperatorMonitor` observes human operators → `PatternDetector` detects repetition → elicitation captures intent → AI takes over).
 
@@ -353,7 +353,20 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 python -m pytest tests -q
 ```
 
-Current baseline: **628** tests passing.
+Current baseline: **635** tests passing.
+
+### Runner SSE parser benchmark (optional)
+
+The remote runner consumes daemon commands over `GET /runner/sse` (`RunnerSSEClient` in `scripts/remote_runner.py`). Parsing uses **line-based SSE framing** (`readline()` + blank-line event boundaries) instead of **byte-by-byte** reads, which lowers CPU overhead when the stream is busy.
+
+What the tests assert (no machine-specific timings — run locally to measure):
+
+- **Small vs large JSON payloads** — both the legacy simulation and the current parser must decode the same number of events; the line-based path is guarded against large regressions versus the byte-by-byte simulation on the same synthetic stream (see `tests/test_runner_sse_benchmark.py` for the ratio threshold).
+- **Multiline `data:`** — SSE allows a single logical event to span several `data:` lines joined with `\n`; the current parser handles that case. The legacy byte simulation in tests only mirrors single-line `data:` JSON, so it is not expected to count those events.
+
+```bash
+python -m pytest tests/test_runner_sse_benchmark.py -q
+```
 
 Documentation release checklist: `docs/doc-consistency-checklist.md`
 

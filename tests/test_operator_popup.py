@@ -123,6 +123,49 @@ def test_dispatch_command_non_toast_posts_result():
     assert post_result_calls == ["xyz"]
 
 
+def test_handle_sse_event_dispatches_data_payload(monkeypatch):
+    from scripts.remote_runner import RunnerSSEClient
+    import scripts.remote_runner as rr
+
+    class _ImmediateThread:
+        def __init__(self, target, args=(), daemon=True, name=None):
+            self._target = target
+            self._args = args
+        def start(self):
+            self._target(*self._args)
+
+    monkeypatch.setattr(rr.threading, "Thread", _ImmediateThread)
+    dispatched: list = []
+    client = RunnerSSEClient.__new__(RunnerSSEClient)
+    client._dispatch_command = lambda cmd: dispatched.append(cmd)
+    client._handle_sse_event([
+        "event: notify",
+        'data: {"type":"notify","popup_id":"abc","ui_spec":{"type":"toast","body":"x"}}',
+    ])
+    assert len(dispatched) == 1
+    assert dispatched[0]["type"] == "notify"
+    assert dispatched[0]["popup_id"] == "abc"
+
+
+def test_handle_sse_event_ignores_invalid_json(monkeypatch):
+    from scripts.remote_runner import RunnerSSEClient
+    import scripts.remote_runner as rr
+
+    class _ImmediateThread:
+        def __init__(self, target, args=(), daemon=True, name=None):
+            self._target = target
+            self._args = args
+        def start(self):
+            self._target(*self._args)
+
+    monkeypatch.setattr(rr.threading, "Thread", _ImmediateThread)
+    dispatched: list = []
+    client = RunnerSSEClient.__new__(RunnerSSEClient)
+    client._dispatch_command = lambda cmd: dispatched.append(cmd)
+    client._handle_sse_event(["data: {bad-json"])
+    assert dispatched == []
+
+
 def test_show_input_bubble_calls_on_submit_with_stripped_text(monkeypatch):
     """show_input_bubble calls on_submit(text) with stripped non-empty text."""
     import scripts.operator_popup as popup_mod

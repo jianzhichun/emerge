@@ -1,6 +1,6 @@
 # tests/test_daemon_http.py
 from __future__ import annotations
-import json, threading, time, urllib.request
+import json, threading, time, urllib.request, urllib.error
 import pytest
 from pathlib import Path
 
@@ -153,6 +153,28 @@ def test_runner_push_pattern_alert_written_to_events_jsonl(tmp_path):
     assert alert["stage"] == "explore"
     assert "intent_signature" in alert
     assert alert["meta"]["occurrences"] >= 3
+    srv.stop()
+
+
+def test_runner_event_rejects_invalid_machine_id(tmp_path):
+    """Path-traversal-like machine_id should be rejected with 400."""
+    srv = _make_server_with_daemon(tmp_path)
+    bad = {
+        "runner_profile": "pbad",
+        "machine_id": "../escape",
+        "type": "op_event",
+        "ts_ms": int(time.time() * 1000),
+    }
+    body = json.dumps(bad).encode()
+    req = urllib.request.Request(
+        f"http://localhost:{srv.port}/runner/event",
+        data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(req, timeout=5)
+    assert exc.value.code == 400
+    assert not (tmp_path / "escape" / "events.jsonl").exists()
     srv.stop()
 
 

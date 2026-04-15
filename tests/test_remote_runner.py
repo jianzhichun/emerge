@@ -138,6 +138,7 @@ def test_start_tray_skips_when_pystray_unavailable(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "pystray", None)
     executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
     executor._team_lead_url = "http://localhost:8789"
+    executor._runner_profile = "runner-1"
     executor._start_tray()  # must not raise
 
 
@@ -150,6 +151,7 @@ def test_start_tray_skips_when_pillow_unavailable(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "PIL.ImageDraw", None)
     executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
     executor._team_lead_url = "http://localhost:8789"
+    executor._runner_profile = "runner-1"
     executor._start_tray()  # must not raise
 
 
@@ -196,5 +198,14 @@ def test_start_tray_runs_icon_when_pystray_available(tmp_path, monkeypatch):
 
     executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
     executor._team_lead_url = "http://localhost:8789"
+    executor._runner_profile = "runner-1"
     executor._start_tray()
     assert run_detached_called == [True]
+
+
+def test_start_tray_skips_when_runner_profile_missing(tmp_path):
+    """_start_tray must return silently when runner profile is missing."""
+    executor = RunnerExecutor(root=ROOT, state_root=tmp_path / "state")
+    executor._team_lead_url = "http://localhost:8789"
+    executor._runner_profile = ""
+    executor._start_tray()  # must not raise
