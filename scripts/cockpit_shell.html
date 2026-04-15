@@ -1235,6 +1235,8 @@ function renderTabs() {
 
 let _monitorsPollingInterval = null;
 let _monitorsHasContent = false;
+let _expandedRunners = new Set();
+let _recentEventsCache = {};
 
 function _startMonitorsPolling() {
   if (_monitorsPollingInterval) return;
@@ -2114,42 +2116,236 @@ async function renderMonitorsTab() {
     const data = await resp.json();
     const runners = data.runners || [];
     let html = '<div style="padding:16px">';
+    html += _renderTeamStatusBar(runners);
     if (!runners.length) {
-      html += '<div style="color:#8b949e;font-size:12px;margin-bottom:12px">No runners connected yet.</div></div>';
-      panel.innerHTML = html;
-      _monitorsHasContent = true;
-      return;
+      html += `<div style="text-align:center;padding:40px;color:#484f58">
+        <div>No runners connected.</div>
+        <div style="font-size:11px;margin-top:8px">Run the install script on the target machine — it connects automatically.</div>
+      </div>`;
+    } else {
+      html += _renderRunnerCards(runners);
     }
-    html += `<div style="margin-bottom:12px;font-size:12px;color:#8b949e">${runners.length} runner(s) connected</div>`;
-    html += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
-    html += '<thead><tr>';
-    for (const h of ['Runner', 'Machine', 'Connected', 'Last Event', 'Last Alert']) {
-      html += `<th style="text-align:left;padding:6px 10px;background:#161b22;border-bottom:1px solid #30363d;color:#8b949e;font-size:10px;text-transform:uppercase">${h}</th>`;
-    }
-    html += '</tr></thead><tbody>';
-    const now = Date.now();
-    for (const r of runners) {
-      const connectedSec = r.connected_at_ms ? Math.round((now - r.connected_at_ms) / 1000) : 0;
-      const lastEventSec = r.last_event_ts_ms ? Math.round((now - r.last_event_ts_ms) / 1000) : null;
-      const alertBadge = r.last_alert
-        ? `<span style="background:#0d2000;color:#3fb950;border:1px solid #2a4a2a;padding:1px 6px;border-radius:3px;font-size:10px">${escHtml(r.last_alert.stage)}: ${escHtml(r.last_alert.intent_signature || '')}</span>`
-        : '<span style="color:#8b949e">none</span>';
-      html += `<tr>
-        <td style="padding:6px 10px;border-bottom:1px solid #21262d">
-          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${r.connected ? '#3fb950' : '#6e7681'};margin-right:6px"></span>
-          ${escHtml(r.runner_profile)}
-        </td>
-        <td style="padding:6px 10px;border-bottom:1px solid #21262d">${escHtml(r.machine_id || '')}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #21262d">${connectedSec}s ago</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #21262d">${lastEventSec !== null ? lastEventSec + 's ago' : '—'}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #21262d">${alertBadge}</td>
-      </tr>`;
-    }
-    html += '</tbody></table></div>';
+    html += '</div>';
     panel.innerHTML = html;
     _monitorsHasContent = true;
+    // Refresh expanded feeds
+    for (const profile of _expandedRunners) {
+      _loadRunnerFeed(profile);
+    }
   } catch (e) {
     panel.innerHTML = `<div style="padding:16px;color:#f85149">Error loading monitors: ${escHtml(String(e))}</div>`;
+  }
+}
+
+function _renderTeamStatusBar(runners) {
+  if (!runners.length) {
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;padding:8px 12px;background:#161b22;border:1px solid #21262d;border-radius:6px">
+      <span style="width:6px;height:6px;border-radius:50%;background:#6e7681;display:inline-block"></span>
+      <span style="font-size:11px;color:#8b949e">No runners connected</span>
+    </div>`;
+  }
+  return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;padding:8px 12px;background:#161b22;border:1px solid #21262d;border-radius:6px">
+    <span style="width:6px;height:6px;border-radius:50%;background:#3fb950;display:inline-block"></span>
+    <span style="font-size:11px;color:#8b949e">Agents team active</span>
+    <span style="font-size:11px;color:#3fb950;font-weight:600">${runners.length} runner${runners.length === 1 ? '' : 's'}</span>
+    <span style="margin-left:auto;font-size:10px;color:#8b949e">updated just now</span>
+  </div>`;
+}
+
+function _renderRunnerCards(runners) {
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px">
+    ${runners.map(r => _renderRunnerCard(r)).join('')}
+  </div>`;
+}
+
+function _renderRunnerCard(runner) {
+  const profile = runner.runner_profile || '';
+  const safeProfile = escHtml(profile);
+  const now = Date.now();
+  const connectedSec = runner.connected_at_ms ? Math.round((now - runner.connected_at_ms) / 1000) : 0;
+  const connectedAge = connectedSec < 3600
+    ? (connectedSec < 60 ? connectedSec + 's ago' : Math.round(connectedSec / 60) + 'm ago')
+    : Math.round(connectedSec / 3600) + 'h ago';
+  const lastEventSec = runner.last_event_ts_ms ? Math.round((now - runner.last_event_ts_ms) / 1000) : null;
+  const lastEventAge = lastEventSec === null ? '—'
+    : lastEventSec < 60 ? lastEventSec + 's ago'
+    : lastEventSec < 3600 ? Math.round(lastEventSec / 60) + 'm ago'
+    : Math.round(lastEventSec / 3600) + 'h ago';
+  const isConnected = runner.connected !== false;
+  const borderColor = isConnected ? '#238636' : '#30363d';
+  const dotStyle = isConnected
+    ? 'background:#3fb950;box-shadow:0 0 6px #3fb950aa'
+    : 'background:#6e7681';
+
+  let alertBadge;
+  if (runner.last_alert) {
+    const stage = escHtml(runner.last_alert.stage || '');
+    const intent = escHtml(runner.last_alert.intent_signature || '');
+    alertBadge = `<span style="background:#1c2813;border:1px solid #2a4a2a;color:#3fb950;font-size:10px;padding:3px 10px;border-radius:10px">${stage}: ${intent}</span>`;
+  } else {
+    alertBadge = `<span style="color:#484f58;font-size:10px">no alerts</span>`;
+  }
+
+  const cached = _recentEventsCache[profile] || [];
+  const recentHtml = cached.length
+    ? cached.map(ev => _renderEventRow(ev, now)).join('')
+    : '<div style="font-size:10px;color:#484f58">—</div>';
+
+  const isExpanded = _expandedRunners.has(profile);
+  const feedToggleLabel = isExpanded ? '▲ Event feed' : '▼ Event feed';
+  const feedToggleColor = isExpanded ? '#58a6ff' : '#8b949e';
+
+  return `<div style="background:#161b22;border:1px solid ${borderColor};border-radius:8px;overflow:hidden">
+    <div style="padding:12px 14px;border-bottom:1px solid #21262d">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="width:8px;height:8px;border-radius:50%;${dotStyle};display:inline-block"></span>
+          <span style="color:#e6edf3;font-size:13px;font-weight:700;font-family:monospace">${safeProfile}</span>
+        </div>
+        <span style="color:#8b949e;font-size:10px">${connectedAge}</span>
+      </div>
+      <div id="sparkline-${profile}" style="display:flex;gap:2px;height:16px;align-items:flex-end">
+        <span style="font-size:9px;color:#484f58;align-self:center">1h activity</span>
+      </div>
+    </div>
+    <div style="padding:12px 14px">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
+        <div>
+          <div style="font-size:9px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Machine</div>
+          <div style="font-size:11px;color:#c9d1d9;font-family:monospace">${escHtml(runner.machine_id || '—')}</div>
+        </div>
+        <div>
+          <div style="font-size:9px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Last Event</div>
+          <div style="font-size:11px;color:#c9d1d9">${lastEventAge}</div>
+        </div>
+        <div>
+          <div style="font-size:9px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Today</div>
+          <div id="today-stats-${profile}" style="font-size:11px;color:#c9d1d9">—</div>
+        </div>
+      </div>
+      <div style="margin-bottom:10px">${alertBadge}</div>
+      <div style="background:#0d1117;border-radius:4px;padding:8px 10px;margin-bottom:8px">
+        <div style="font-size:9px;color:#484f58;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Recent</div>
+        <div id="recent-${profile}">${recentHtml}</div>
+      </div>
+    </div>
+    <div style="border-top:1px solid #21262d;padding:8px 14px;cursor:pointer" onclick="_toggleRunnerFeed(this.dataset.profile)" data-profile="${safeProfile}">
+      <span id="feed-toggle-${profile}" style="color:${feedToggleColor};font-size:10px">${feedToggleLabel}</span>
+    </div>
+    <div id="feed-${profile}" style="display:${isExpanded ? 'block' : 'none'}">Loading…</div>
+  </div>`;
+}
+
+function _renderEventRow(ev, now) {
+  now = now || Date.now();
+  const ageSec = ev.ts_ms ? Math.round((now - ev.ts_ms) / 1000) : 0;
+  const age = ageSec < 60 ? ageSec + 's'
+    : ageSec < 3600 ? Math.round(ageSec / 60) + 'm'
+    : Math.round(ageSec / 3600) + 'h';
+  const type = ev.type || 'event';
+  let badgeStyle, content;
+  if (type === 'pattern_alert') {
+    badgeStyle = 'background:#2d1b00;color:#f0883e;padding:0 5px;border-radius:2px;font-size:9px;flex-shrink:0';
+    content = `<span style="color:#8b949e">${escHtml(ev.intent_signature || '')} · ${escHtml(ev.stage || '')}</span>`;
+  } else if (type === 'operator_message') {
+    badgeStyle = 'background:#0d2233;color:#58a6ff;padding:0 5px;border-radius:2px;font-size:9px;border:1px solid #1f6feb33;flex-shrink:0';
+    content = `<span style="color:#58a6ff">"${escHtml(ev.text || '')}"</span>`;
+  } else if (type === 'runner_online') {
+    badgeStyle = 'background:#1c2813;color:#3fb950;padding:0 5px;border-radius:2px;font-size:9px;border:1px solid #2a4a2a;flex-shrink:0';
+    content = `<span style="color:#484f58">runner connected · ${escHtml(ev.machine_id || '')}</span>`;
+  } else {
+    badgeStyle = 'background:#161b22;color:#8b949e;padding:0 5px;border-radius:2px;font-size:9px;border:1px solid #30363d;flex-shrink:0';
+    content = `<span style="color:#484f58">${escHtml(type)}</span>`;
+  }
+  const label = type === 'pattern_alert' ? 'pattern'
+    : type === 'operator_message' ? 'operator'
+    : type === 'runner_online' ? 'online'
+    : 'event';
+  return `<div style="font-size:10px;padding:5px 0;border-bottom:1px solid #21262d33;display:flex;gap:8px">
+    <span style="color:#484f58;min-width:28px;flex-shrink:0">${age}</span>
+    <span style="${badgeStyle}">${label}</span>
+    ${content}
+  </div>`;
+}
+
+function _renderEventFeed(events) {
+  if (!events || !events.length) {
+    return '<div style="padding:8px 14px 10px;font-size:10px;color:#484f58">No events.</div>';
+  }
+  const now = Date.now();
+  return `<div style="max-height:200px;overflow-y:auto;padding:0 14px 10px">
+    ${events.map(ev => _renderEventRow(ev, now)).join('')}
+  </div>`;
+}
+
+function _renderSparkline(activity) {
+  if (!activity || !activity.length) return '<span style="font-size:9px;color:#484f58;align-self:center">1h activity</span>';
+  const max = Math.max(...activity, 1);
+  const bars = activity.map((count) => {
+    const h = Math.max(1, Math.round((count / max) * 16));
+    const alpha = h >= 12 ? '' : h >= 8 ? '66' : h >= 4 ? '33' : '22';
+    const color = count > 0 ? '#3fb950' + alpha : '#3fb95022';
+    return `<div style="width:5px;background:${color};height:${h}px;border-radius:1px 1px 0 0"></div>`;
+  }).join('');
+  return bars + '<span style="font-size:9px;color:#484f58;margin-left:6px;align-self:center">1h activity</span>';
+}
+
+function _toggleRunnerFeed(profile) {
+  const feedEl = document.getElementById('feed-' + profile);
+  if (!feedEl) return;
+  if (_expandedRunners.has(profile)) {
+    _expandedRunners.delete(profile);
+    feedEl.style.display = 'none';
+  } else {
+    _expandedRunners.add(profile);
+    feedEl.style.display = 'block';
+    feedEl.innerHTML = 'Loading…';
+    _loadRunnerFeed(profile);
+  }
+  // Update toggle label via stable ID
+  const toggleBtn = document.getElementById('feed-toggle-' + profile);
+  if (toggleBtn) {
+    const expanded = _expandedRunners.has(profile);
+    toggleBtn.style.color = expanded ? '#58a6ff' : '#8b949e';
+    toggleBtn.textContent = expanded ? '▲ Event feed' : '▼ Event feed';
+  }
+}
+
+async function _loadRunnerFeed(profile) {
+  const feedEl = document.getElementById('feed-' + profile);
+  const sparklineEl = document.getElementById('sparkline-' + profile);
+  try {
+    const resp = await fetch(`/api/control-plane/runner-events?profile=${encodeURIComponent(profile)}&limit=20`);
+    const data = await resp.json();
+    if (!data.ok) return;
+    // Cache last 2 events for preview
+    _recentEventsCache[profile] = (data.events || []).slice(0, 2);
+    // Render recent preview
+    const recentEl = document.getElementById('recent-' + profile);
+    if (recentEl) {
+      const now = Date.now();
+      const previewEvents = (data.events || []).slice(0, 2);
+      recentEl.innerHTML = previewEvents.length
+        ? previewEvents.map(ev => _renderEventRow(ev, now)).join('')
+        : '<div style="font-size:10px;color:#484f58">—</div>';
+    }
+    // Render sparkline
+    if (sparklineEl) {
+      sparklineEl.innerHTML = _renderSparkline(data.activity || []);
+    }
+    // Render today stats
+    const todayEl = document.getElementById('today-stats-' + profile);
+    if (todayEl) {
+      const todayEvents = parseInt(data.today_events, 10) || 0;
+      const todayAlerts = parseInt(data.today_alerts, 10) || 0;
+      todayEl.innerHTML = `${todayEvents} ops · <span style="color:#58a6ff">${todayAlerts} alerts</span>`;
+    }
+    // Render feed
+    if (feedEl && _expandedRunners.has(profile)) {
+      feedEl.innerHTML = _renderEventFeed(data.events || []);
+    }
+  } catch (e) {
+    if (feedEl) feedEl.innerHTML = `<div style="padding:8px 14px;color:#f85149;font-size:10px">Error: ${escHtml(String(e))}</div>`;
   }
 }
 
