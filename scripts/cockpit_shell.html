@@ -870,7 +870,7 @@ async function refreshAssets() {
     renderTabs();
     // Soft update: refresh data-driven parts without blowing away user input fields.
     // Only do a full renderCurrentTab() for non-connector tabs or first load.
-    if (currentTab && !['overview','audit','session','state','operator'].includes(currentTab)) {
+    if (currentTab && !['overview','audit','session','state'].includes(currentTab)) {
       _softUpdateConnectorAssets(currentTab);
     } else {
       renderCurrentTab();
@@ -1167,7 +1167,7 @@ function connectSSE() {
 // Called by the 5-second interval. renderCurrentTab() is used for full redraws (tab switch,
 // initial load, queue changes).
 function refreshPolicyDisplay() {
-  if (currentTab === 'audit' || currentTab === 'session' || currentTab === 'state' || currentTab === 'operator' || currentTab === 'monitors') {
+  if (currentTab === 'audit' || currentTab === 'session' || currentTab === 'state' || currentTab === 'monitors') {
     if (currentTab === 'audit') _loadAuditTimeline();
     else if (currentTab === 'session') _loadSessionData();
     else if (currentTab === 'state') _loadStateTabData();
@@ -1228,7 +1228,6 @@ function renderTabs() {
   html += `<div class="tab ${currentTab === 'audit' ? 'active' : ''}" onclick="switchTab('audit')" style="font-size:11px;opacity:0.7">Audit</div>`;
   html += `<div class="tab ${currentTab === 'session' ? 'active' : ''}" onclick="switchTab('session')" style="font-size:11px;opacity:0.7">Session</div>`;
   html += `<div class="tab ${currentTab === 'state' ? 'active' : ''}" onclick="switchTab('state')" style="font-size:11px;opacity:0.7">State</div>`;
-  html += `<div class="tab ${currentTab === 'operator' ? 'active' : ''}" onclick="switchTab('operator')" style="font-size:11px;opacity:0.7">Operator</div>`;
   html += `</div>`;
 
   document.getElementById('tabs-bar').innerHTML = html;
@@ -1237,6 +1236,7 @@ function renderTabs() {
 let _monitorsPollingInterval = null;
 let _addRunnerPollInterval = null;
 let _addRunnerKnownProfiles = null;
+let _monitorsHasContent = false;
 
 function _startMonitorsPolling() {
   if (_monitorsPollingInterval) return;
@@ -1254,6 +1254,7 @@ function _stopMonitorsPolling() {
     clearInterval(_addRunnerPollInterval);
     _addRunnerPollInterval = null;
   }
+  _monitorsHasContent = false;
 }
 
 async function _pollForNewRunner() {
@@ -1315,7 +1316,7 @@ function switchConnectorPanel(panelName) {
 function renderCurrentTab() {
   const panelEl = document.getElementById('main-panel');
   if (panelEl) panelEl.classList.toggle('no-scroll', currentTab === 'state');
-  if (currentTab !== 'overview' && currentTab !== 'audit' && currentTab !== 'session' && currentTab !== 'state' && currentTab !== 'operator' && currentTab !== 'monitors') {
+  if (currentTab !== 'overview' && currentTab !== 'audit' && currentTab !== 'session' && currentTab !== 'state' && currentTab !== 'monitors') {
     const connectors = assetsData ? Object.keys(assetsData.connectors || {}) : [];
     if (!connectors.includes(currentTab)) currentTab = 'overview';
   }
@@ -1323,7 +1324,6 @@ function renderCurrentTab() {
   else if (currentTab === 'audit') renderAuditTab();
   else if (currentTab === 'session') renderSessionTab();
   else if (currentTab === 'state') renderStateTab();
-  else if (currentTab === 'operator') renderOperatorTab();
   else if (currentTab === 'monitors') { renderMonitorsTab(); return; }
   else renderConnectorTab(currentTab);
 }
@@ -1334,7 +1334,7 @@ function applyViewStateFromUrl() {
   if (requestedSession) selectedSessionId = requestedSession;
   const requestedTab = params.get('tab');
   const connectors = assetsData ? Object.keys(assetsData.connectors || {}) : [];
-  const globalTabs = ['audit', 'session', 'state', 'operator', 'monitors'];
+  const globalTabs = ['audit', 'session', 'state', 'monitors'];
   if (requestedTab === 'overview' || !requestedTab) {
     currentTab = 'overview';
   } else if (globalTabs.includes(requestedTab)) {
@@ -1357,7 +1357,7 @@ function syncUrlWithViewState(opts) {
   const push = !!(opts && opts.push);
   const url = new URL(window.location.href);
   url.searchParams.set('tab', currentTab);
-  if (currentTab === 'overview' || currentTab === 'audit' || currentTab === 'session' || currentTab === 'state' || currentTab === 'operator' || currentTab === 'monitors') {
+  if (currentTab === 'overview' || currentTab === 'audit' || currentTab === 'session' || currentTab === 'state' || currentTab === 'monitors') {
     url.searchParams.delete('panel');
   } else {
     url.searchParams.set('panel', getActiveConnectorPanel(currentTab));
@@ -2124,40 +2124,12 @@ async function _loadStateTabData() {
   }
 }
 
-function renderOperatorTab() {
-  const panel = document.getElementById('main-panel');
-  panel.innerHTML = `<div style="padding:16px">
-    <h2 style="font-size:14px;color:#e6edf3;margin-bottom:12px">Operator Intelligence Loop</h2>
-    <div style="background:#161b22;border:1px solid #21262d;border-radius:6px;padding:16px">
-      <p style="color:#8b949e;font-size:12px;margin-bottom:8px">
-        The Operator Intelligence Loop monitors application behavior in real-time.
-      </p>
-      <p style="color:#8b949e;font-size:12px;margin-bottom:8px">
-        Enable with: <code style="background:#0d1117;padding:2px 6px;border-radius:3px;color:#79c0ff">EMERGE_OPERATOR_MONITOR=1</code>
-      </p>
-      <p style="color:#484f58;font-size:11px">
-        When enabled, this tab will show observer events, pattern detections, and adapter activity.
-      </p>
-    </div>
-  </div>`;
-}
 
 function _renderAddRunnerPanel() {
   return `
 <div style="border:1px solid #30363d;border-radius:6px;padding:16px;margin-bottom:16px;background:#0d1117">
   <div style="font-size:13px;font-weight:600;color:#c9d1d9;margin-bottom:12px">Add Runner</div>
-  <div style="margin-bottom:10px">
-    <label style="font-size:11px;color:#8b949e;display:block;margin-bottom:4px">Profile</label>
-    <select id="runner-profile-select"
-      style="background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;padding:5px 8px;width:220px"
-      onchange="_onProfileSelectChange()">
-      <option value="default">default</option>
-      <option value="__new__">new profile…</option>
-    </select>
-    <input id="runner-profile-input" type="text" placeholder="profile name"
-      style="display:none;margin-top:6px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;padding:5px 8px;width:220px"
-      oninput="_fetchInstallUrls()" />
-  </div>
+  <div style="font-size:11px;color:#8b949e;margin-bottom:10px">Profile name is auto-detected from the runner machine's hostname. Override: <code>EMERGE_PROFILE=name curl … | bash</code></div>
   <div style="margin-bottom:10px">
     <div style="font-size:11px;color:#8b949e;margin-bottom:4px">Linux / macOS</div>
     <div style="display:flex;align-items:flex-start;gap:8px">
@@ -2186,35 +2158,12 @@ function _copyInstallCmd(elemId) {
   }).catch(() => {});
 }
 
-function _onProfileSelectChange() {
-  const sel = document.getElementById('runner-profile-select');
-  const input = document.getElementById('runner-profile-input');
-  if (!sel || !input) return;
-  if (sel.value === '__new__') {
-    input.style.display = 'block';
-    input.focus();
-  } else {
-    input.style.display = 'none';
-  }
-  _fetchInstallUrls();
-}
-
-function _getSelectedProfile() {
-  const sel = document.getElementById('runner-profile-select');
-  if (sel && sel.value === '__new__') {
-    const input = document.getElementById('runner-profile-input');
-    return (input && input.value.trim()) || 'default';
-  }
-  return (sel && sel.value) || 'default';
-}
-
 let _installUrlFetchTimer = null;
 function _fetchInstallUrls() {
   clearTimeout(_installUrlFetchTimer);
   _installUrlFetchTimer = setTimeout(async () => {
-    const profile = _getSelectedProfile();
     try {
-      const r = await fetch('/api/control-plane/runner-install-url?' + new URLSearchParams({ profile }));
+      const r = await fetch('/api/control-plane/runner-install-url');
       const d = await r.json();
       if (d.ok) {
         const bashEl = document.getElementById('bash-cmd');
@@ -2227,22 +2176,6 @@ function _fetchInstallUrls() {
 }
 
 function _initAddRunnerPanel() {
-  // Populate profile dropdown from known runner profiles
-  fetch('/api/control-plane/runner-profiles').then(r => r.json()).then(d => {
-    const sel = document.getElementById('runner-profile-select');
-    if (!sel) return;
-    const known = d.profiles || [];
-    // Preserve existing options (default + new profile…), prepend known profiles
-    const existing = Array.from(sel.options).map(o => o.value).filter(v => v !== '__new__' && v !== 'default');
-    for (const p of known) {
-      if (!existing.includes(p) && p !== 'default') {
-        const opt = document.createElement('option');
-        opt.value = p;
-        opt.textContent = p;
-        sel.insertBefore(opt, sel.options[sel.options.length - 1]); // before "new profile…"
-      }
-    }
-  }).catch(() => {});
   _fetchInstallUrls();
   if (_addRunnerPollInterval) return;
   fetch('/api/control-plane/monitors').then(r => r.json()).then(d => {
@@ -2253,7 +2186,9 @@ function _initAddRunnerPanel() {
 
 async function renderMonitorsTab() {
   const panel = document.getElementById('main-panel');
-  panel.innerHTML = '<div style="padding:16px;color:#8b949e">Loading monitor state…</div>';
+  if (!_monitorsHasContent) {
+    panel.innerHTML = '<div style="padding:16px;color:#8b949e">Loading monitor state…</div>';
+  }
   try {
     const resp = await fetch('/api/control-plane/monitors');
     const data = await resp.json();
@@ -2270,6 +2205,7 @@ async function renderMonitorsTab() {
     if (!runners.length) {
       html += '<div style="color:#8b949e;font-size:12px;margin-bottom:12px">No runners connected yet.</div></div>';
       panel.innerHTML = html;
+      _monitorsHasContent = true;
       _initAddRunnerPanel();
       return;
     }
@@ -2300,6 +2236,7 @@ async function renderMonitorsTab() {
     }
     html += '</tbody></table></div>';
     panel.innerHTML = html;
+    _monitorsHasContent = true;
     _initAddRunnerPanel();
   } catch (e) {
     panel.innerHTML = `<div style="padding:16px;color:#f85149">Error loading monitors: ${escHtml(String(e))}</div>`;
