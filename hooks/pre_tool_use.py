@@ -26,8 +26,7 @@ def main() -> None:
     _sig_normalized_from: str | None = None
     _sig_normalized_to: str | None = None
 
-    # icc_read / icc_write are removed from schema (deprecated: use icc_span_open).
-    # No validation block needed — PreToolUse only fires for schema-listed tools.
+    # icc_read / icc_write are fully deleted. Use icc_span_open for bridge execution.
 
     if tool_name.endswith("__icc_exec"):
         mode = str(arguments.get("mode", "inline_code")).strip()

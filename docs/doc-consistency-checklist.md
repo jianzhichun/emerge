@@ -56,7 +56,7 @@ Use this checklist before merge/release to keep `README.md`, `CLAUDE.md`, `comma
 ## 8) Final Gate (Evidence Before Claims)
 
 - Run full verification: `python -m pytest tests -q`.
-- Re-check changed docs for stale numbers/terms (`rg "377|2025-03-26|icc_read|icc_write"` etc., scoped appropriately).
+- Re-check changed docs for stale numbers/terms (`rg "377|2025-03-26"` etc., scoped appropriately).
 - Ensure no contradictory statements remain between `README.md` and `CLAUDE.md`.
 
 ## Suggested Release Workflow

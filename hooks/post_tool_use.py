@@ -1,4 +1,4 @@
-"""PostToolUse hook for emerge MCP tools (icc_read/write/exec/reconcile/crystallize).
+"""PostToolUse hook for emerge MCP tools (icc_exec/reconcile/crystallize/span/hub).
 
 General CC tool calls (Bash, Read, Grep, etc.) are handled by tool_audit.py via
 a separate PostToolUse matcher. This script only runs for emerge-specific tools.
@@ -29,10 +29,6 @@ from scripts.state_tracker import (  # noqa: E402
 
 
 def _classify_level(tool_name: str) -> str:
-    if tool_name.endswith("__icc_write"):
-        return LEVEL_CORE_CRITICAL
-    if tool_name.endswith("__icc_read"):
-        return LEVEL_CORE_SECONDARY
     return LEVEL_PERIPHERAL
 
 

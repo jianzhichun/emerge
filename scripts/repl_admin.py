@@ -2341,10 +2341,10 @@ def _enrich_actions(actions: list) -> list:
             else:
                 tool_name = str(call.get("tool", "")).strip()
                 arguments = call.get("arguments", {})
-                if tool_name not in {"icc_read", "icc_write"} or not isinstance(arguments, dict):
+                if not tool_name or not isinstance(arguments, dict):
                     a["instruction"] = (
                         "Invalid cockpit tool-call payload. "
-                        "Expected call.tool in {icc_read, icc_write} and call.arguments object."
+                        "Expected call.tool (any icc_* tool name) and call.arguments object."
                     )
                 else:
                     auto = a.get("auto") if isinstance(a.get("auto"), dict) else {}

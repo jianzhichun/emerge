@@ -51,7 +51,7 @@ def test_runner_client_exec_persists_state(tmp_path: Path):
 
 
 def test_runner_rejects_pipeline_tools(tmp_path: Path):
-    """Runner is a pure executor — icc_read/icc_write must be rejected (daemon handles them)."""
+    """Runner is a pure executor — deleted tools return unknown-tool error (daemon handles pipeline execution)."""
     with _RunnerServer(tmp_path / "runner-state") as server:
         client = RunnerClient(base_url=server.url, timeout_s=5.0)
         read = client.call_tool("icc_read", {"connector": "mock", "pipeline": "layers"})

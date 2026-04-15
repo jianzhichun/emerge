@@ -49,7 +49,7 @@ def test_post_tool_use_and_pre_compact_contract(tmp_path: Path):
     p_out = _run(
         "post_tool_use.py",
         {
-            "tool_name": "mcp__plugin_emerge__icc_read",
+            "tool_name": "mcp__plugin_emerge__icc_exec",
             "tool_result": {"verification_state": "verified"},
             "delta_message": "Read layer snapshot",
         },
@@ -156,7 +156,7 @@ def test_post_tool_use_tolerates_non_object_tool_result(tmp_path: Path):
     out = _run(
         "post_tool_use.py",
         {
-            "tool_name": "mcp__plugin_emerge__icc_write",
+            "tool_name": "mcp__plugin_emerge__icc_exec",
             "tool_result": "not-a-dict",
             "delta_message": "write attempted",
         },
@@ -192,7 +192,7 @@ def test_pre_compact_emits_recovery_token(tmp_path: Path):
     subprocess.run(
         ["python3", str(ROOT / "hooks" / "post_tool_use.py")],
         input=json.dumps({
-            "tool_name": "mcp__plugin_emerge__icc_write",
+            "tool_name": "mcp__plugin_emerge__icc_exec",
             "tool_result": {"verification_state": "verified"},
             "delta_message": "Wrote layer to ZWCAD",
         }),
@@ -226,7 +226,7 @@ def test_post_tool_use_reads_verification_state_from_content_json(tmp_path: Path
     out = _run(
         "post_tool_use.py",
         {
-            "tool_name": "mcp__plugin_emerge__icc_read",
+            "tool_name": "mcp__plugin_emerge__icc_exec",
             "tool_result": {
                 "isError": False,
                 "content": [{"type": "text", "text": inner}],
@@ -251,7 +251,7 @@ def test_post_tool_use_no_longer_echoes_updated_mcp_tool_output(tmp_path: Path):
     out = _run(
         "post_tool_use.py",
         {
-            "tool_name": "mcp__plugin_emerge__icc_write",
+            "tool_name": "mcp__plugin_emerge__icc_exec",
             "tool_result": {"isError": False, "content": [{"type": "text", "text": "ok"}]},
             "delta_message": "Write applied",
         },
@@ -277,7 +277,7 @@ def test_pre_compact_resets_tracker_state_and_keeps_goal_in_snapshot(tmp_path: P
     subprocess.run(
         ["python3", str(ROOT / "hooks" / "post_tool_use.py")],
         input=json.dumps({
-            "tool_name": "mcp__plugin_emerge__icc_write",
+            "tool_name": "mcp__plugin_emerge__icc_exec",
             "tool_result": {"isError": False, "content": [{"type": "text", "text": "ok"}]},
             "delta_message": "Wrote mesh to HyperMesh",
         }),

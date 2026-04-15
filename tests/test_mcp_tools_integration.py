@@ -65,30 +65,18 @@ def test_tools_call_routes_exec_read_write_in_same_runtime():
     )
     assert "11" in r2["result"]["content"][0]["text"]
 
-    read = daemon.handle_jsonrpc(
-        {
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {"name": "icc_read", "arguments": {"connector": "mock", "pipeline": "layers"}},
-        }
+    read = daemon._run_connector_pipeline(
+        tool_name="icc_exec", mode="read", arguments={"connector": "mock", "pipeline": "layers"}
     )
-    read_obj = json.loads(read["result"]["content"][0]["text"])
+    read_obj = json.loads(read["content"][0]["text"])
     assert read_obj["pipeline_id"] == "mock.read.layers"
     assert read_obj["verify_result"]["ok"] is True
 
-    write = daemon.handle_jsonrpc(
-        {
-            "jsonrpc": "2.0",
-            "id": 4,
-            "method": "tools/call",
-            "params": {
-                "name": "icc_write",
-                "arguments": {"connector": "mock", "pipeline": "add-wall", "length": 1200},
-            },
-        }
+    write = daemon._run_connector_pipeline(
+        tool_name="icc_exec", mode="write",
+        arguments={"connector": "mock", "pipeline": "add-wall", "length": 1200},
     )
-    write_obj = json.loads(write["result"]["content"][0]["text"])
+    write_obj = json.loads(write["content"][0]["text"])
     assert write_obj["verification_state"] == "verified"
 
 
@@ -109,21 +97,14 @@ def test_tools_list_does_not_expose_admin_state_operations():
 def test_tools_call_returns_error_payload_for_missing_pipeline_and_script(tmp_path: Path):
     daemon = EmergeDaemon(root=ROOT)
 
-    bad_read = daemon.handle_jsonrpc(
-        {
-            "jsonrpc": "2.0",
-            "id": 10,
-            "method": "tools/call",
-            "params": {
-                "name": "icc_read",
-                "arguments": {"connector": "mock", "pipeline": "does-not-exist"},
-            },
-        }
+    bad_read = daemon._run_connector_pipeline(
+        tool_name="icc_exec", mode="read",
+        arguments={"connector": "mock", "pipeline": "does-not-exist"},
     )
     # A missing pipeline is now a structured guidance response (not an error)
-    assert bad_read["result"]["isError"] is not True
-    assert bad_read["result"]["structuredContent"]["pipeline_missing"] is True
-    assert bad_read["result"]["structuredContent"]["fallback"] == "icc_exec"
+    assert bad_read.get("isError") is not True
+    assert bad_read["structuredContent"]["pipeline_missing"] is True
+    assert bad_read["structuredContent"]["fallback"] == "icc_exec"
 
     bad_script = daemon.handle_jsonrpc(
         {
@@ -140,24 +121,17 @@ def test_tools_call_returns_error_payload_for_missing_pipeline_and_script(tmp_pa
     assert "icc_exec failed" in bad_script["result"]["content"][0]["text"]
 
 
-def test_icc_write_participates_in_pipeline_lifecycle_registry(tmp_path: Path):
+def test_pipeline_write_lifecycle_registry(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "pipeline-policy"
     try:
         daemon = EmergeDaemon(root=ROOT)
         for _ in range(20):
-            out = daemon.handle_jsonrpc(
-                {
-                    "jsonrpc": "2.0",
-                    "id": 20,
-                    "method": "tools/call",
-                    "params": {
-                        "name": "icc_write",
-                        "arguments": {"connector": "mock", "pipeline": "add-wall", "length": 1000},
-                    },
-                }
+            out = daemon._run_connector_pipeline(
+                tool_name="icc_exec", mode="write",
+                arguments={"connector": "mock", "pipeline": "add-wall", "length": 1000},
             )
-            assert out["result"]["isError"] is False
+            assert out.get("isError") is not True
 
         reg = tmp_path / "state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
@@ -169,7 +143,7 @@ def test_icc_write_participates_in_pipeline_lifecycle_registry(tmp_path: Path):
 
 
 def test_exec_and_pipeline_share_key_when_intent_matches(tmp_path: Path):
-    """icc_exec and icc_write both track under the same key when they share an intent_signature."""
+    """icc_exec and pipeline bridge both track under the same key when they share an intent_signature."""
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "compose"
     try:
@@ -183,14 +157,10 @@ def test_exec_and_pipeline_share_key_when_intent_matches(tmp_path: Path):
                 "intent_signature": "mock.write.add-wall",
             },
         )
-        # icc_write tracks under pipeline_id = "mock.write.add-wall"
-        daemon.call_tool(
-            "icc_write",
-            {
-                "connector": "mock",
-                "pipeline": "add-wall",
-                "length": 1000,
-            },
+        # pipeline write tracks under pipeline_id = "mock.write.add-wall"
+        daemon._run_connector_pipeline(
+            tool_name="icc_exec", mode="write",
+            arguments={"connector": "mock", "pipeline": "add-wall", "length": 1000},
         )
         registry = tmp_path / "state" / "compose" / "candidates.json"
         data = json.loads(registry.read_text(encoding="utf-8"))
@@ -407,7 +377,7 @@ def test_remote_exec_script_ref_outside_allowlist_is_rejected(tmp_path: Path):
         os.environ.pop("EMERGE_SESSION_ID", None)
 
 
-def test_icc_read_without_verify_is_consistent_local_and_remote(tmp_path: Path):
+def test_pipeline_read_local_and_remote_consistent(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "daemon-state")
     os.environ["EMERGE_SESSION_ID"] = "read-verify-consistency"
     os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path / "connectors")
@@ -430,8 +400,8 @@ def test_icc_read_without_verify_is_consistent_local_and_remote(tmp_path: Path):
         )
 
         daemon_local = EmergeDaemon(root=ROOT)
-        local_out = daemon_local.call_tool("icc_read", {"connector": "demo", "pipeline": "novfy"})
-        assert local_out.get("isError") is False
+        local_out = daemon_local._run_connector_pipeline(tool_name="icc_exec", mode="read", arguments={"connector": "demo", "pipeline": "novfy"})
+        assert local_out.get("isError") is not True
         local_body = json.loads(local_out["content"][0]["text"])
         assert local_body["verification_state"] == "verified"
         assert local_body["verify_result"]["ok"] is True
@@ -439,8 +409,8 @@ def test_icc_read_without_verify_is_consistent_local_and_remote(tmp_path: Path):
         with _RunnerServer(tmp_path / "remote-state") as server:
             os.environ["EMERGE_RUNNER_URL"] = server.url
             daemon_remote = EmergeDaemon(root=ROOT)
-            remote_out = daemon_remote.call_tool("icc_read", {"connector": "demo", "pipeline": "novfy"})
-            assert remote_out.get("isError") is False
+            remote_out = daemon_remote._run_connector_pipeline(tool_name="icc_exec", mode="read", arguments={"connector": "demo", "pipeline": "novfy"})
+            assert remote_out.get("isError") is not True
             remote_body = json.loads(remote_out["content"][0]["text"])
             assert remote_body["verification_state"] == "verified"
             assert remote_body["verify_result"]["ok"] is True
@@ -457,16 +427,11 @@ def test_zwcad_read_state_pipeline_returns_structured_rows(tmp_path: Path):
     os.environ["EMERGE_SESSION_ID"] = "zwcad-read"
     try:
         daemon = EmergeDaemon(root=ROOT)
-        out = daemon.handle_jsonrpc(
-            {
-                "jsonrpc": "2.0",
-                "id": 300,
-                "method": "tools/call",
-                "params": {"name": "icc_read", "arguments": {"connector": "zwcad", "pipeline": "state"}},
-            }
+        out = daemon._run_connector_pipeline(
+            tool_name="icc_exec", mode="read", arguments={"connector": "zwcad", "pipeline": "state"}
         )
-        assert out["result"]["isError"] is False, out["result"]["content"][0]["text"]
-        body = json.loads(out["result"]["content"][0]["text"])
+        assert out.get("isError") is not True, out["content"][0]["text"]
+        body = json.loads(out["content"][0]["text"])
         assert body["pipeline_id"] == "zwcad.read.state"
         assert body["verify_result"]["ok"] is True
         rows = body["rows"]
@@ -483,27 +448,15 @@ def test_zwcad_write_apply_change_pipeline_enforces_policy(tmp_path: Path):
     os.environ["EMERGE_SESSION_ID"] = "zwcad-write"
     try:
         daemon = EmergeDaemon(root=ROOT)
-        out = daemon.handle_jsonrpc(
-            {
-                "jsonrpc": "2.0",
-                "id": 301,
-                "method": "tools/call",
-                "params": {
-                    "name": "icc_write",
-                    "arguments": {
-                        "connector": "zwcad",
-                        "pipeline": "apply-change",
-                        "change_type": "line",
-                        "x1": 0,
-                        "y1": 0,
-                        "x2": 100,
-                        "y2": 100,
-                    },
-                },
-            }
+        out = daemon._run_connector_pipeline(
+            tool_name="icc_exec", mode="write",
+            arguments={
+                "connector": "zwcad", "pipeline": "apply-change",
+                "change_type": "line", "x1": 0, "y1": 0, "x2": 100, "y2": 100,
+            },
         )
-        assert out["result"]["isError"] is False, out["result"]["content"][0]["text"]
-        body = json.loads(out["result"]["content"][0]["text"])
+        assert out.get("isError") is not True, out["content"][0]["text"]
+        body = json.loads(out["content"][0]["text"])
         assert body["verification_state"] == "verified"
         assert "policy_enforced" in body
         assert "stop_triggered" in body
@@ -514,16 +467,16 @@ def test_zwcad_write_apply_change_pipeline_enforces_policy(tmp_path: Path):
 
 
 def test_zwcad_policy_registry_tracks_pipeline_key(tmp_path: Path):
-    """RED→GREEN: zwcad pipeline key must appear in policy registry after icc_read+icc_write."""
+    """RED→GREEN: zwcad pipeline key must appear in policy registry after read+write calls."""
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "zwcad-policy"
     try:
         daemon = EmergeDaemon(root=ROOT)
         for _ in range(3):
-            daemon.call_tool("icc_read", {"connector": "zwcad", "pipeline": "state"})
-            daemon.call_tool(
-                "icc_write",
-                {"connector": "zwcad", "pipeline": "apply-change", "change_type": "line"},
+            daemon._run_connector_pipeline(tool_name="icc_exec", mode="read", arguments={"connector": "zwcad", "pipeline": "state"})
+            daemon._run_connector_pipeline(
+                tool_name="icc_exec", mode="write",
+                arguments={"connector": "zwcad", "pipeline": "apply-change", "change_type": "line"},
             )
         reg = tmp_path / "state" / "pipelines-registry.json"
         assert reg.exists(), "registry file not created"
@@ -547,12 +500,12 @@ def test_pipeline_registry_is_shared_across_sessions(tmp_path: Path):
         os.environ["EMERGE_SESSION_ID"] = "session-a"
         daemon_a = EmergeDaemon(root=ROOT)
         for _ in range(3):
-            daemon_a.call_tool("icc_read", {"connector": "zwcad", "pipeline": "state"})
+            daemon_a._run_connector_pipeline(tool_name="icc_exec", mode="read", arguments={"connector": "zwcad", "pipeline": "state"})
 
         # Session B reads the registry — must see session-A's attempts
         os.environ["EMERGE_SESSION_ID"] = "session-b"
         daemon_b = EmergeDaemon(root=ROOT)
-        daemon_b.call_tool("icc_read", {"connector": "zwcad", "pipeline": "state"})
+        daemon_b._run_connector_pipeline(tool_name="icc_exec", mode="read", arguments={"connector": "zwcad", "pipeline": "state"})
 
         # Registry must be at state_root level, not inside any session dir
         global_reg = state_root / "pipelines-registry.json"
@@ -578,13 +531,13 @@ def test_pipeline_policy_metrics_are_recorded_for_stop_and_rollback(tmp_path: Pa
     os.environ["EMERGE_SESSION_ID"] = "policy-metrics"
     try:
         daemon = EmergeDaemon(root=ROOT)
-        daemon.call_tool(
-            "icc_write",
-            {"connector": "mock", "pipeline": "add-wall", "length": 0},
+        daemon._run_connector_pipeline(
+            tool_name="icc_exec", mode="write",
+            arguments={"connector": "mock", "pipeline": "add-wall", "length": 0},
         )
-        daemon.call_tool(
-            "icc_write",
-            {"connector": "mock", "pipeline": "add-wall-rollback", "length": 1000},
+        daemon._run_connector_pipeline(
+            tool_name="icc_exec", mode="write",
+            arguments={"connector": "mock", "pipeline": "add-wall-rollback", "length": 1000},
         )
 
         reg = tmp_path / "state" / "pipelines-registry.json"
@@ -608,7 +561,7 @@ def test_pipeline_registry_records_last_execution_path_local(tmp_path: Path):
     os.environ["EMERGE_SESSION_ID"] = "path-local"
     try:
         daemon = EmergeDaemon(root=ROOT)
-        daemon.call_tool("icc_read", {"connector": "mock", "pipeline": "layers"})
+        daemon._run_connector_pipeline(tool_name="icc_exec", mode="read", arguments={"connector": "mock", "pipeline": "layers"})
         reg = tmp_path / "state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
         assert data["pipelines"]["mock.read.layers"]["last_execution_path"] == "local"
@@ -624,7 +577,7 @@ def test_pipeline_registry_records_last_execution_path_remote(tmp_path: Path):
         with _RunnerServer(tmp_path / "remote-state") as server:
             os.environ["EMERGE_RUNNER_URL"] = server.url
             daemon = EmergeDaemon(root=ROOT)
-            daemon.call_tool("icc_read", {"connector": "mock", "pipeline": "layers"})
+            daemon._run_connector_pipeline(tool_name="icc_exec", mode="read", arguments={"connector": "mock", "pipeline": "layers"})
         reg = tmp_path / "daemon-state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
         assert data["pipelines"]["mock.read.layers"]["last_execution_path"] == "remote"
@@ -684,7 +637,7 @@ def test_resources_read_policy_current(tmp_path):
     os.environ["EMERGE_SESSION_ID"] = "res-test"
     try:
         daemon = EmergeDaemon(root=ROOT)
-        daemon.call_tool("icc_read", {"connector": "mock", "pipeline": "layers"})
+        daemon._run_connector_pipeline(tool_name="icc_exec", mode="read", arguments={"connector": "mock", "pipeline": "layers"})
         resp = daemon.handle_jsonrpc({"jsonrpc": "2.0", "id": 51, "method": "resources/read",
                                       "params": {"uri": "policy://current"}})
         resource = resp["result"]["resource"]
@@ -907,7 +860,7 @@ def test_flywheel_exec_does_not_promote_when_candidate_is_canary(tmp_path):
         os.environ.pop("EMERGE_SESSION_ID", None)
 
 
-def test_icc_read_pipeline_missing_returns_structured_fallback(tmp_path):
+def test_pipeline_read_missing_returns_structured_fallback(tmp_path):
     import os
     from pathlib import Path
     from scripts.emerge_daemon import EmergeDaemon
@@ -916,10 +869,10 @@ def test_icc_read_pipeline_missing_returns_structured_fallback(tmp_path):
     os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path / "connectors")
     try:
         daemon = EmergeDaemon(root=ROOT)
-        result = daemon.call_tool("icc_read", {
-            "connector": "nonexistent",
-            "pipeline": "nope",
-        })
+        result = daemon._run_connector_pipeline(
+            tool_name="icc_exec", mode="read",
+            arguments={"connector": "nonexistent", "pipeline": "nope"},
+        )
         # Must NOT be an error — it's a guidance response
         assert result.get("isError") is not True
         body = result.get("structuredContent", {})
@@ -1020,7 +973,7 @@ def test_increment_human_fix_increments_unified_key(tmp_path):
         os.environ.pop("EMERGE_SESSION_ID", None)
 
 
-def test_icc_write_pipeline_missing_returns_structured_fallback(tmp_path):
+def test_pipeline_write_missing_returns_structured_fallback(tmp_path):
     import os
     from pathlib import Path
     from scripts.emerge_daemon import EmergeDaemon
@@ -1029,10 +982,10 @@ def test_icc_write_pipeline_missing_returns_structured_fallback(tmp_path):
     os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path / "connectors")
     try:
         daemon = EmergeDaemon(root=ROOT)
-        result = daemon.call_tool("icc_write", {
-            "connector": "nonexistent",
-            "pipeline": "nope",
-        })
+        result = daemon._run_connector_pipeline(
+            tool_name="icc_exec", mode="write",
+            arguments={"connector": "nonexistent", "pipeline": "nope"},
+        )
         assert result.get("isError") is not True
         body = result.get("structuredContent", {})
         assert body.get("pipeline_missing") is True
@@ -1044,7 +997,7 @@ def test_icc_write_pipeline_missing_returns_structured_fallback(tmp_path):
 
 
 def test_runner_only_handles_icc_exec(tmp_path):
-    """Runner is a pure executor — icc_read/icc_write/icc_crystallize return unknown tool."""
+    """Runner is a pure executor — only icc_exec runs; deleted tools return unknown tool."""
     from scripts.remote_runner import RunnerExecutor
     os.environ["EMERGE_SESSION_ID"] = "runner-pure-test"
     try:
@@ -1292,22 +1245,15 @@ def test_operator_monitor_starts_and_stops(monkeypatch, tmp_path):
 # HyperMesh vertical flywheel tests
 # ---------------------------------------------------------------------------
 
-def test_hypermesh_icc_read_returns_structured_state():
-    """icc_read with hypermesh/state pipeline returns rows with model metadata."""
+def test_hypermesh_pipeline_read_returns_structured_state():
+    """hypermesh/state pipeline returns rows with model metadata."""
     daemon = EmergeDaemon(root=ROOT)
-    result = daemon.handle_jsonrpc(
-        {
-            "jsonrpc": "2.0",
-            "id": 900,
-            "method": "tools/call",
-            "params": {
-                "name": "icc_read",
-                "arguments": {"connector": "hypermesh", "pipeline": "state", "hm_timeout": 0.1},
-            },
-        }
+    result = daemon._run_connector_pipeline(
+        tool_name="icc_exec", mode="read",
+        arguments={"connector": "hypermesh", "pipeline": "state", "hm_timeout": 0.1},
     )
-    assert result["result"]["isError"] is not True
-    obj = json.loads(result["result"]["content"][0]["text"])
+    assert result.get("isError") is not True
+    obj = json.loads(result["content"][0]["text"])
     assert obj["pipeline_id"] == "hypermesh.read.state"
     assert obj["verify_result"]["ok"] is True
     assert obj["verification_state"] == "verified"
@@ -1318,28 +1264,21 @@ def test_hypermesh_icc_read_returns_structured_state():
     assert "element_count" in row
 
 
-def test_hypermesh_icc_write_apply_change_returns_verification_fields():
-    """icc_write with hypermesh/apply-change returns all required policy fields."""
+def test_hypermesh_pipeline_write_returns_verification_fields():
+    """hypermesh/apply-change pipeline returns all required policy fields."""
     daemon = EmergeDaemon(root=ROOT)
-    result = daemon.handle_jsonrpc(
-        {
-            "jsonrpc": "2.0",
-            "id": 901,
-            "method": "tools/call",
-            "params": {
-                "name": "icc_write",
-                "arguments": {
-                    "connector": "hypermesh",
-                    "pipeline": "apply-change",
-                    "tcl_cmd": "*createnode 100 200 0 0 0 0",
-                    "change_description": "create test node",
-                    "hm_timeout": 0.1,
-                },
-            },
-        }
+    result = daemon._run_connector_pipeline(
+        tool_name="icc_exec", mode="write",
+        arguments={
+            "connector": "hypermesh",
+            "pipeline": "apply-change",
+            "tcl_cmd": "*createnode 100 200 0 0 0 0",
+            "change_description": "create test node",
+            "hm_timeout": 0.1,
+        },
     )
-    assert result["result"]["isError"] is not True
-    obj = json.loads(result["result"]["content"][0]["text"])
+    assert result.get("isError") is not True
+    obj = json.loads(result["content"][0]["text"])
     assert obj["pipeline_id"] == "hypermesh.write.apply-change"
     assert obj["verification_state"] == "verified"
     assert "policy_enforced" in obj
@@ -1348,31 +1287,24 @@ def test_hypermesh_icc_write_apply_change_returns_verification_fields():
     assert "rollback_result" in obj
 
 
-def test_hypermesh_icc_write_participates_in_pipeline_lifecycle_registry(tmp_path: Path):
-    """icc_write calls for hypermesh appear in pipeline policy registry and counts move."""
+def test_hypermesh_pipeline_write_lifecycle_registry(tmp_path: Path):
+    """hypermesh write pipeline calls appear in policy registry and counts move."""
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "hm-policy-test"
     try:
         daemon = EmergeDaemon(root=ROOT)
         for _ in range(20):
-            out = daemon.handle_jsonrpc(
-                {
-                    "jsonrpc": "2.0",
-                    "id": 902,
-                    "method": "tools/call",
-                    "params": {
-                        "name": "icc_write",
-                        "arguments": {
-                            "connector": "hypermesh",
-                            "pipeline": "apply-change",
-                            "tcl_cmd": "*createnode 10 20 0 0 0 0",
-                            "change_description": "policy lifecycle test node",
-                            "hm_timeout": 0.1,
-                        },
-                    },
-                }
+            out = daemon._run_connector_pipeline(
+                tool_name="icc_exec", mode="write",
+                arguments={
+                    "connector": "hypermesh",
+                    "pipeline": "apply-change",
+                    "tcl_cmd": "*createnode 10 20 0 0 0 0",
+                    "change_description": "policy lifecycle test node",
+                    "hm_timeout": 0.1,
+                },
             )
-            assert out["result"]["isError"] is False
+            assert out.get("isError") is False
 
         reg = tmp_path / "state" / "pipelines-registry.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
@@ -1430,19 +1362,12 @@ def test_cloud_server_read_state_pipeline_returns_structured_rows(tmp_path: Path
     os.environ["EMERGE_SESSION_ID"] = "cs-read"
     try:
         daemon = EmergeDaemon(root=ROOT)
-        out = daemon.handle_jsonrpc(
-            {
-                "jsonrpc": "2.0",
-                "id": 400,
-                "method": "tools/call",
-                "params": {
-                    "name": "icc_read",
-                    "arguments": {"connector": "cloud-server", "pipeline": "state"},
-                },
-            }
+        out = daemon._run_connector_pipeline(
+            tool_name="icc_exec", mode="read",
+            arguments={"connector": "cloud-server", "pipeline": "state"},
         )
-        assert out["result"]["isError"] is False, out["result"]["content"][0]["text"]
-        body = json.loads(out["result"]["content"][0]["text"])
+        assert out.get("isError") is False, out["content"][0]["text"]
+        body = json.loads(out["content"][0]["text"])
         assert body["pipeline_id"] == "cloud-server.read.state"
         assert body["verify_result"]["ok"] is True
         rows = body["rows"]
@@ -1460,23 +1385,16 @@ def test_cloud_server_write_apply_test_pipeline_enforces_policy(tmp_path: Path):
     os.environ["EMERGE_SESSION_ID"] = "cs-write"
     try:
         daemon = EmergeDaemon(root=ROOT)
-        out = daemon.handle_jsonrpc(
-            {
-                "jsonrpc": "2.0",
-                "id": 401,
-                "method": "tools/call",
-                "params": {
-                    "name": "icc_write",
-                    "arguments": {
-                        "connector": "cloud-server",
-                        "pipeline": "apply-test",
-                        "scenario": "health-check",
-                    },
-                },
-            }
+        out = daemon._run_connector_pipeline(
+            tool_name="icc_exec", mode="write",
+            arguments={
+                "connector": "cloud-server",
+                "pipeline": "apply-test",
+                "scenario": "health-check",
+            },
         )
-        assert out["result"]["isError"] is False, out["result"]["content"][0]["text"]
-        body = json.loads(out["result"]["content"][0]["text"])
+        assert out.get("isError") is False, out["content"][0]["text"]
+        body = json.loads(out["content"][0]["text"])
         assert body["verification_state"] == "verified"
         assert "policy_enforced" in body
         assert "stop_triggered" in body
@@ -1495,10 +1413,13 @@ def test_cloud_server_policy_registry_tracks_pipeline_key(tmp_path: Path):
     try:
         daemon = EmergeDaemon(root=ROOT)
         for _ in range(3):
-            daemon.call_tool("icc_read", {"connector": "cloud-server", "pipeline": "state"})
-            daemon.call_tool(
-                "icc_write",
-                {"connector": "cloud-server", "pipeline": "apply-test", "scenario": "health-check"},
+            daemon._run_connector_pipeline(
+                tool_name="icc_exec", mode="read",
+                arguments={"connector": "cloud-server", "pipeline": "state"},
+            )
+            daemon._run_connector_pipeline(
+                tool_name="icc_exec", mode="write",
+                arguments={"connector": "cloud-server", "pipeline": "apply-test", "scenario": "health-check"},
             )
         reg = tmp_path / "state" / "pipelines-registry.json"
         assert reg.exists(), "registry file not created"
@@ -1769,7 +1690,7 @@ def test_crystallize_clears_synthesis_ready(tmp_path: Path):
 
 
 def test_crystallize_return_includes_next_step(tmp_path: Path):
-    """Crystallize result must include next_step directing CC to icc_read/write."""
+    """Crystallize result must include next_step directing CC to use icc_span_open bridge."""
     import os
     connector_root = tmp_path / "connectors"
     connector_root.mkdir()
@@ -1794,9 +1715,8 @@ def test_crystallize_return_includes_next_step(tmp_path: Path):
         sc = result.get("structuredContent", {})
         assert sc.get("ok"), f"crystallize failed: {result}"
         assert "next_step" in sc
-        assert "icc_read" in sc["next_step"]
-        assert "connector='myconn'" in sc["next_step"]
-        assert "pipeline='data'" in sc["next_step"]
+        assert "icc_span_open" in sc["next_step"]
+        assert "myconn.read.data" in sc["next_step"]
     finally:
         if old_env is None:
             os.environ.pop("EMERGE_CONNECTOR_ROOT", None)

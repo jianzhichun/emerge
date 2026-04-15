@@ -190,9 +190,9 @@ def test_repl_admin_policy_status_includes_policy_execution_metrics(tmp_path: Pa
     os.environ["EMERGE_SESSION_ID"] = "policy-exec"
     try:
         daemon = EmergeDaemon(root=ROOT)
-        daemon.call_tool("icc_write", {"connector": "mock", "pipeline": "add-wall", "length": 0})
-        daemon.call_tool(
-            "icc_write", {"connector": "mock", "pipeline": "add-wall-rollback", "length": 800}
+        daemon._run_connector_pipeline(tool_name="icc_exec", mode="write", arguments={"connector": "mock", "pipeline": "add-wall", "length": 0})
+        daemon._run_connector_pipeline(
+            tool_name="icc_exec", mode="write", arguments={"connector": "mock", "pipeline": "add-wall-rollback", "length": 800}
         )
 
         policy = _run_admin(["policy-status"], env)
@@ -844,7 +844,7 @@ def test_enrich_actions_adds_deterministic_instruction_for_tool_call():
             "scenario": "health-check",
             "intent_signature": "zwcad.write.apply-test",
             "call": {
-                "tool": "icc_write",
+                "tool": "icc_exec",
                 "arguments": {
                     "connector": "zwcad",
                     "pipeline": "apply-test",
@@ -859,11 +859,12 @@ def test_enrich_actions_adds_deterministic_instruction_for_tool_call():
     assert len(result) == 1
     assert "instruction" in result[0]
     assert "Deterministic tool call" in result[0]["instruction"]
-    assert "icc_write" in result[0]["instruction"]
+    assert "icc_exec" in result[0]["instruction"]
 
 
 def test_enrich_actions_marks_invalid_tool_call_payload():
-    actions = [{"type": "tool-call", "scenario": "x", "call": {"tool": "icc_exec", "arguments": {}}}]
+    # tool name is empty → invalid payload
+    actions = [{"type": "tool-call", "scenario": "x", "call": {"tool": "", "arguments": {}}}]
     result = repl_admin._enrich_actions(actions)
     assert len(result) == 1
     assert "instruction" in result[0]

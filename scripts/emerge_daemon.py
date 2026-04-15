@@ -423,9 +423,10 @@ class EmergeDaemon:
         preview_lines = py_src.splitlines()[:20]
         code_preview = "\n".join(preview_lines)
 
+        intent_sig = f"{connector}.{mode}.{pipeline_name}"
         next_step = (
-            f"Pipeline crystallized. Switch to pipeline path now:\n"
-            f"  icc_{'read' if mode == 'read' else 'write'} connector={connector!r} pipeline={pipeline_name!r}\n"
+            f"Pipeline crystallized. Use icc_span_open to execute via the bridge:\n"
+            f"  icc_span_open intent_signature={intent_sig!r}\n"
             f"Do NOT call icc_exec for this intent again — the pipeline handles it."
         )
         _cryst_payload = {
@@ -587,7 +588,7 @@ class EmergeDaemon:
         except Exception:
             return default
 
-    def _call_pipeline_tool(
+    def _run_connector_pipeline(
         self,
         *,
         tool_name: str,
@@ -611,6 +612,7 @@ class EmergeDaemon:
                     result=result,
                     is_error=False,
                     execution_path=execution_path,
+                    mode=mode,
                 )
             except Exception as exc:
                 self._append_warning_text(response, f"policy bookkeeping failed: {exc}")
@@ -644,6 +646,7 @@ class EmergeDaemon:
                     is_error=True,
                     error_text=str(exc),
                     execution_path="local",
+                    mode=mode,
                 )
             except Exception:
                 pass
@@ -969,7 +972,7 @@ class EmergeDaemon:
                 response = {"isError": False, "content": [{"type": "text", "text": json.dumps(promoted)}]}
                 try:
                     _pid_parts = promoted.get("pipeline_id", "").split(".")
-                    tool_for_event = "icc_read" if len(_pid_parts) >= 2 and _pid_parts[1] == "read" else "icc_write"
+                    tool_for_event = "icc_exec"
                     _rr = self._get_runner_router()
                     _client = _rr.find_client(arguments) if _rr else None
                     _execution_path = "remote" if _client is not None else "local"
@@ -1052,10 +1055,6 @@ class EmergeDaemon:
                     "isError": True,
                     "content": [{"type": "text", "text": f"icc_exec failed: {exc}"}],
                 }
-        if name == "icc_read":
-            return self._call_pipeline_tool(tool_name=name, mode="read", arguments=arguments)
-        if name == "icc_write":
-            return self._call_pipeline_tool(tool_name=name, mode="write", arguments=arguments)
         if name == "icc_crystallize":
             try:
                 intent_signature = str(arguments.get("intent_signature", "")).strip()
@@ -2016,7 +2015,7 @@ class EmergeDaemon:
     def _get_connector_intents(self, connector: str) -> dict[str, Any]:
         """Return all tracked intent entries for a connector from pipelines-registry.json.
 
-        source='pipeline' means a crystallized pipeline exists (icc_read/write path).
+        source='pipeline' means a crystallized pipeline exists (span-bridge path via icc_span_open).
         source='exec' means only icc_exec tracking so far.
         """
         registry_path = self._state_root / "pipelines-registry.json"
@@ -2047,13 +2046,13 @@ class EmergeDaemon:
             icon = status_icon.get(info["status"], "?")
             success_pct = f"{info['success_rate'] * 100:.0f}%"
             desc = info["description"] or ""
-            # Show whether intent has a crystallized pipeline or is still exec-only
-            path = "`icc_read/write`" if info["source"] == "pipeline" else "`icc_exec`"
+            # Show whether intent has a crystallized pipeline (span bridge) or is still exec-only
+            path = "`span-bridge`" if info["source"] == "pipeline" else "`icc_exec`"
             rows.append(f"| `{key}` | {info['status']} {icon} | {success_pct} | {path} | {desc} |")
         header = (
             "---\n"
             "## Tracked Intents (Emerge flywheel)\n"
-            "- Intents with `icc_read/write` path are crystallized pipelines — use `icc_read`/`icc_write`, NOT `icc_exec`.\n"
+            "- Intents with `span-bridge` path are crystallized pipelines — `icc_span_open` executes them at zero LLM cost.\n"
             "- Intents with `icc_exec` path are still in explore/canary — use `icc_exec` with the exact `intent_signature`.\n"
             "- Do NOT invent new intent names — pick from this list whenever the intent matches.\n\n"
             "| Intent | Status | Success | Path | Description |\n"
@@ -2080,7 +2079,7 @@ class EmergeDaemon:
                 f"Use icc_exec to explore the {vertical} vertical. Goal: {goal}.\n"
                 f"Include intent_signature='<intent>' and script_ref='~/.emerge/connectors/{vertical}/pipelines/read/state.py' "
                 f"in each icc_exec call so the policy flywheel can track progress.\n"
-                f"When the exec is stable and consistent, use icc_read with connector='{vertical}' to verify the pipeline works."
+                f"When the exec is stable and consistent, use icc_span_open with intent_signature='<intent>' to trigger the bridge path."
             )
             return {"name": name, "messages": [{"role": "user", "content": content}]}
         raise KeyError(f"Prompt not found: {name}")
@@ -2221,13 +2220,19 @@ class EmergeDaemon:
         is_error: bool,
         error_text: str = "",
         execution_path: str = "local",
+        mode: str = "",
     ) -> None:
         session_dir = self._state_root / self._base_session_id
         session_dir.mkdir(parents=True, exist_ok=True)
 
         connector = str(arguments.get("connector", ""))
-        mode = "read" if tool_name == "icc_read" else "write"
         pipeline = str(arguments.get("pipeline", ""))
+        _pid = str(arguments.get("pipeline_id") or result.get("pipeline_id", ""))
+        _pid_parts = _pid.split(".")
+        if len(_pid_parts) >= 3:
+            mode = _pid_parts[1]
+        elif not mode:
+            mode = "read" if tool_name.endswith("_read") else "write"
         pipeline_id = str(result.get("pipeline_id", f"{connector}.{mode}.{pipeline}"))
         intent_signature = str(result.get("intent_signature", ""))
         target_profile = str(arguments.get("target_profile", "default"))
@@ -2274,9 +2279,8 @@ class EmergeDaemon:
             pass  # disk full or permissions — non-fatal
 
         try:
-            _mode = "read" if "read" in tool_name else "write"
             self._sink.emit(
-                f"pipeline.{_mode}",
+                f"pipeline.{mode}",
                 {
                     "pipeline_id": pipeline_id,
                     "is_error": is_error,

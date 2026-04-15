@@ -67,7 +67,7 @@ def test_daemon_emits_pipeline_read_metric(tmp_path):
         from scripts.emerge_daemon import EmergeDaemon
         daemon = EmergeDaemon(root=ROOT)
         daemon._sink = __import__("scripts.metrics", fromlist=["LocalJSONLSink"]).LocalJSONLSink(path=metrics_path)
-        daemon.call_tool("icc_read", {"connector": "mock", "pipeline": "layers"})
+        daemon._run_connector_pipeline(tool_name="icc_exec", mode="read", arguments={"connector": "mock", "pipeline": "layers"})
         assert metrics_path.exists()
         events = [json.loads(l) for l in metrics_path.read_text().strip().split("\n") if l]
         types = [e["event_type"] for e in events]

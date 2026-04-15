@@ -43,7 +43,7 @@ Steps:
    - Verify test baseline numbers in `README.md` (badge + quick verification baseline) are current.
    - Run a targeted stale-token scan and fix any hits that are genuinely stale:
      ```bash
-     rg "377|2025-03-26|icc_read|icc_write" README.md CLAUDE.md
+     rg "377|2025-03-26" README.md CLAUDE.md
      ```
      (Keep legitimate historical/compatibility mentions; only fix stale/incorrect claims.)
 

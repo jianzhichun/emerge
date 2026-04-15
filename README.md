@@ -106,7 +106,7 @@ flowchart TD
 
 ### 2. Pipeline execution
 
-Stable pipeline execution has two paths depending on whether a remote runner is configured. User-facing path is `icc_span_open` bridge; `icc_read`/`icc_write` remain internal compatibility paths.
+Stable pipeline execution uses the `icc_span_open` bridge: when an intent is stable, the bridge short-circuits directly to the pipeline result with zero LLM overhead.
 
 **Local (default).** The daemon calls the pipeline engine in-process. No network, no subprocess.
 
@@ -256,8 +256,6 @@ flowchart LR
 | `icc_goal_read`   | Read active goal snapshot plus recent goal ledger events.                                                                                                                                    |
 | `icc_goal_rollback` | Roll back active goal to a previous goal event id and produce a new snapshot version.                                                                                                      |
 | `icc_hub`           | Memory Hub management: `configure` (first-time setup — saves config + initialises git worktree, callable from CC via natural language) · `list` config · `add`/`remove` connectors · `sync` (enqueue push+pull) · `status` (pending conflicts + awaiting-application count) · `resolve` conflicts (`ours`/`theirs`/`skip`). |
-
-> `icc_read` / `icc_write` are deprecated and removed from schema. Use `icc_span_open` instead — the span bridge executes the pipeline automatically when stable.
 
 
 **Resources:** `policy://current` · `runner://status` · `state://deltas` · `state://goal` · `state://goal-ledger` · `pipeline://{connector}/{mode}/{name}` · `connector://{vertical}/notes` · `connector://{vertical}/intents` · `connector://{vertical}/spans`

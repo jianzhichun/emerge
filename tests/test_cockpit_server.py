@@ -233,7 +233,7 @@ def test_cockpit_full_flow(tmp_path, monkeypatch):
             "type": "tool-call",
             "intent_signature": "myconn.write.apply-test",
             "call": {
-                "tool": "icc_write",
+                "tool": "icc_exec",
                 "arguments": {
                     "connector": "myconn",
                     "pipeline": "apply-test",

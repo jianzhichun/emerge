@@ -212,8 +212,8 @@ class RunnerExecutor:
 
     def run(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Execute a tool request. The runner only handles icc_exec — pipeline
-        operations (icc_read/icc_write) and icc_crystallize are handled by the
-        daemon using locally-loaded connector assets sent as inline code."""
+        bridge execution and icc_crystallize are handled by the daemon using
+        locally-loaded connector assets sent as inline code."""
         if tool_name == "icc_exec":
             profile = str(arguments.get("target_profile", "default"))
             repl = self._get_session(profile)

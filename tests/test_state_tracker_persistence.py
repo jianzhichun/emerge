@@ -100,7 +100,7 @@ def test_add_risk_keeps_distinct_risks():
     """Different risk strings must all be preserved."""
     from scripts.state_tracker import StateTracker
     tracker = StateTracker()
-    tracker.add_risk("pipeline verification failed: icc_read")
-    tracker.add_risk("pipeline verification failed: icc_write")
+    tracker.add_risk("pipeline verification failed: mock.read.state")
+    tracker.add_risk("pipeline verification failed: mock.write.apply-change")
     tracker.add_risk("runner unreachable: mycader-1")
     assert len(tracker.state["open_risks"]) == 3
