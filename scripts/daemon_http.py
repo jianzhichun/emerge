@@ -436,6 +436,20 @@ def _is_cockpit_http_path(path: str) -> bool:
     return path == "/api" or path.startswith("/api/")
 
 
+def _coerce_request_target_to_path(handler: Any) -> None:
+    """RFC 7230 absolute-form request-target is a full URL; urlparse().path can be ''.
+
+    Browsers may send ``GET http://host:port HTTP/1.1`` with no path segment — normalize to ``/``
+    so Cockpit and route tables see the root path.
+    """
+    import urllib.parse as _up
+    raw = handler.path
+    if raw.startswith(("http://", "https://")):
+        p = _up.urlparse(raw)
+        path = p.path or "/"
+        handler.path = path + (("?" + p.query) if p.query else "")
+
+
 def _make_handler(srv: "DaemonHTTPServer"):
     from scripts.admin.cockpit import InProcessCockpitBridge, _CockpitHandler
 
@@ -454,7 +468,8 @@ def _make_handler(srv: "DaemonHTTPServer"):
 
         def do_OPTIONS(self):  # noqa: N802
             import urllib.parse as _up
-            path = _up.urlparse(self.path).path
+            _coerce_request_target_to_path(self)
+            path = _up.urlparse(self.path).path or "/"
             if _is_cockpit_http_path(path):
                 self._cockpit = _bridge
                 return _CockpitHandler.do_OPTIONS(self)
@@ -462,7 +477,8 @@ def _make_handler(srv: "DaemonHTTPServer"):
 
         def do_GET(self):  # noqa: N802
             import urllib.parse as _up
-            path = _up.urlparse(self.path).path
+            _coerce_request_target_to_path(self)
+            path = _up.urlparse(self.path).path or "/"
             if _is_cockpit_http_path(path):
                 self._cockpit = _bridge
                 return _CockpitHandler.do_GET(self)
@@ -579,8 +595,9 @@ def _make_handler(srv: "DaemonHTTPServer"):
 
         def do_POST(self):  # noqa: N802
             import urllib.parse as _up
+            _coerce_request_target_to_path(self)
             parsed = _up.urlparse(self.path)
-            path = parsed.path
+            path = parsed.path or "/"
             qs = _up.parse_qs(parsed.query)
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length) if length else b""

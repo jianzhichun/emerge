@@ -1,5 +1,6 @@
 # tests/test_daemon_http.py
 from __future__ import annotations
+import http.client
 import json, threading, time, urllib.request, urllib.error
 import pytest
 from pathlib import Path
@@ -63,6 +64,27 @@ def test_apis_path_not_routed_to_cockpit(tmp_path):
         urllib.request.urlopen(req, timeout=5)
     assert exc.value.code == 404
     srv.stop()
+
+
+def test_get_absolute_request_target_without_path_serves_cockpit(tmp_path):
+    """RFC 7230 absolute-form ``GET http://host:port`` has empty path → must serve ``/``."""
+    srv = _make_server(tmp_path)
+    host, port = "127.0.0.1", srv.port
+    conn = http.client.HTTPConnection(host, port, timeout=5)
+    try:
+        conn.request(
+            "GET",
+            f"http://{host}:{port}",
+            headers={"Host": f"{host}:{port}"},
+        )
+        r = conn.getresponse()
+        body = r.read().decode("utf-8", errors="replace")
+        assert r.status == 200
+        assert "text/html" in (r.getheader("Content-Type") or "").lower()
+        assert len(body) > 100
+    finally:
+        conn.close()
+        srv.stop()
 
 
 def test_sse_channel_established(tmp_path):
