@@ -59,11 +59,12 @@ def test_build_runner_tarball_contains_all_files():
 def test_generate_install_sh_embeds_config():
     script = _generate_runner_install_sh(
         team_lead_url="http://10.0.0.1:8789",
-        profile="test-runner",
         runner_port=8787,
     )
     assert 'TEAM_LEAD_URL="http://10.0.0.1:8789"' in script
-    assert 'PROFILE="test-runner"' in script or '"test-runner"' in script
+    # Profile is auto-detected from hostname at install time, not hardcoded
+    assert "hostname" in script
+    assert "EMERGE_PROFILE" in script
     assert 'RUNNER_PORT="8787"' in script
     assert "#!/usr/bin/env bash" in script
     assert "pypi.org" in script
@@ -75,12 +76,13 @@ def test_generate_install_sh_embeds_config():
 def test_generate_install_ps1_embeds_config():
     script = _generate_runner_install_ps1(
         team_lead_url="http://10.0.0.1:8789",
-        profile="test-runner",
         runner_port=8787,
     )
     # URL is single-quoted in PS1 (no interpolation risk)
     assert "$TEAM_LEAD_URL = 'http://10.0.0.1:8789'" in script
-    assert "test-runner" in script
+    # Profile is auto-detected from COMPUTERNAME at install time
+    assert "COMPUTERNAME" in script
+    assert "EMERGE_PROFILE" in script
     assert "$RUNNER_PORT = 8787" in script
     assert "EmergeRunner" in script
     assert "runner.tar.gz" in script
@@ -91,7 +93,6 @@ def test_generate_install_ps1_url_single_quote_escaped():
     """Single quotes in the URL are doubled — no injection possible."""
     script = _generate_runner_install_ps1(
         team_lead_url="http://host:8789/path'with'quotes",
-        profile="p",
         runner_port=8787,
     )
     # Should contain '' (doubled single quote), not raw ' that would end the PS1 string
@@ -120,13 +121,11 @@ def test_detect_lan_ip_raises_when_no_routable_interface(monkeypatch):
 
 def test_cmd_runner_install_url_returns_both_platforms(monkeypatch):
     monkeypatch.setattr("scripts.admin.runner._detect_lan_ip", lambda: "10.0.0.1")
-    result = cmd_runner_install_url(profile="myrunner", daemon_port=8789, runner_port=8787)
+    result = cmd_runner_install_url(daemon_port=8789, runner_port=8787)
     assert result["ok"] is True
     assert "10.0.0.1" in result["bash"]
-    assert "myrunner" in result["bash"]
     assert "curl" in result["bash"]
     assert "10.0.0.1" in result["powershell"]
-    assert "myrunner" in result["powershell"]
     assert "irm" in result["powershell"]
     assert result["team_lead_url"] == "http://10.0.0.1:8789"
 
@@ -180,22 +179,22 @@ def test_daemon_serves_install_scripts(tmp_path, monkeypatch):
     try:
         port = srv.port
         sh_req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/runner-install.sh?profile=testprofile&port=8787"
+            f"http://127.0.0.1:{port}/runner-install.sh?port=8787"
         )
         with urllib.request.urlopen(sh_req, timeout=5) as resp:
             text = resp.read().decode()
         assert resp.status == 200
         assert "#!/usr/bin/env bash" in text
-        assert "testprofile" in text
+        assert "hostname" in text
         assert "runner.tar.gz" in text
 
         ps_req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/runner-install.ps1?profile=testprofile"
+            f"http://127.0.0.1:{port}/runner-install.ps1"
         )
         with urllib.request.urlopen(ps_req, timeout=5) as resp:
             ps1 = resp.read().decode()
         assert "$TEAM_LEAD_URL" in ps1
-        assert "testprofile" in ps1
+        assert "COMPUTERNAME" in ps1
     finally:
         srv.stop()
 

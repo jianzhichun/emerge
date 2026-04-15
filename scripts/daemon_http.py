@@ -556,7 +556,6 @@ def _make_handler(srv: "DaemonHTTPServer"):
             elif path in ("/runner-install.sh", "/runner-install.ps1"):
                 import urllib.parse as _up_ri
                 qs_ri = _up_ri.parse_qs(_up_ri.urlparse(self.path).query)
-                profile = (qs_ri.get("profile", ["default"])[0] or "default").strip() or "default"
                 try:
                     runner_port = int((qs_ri.get("port") or ["8787"])[0])
                 except ValueError:
@@ -572,7 +571,6 @@ def _make_handler(srv: "DaemonHTTPServer"):
                 if path.endswith(".sh"):
                     body = _generate_runner_install_sh(
                         team_lead_url=team_lead_url,
-                        profile=profile,
                         runner_port=runner_port,
                     ).encode("utf-8")
                     ctype = "text/x-sh; charset=utf-8"
@@ -580,7 +578,6 @@ def _make_handler(srv: "DaemonHTTPServer"):
                 else:
                     body = _generate_runner_install_ps1(
                         team_lead_url=team_lead_url,
-                        profile=profile,
                         runner_port=runner_port,
                     ).encode("utf-8")
                     ctype = "text/plain; charset=utf-8"

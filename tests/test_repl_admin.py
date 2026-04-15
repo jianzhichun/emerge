@@ -322,9 +322,9 @@ def test_runner_install_url_cli_json(monkeypatch):
     from scripts.admin.runner import cmd_runner_install_url
 
     monkeypatch.setattr("scripts.admin.runner._detect_lan_ip", lambda: "10.0.0.2")
-    out = cmd_runner_install_url(profile="p1", daemon_port=8789, runner_port=8787)
+    out = cmd_runner_install_url(daemon_port=8789, runner_port=8787)
     assert out["ok"] is True
-    assert "p1" in out["bash"]
+    assert "runner-install.sh" in out["bash"]
     assert out["team_lead_url"] == "http://10.0.0.2:8789"
 
 

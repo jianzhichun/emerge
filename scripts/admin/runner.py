@@ -283,16 +283,14 @@ def _build_runner_tarball(plugin_root: Path) -> bytes:
 def _generate_runner_install_sh(
     *,
     team_lead_url: str,
-    profile: str,
     runner_port: int,
 ) -> str:
-    p_json = json.dumps(profile)
     tl_json = json.dumps(team_lead_url.rstrip("/"))
     return rf"""#!/usr/bin/env bash
 set -euo pipefail
 
 TEAM_LEAD_URL={tl_json}
-PROFILE={p_json}
+PROFILE="${{PROFILE:-$(hostname -s 2>/dev/null || hostname)}}"
 RUNNER_PORT="{runner_port}"
 RUNNER_ROOT="$HOME/.emerge/runner"
 
@@ -352,7 +350,7 @@ mkdir -p "$HOME/.emerge"
 cat > "$HOME/.emerge/runner-config.json" <<JSON
 {{
   "team_lead_url": {tl_json},
-  "runner_profile": {p_json},
+  "runner_profile": "$PROFILE",
   "port": {runner_port},
   "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)"
 }}
@@ -415,23 +413,21 @@ else
   echo "[Warn] Check: curl http://localhost:$RUNNER_PORT/health"
 fi
 
-echo "=== Done. Profile $PROFILE → $TEAM_LEAD_URL ==="
+echo "=== Done. Profile $PROFILE (override: EMERGE_PROFILE=<name>) → $TEAM_LEAD_URL ==="
 """
 
 
 def _generate_runner_install_ps1(
     *,
     team_lead_url: str,
-    profile: str,
     runner_port: int,
 ) -> str:
     # Use PS1 single-quoted literals: safe for URLs (no interpolation, '' escapes literal ')
     ps1_tl = "'" + team_lead_url.rstrip("/").replace("'", "''") + "'"
-    prof_esc = json.dumps(profile)  # JSON string doubles as PS1 double-quoted literal (URLs have no $)
     return f"""$ErrorActionPreference = "Stop"
 
 $TEAM_LEAD_URL = {ps1_tl}
-$RUNNER_NAME = {prof_esc}
+$RUNNER_NAME = if ($env:EMERGE_PROFILE) {{ $env:EMERGE_PROFILE }} else {{ $env:COMPUTERNAME }}
 $RUNNER_PORT = {runner_port}
 $RUNNER_ROOT = "$env:USERPROFILE\\.emerge\\runner"
 
@@ -520,18 +516,20 @@ try {{
     Write-Host "[Warn] Runner may still be starting."
 }}
 
-Write-Host "=== Done. Profile $RUNNER_NAME -> $TEAM_LEAD_URL ===" -ForegroundColor Cyan
+Write-Host "=== Done. Profile $RUNNER_NAME (override: `$env:EMERGE_PROFILE=<name>) -> $TEAM_LEAD_URL ===" -ForegroundColor Cyan
 """
 
 
 def cmd_runner_install_url(
     *,
-    profile: str = "default",
     runner_port: int = 8787,
     daemon_port: int = 8789,
 ) -> dict:
-    """Return copy-paste install commands for Linux/macOS and Windows."""
-    profile = (profile or "default").strip() or "default"
+    """Return copy-paste install commands for Linux/macOS and Windows.
+
+    Profile is auto-detected from hostname on the runner machine.
+    Override: EMERGE_PROFILE=<name> curl ... | bash
+    """
     if runner_port <= 0 or runner_port > 65535:
         raise ValueError("runner_port must be in 1..65535")
     if daemon_port <= 0 or daemon_port > 65535:
@@ -540,14 +538,12 @@ def cmd_runner_install_url(
     team_lead_url = f"http://{lan_ip}:{daemon_port}".rstrip("/")
     from urllib.parse import quote
 
-    q = quote(profile, safe="")
     qp = quote(str(runner_port), safe="")
     base = f"{team_lead_url}/runner-install"
-    bash_cmd = f'curl -fsSL "{base}.sh?profile={q}&port={qp}" | bash'
-    ps_cmd = f'irm "{base}.ps1?profile={q}&port={qp}" | iex'
+    bash_cmd = f'curl -fsSL "{base}.sh?port={qp}" | bash'
+    ps_cmd = f'irm "{base}.ps1?port={qp}" | iex'
     return {
         "ok": True,
-        "profile": profile,
         "runner_port": runner_port,
         "daemon_port": daemon_port,
         "team_lead_url": team_lead_url,

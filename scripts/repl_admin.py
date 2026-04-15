@@ -178,7 +178,6 @@ def main() -> None:
         )
     elif args.command == "runner-install-url":
         out = cmd_runner_install_url(
-            profile=str(args.target_profile) or "default",
             runner_port=int(args.runner_port),
             daemon_port=int(args.daemon_port),
         )
