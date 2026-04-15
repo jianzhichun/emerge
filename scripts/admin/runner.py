@@ -15,9 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# Re-use the canonical implementation from api to avoid duplication.
-# Both modules resolve ROOT to the same project root.
-from scripts.admin.api import _local_plugin_version  # noqa: E402
+from scripts.admin.shared import _local_plugin_version  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

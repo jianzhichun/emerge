@@ -10,11 +10,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.emerge_sync import export_vertical, import_vertical
-from scripts.emerge_sync import (
-    _file_to_intent_sig,
-    _load_candidate_timestamps,
-    _load_spans_timestamps,
+from scripts.sync.asset_ops import export_vertical, import_vertical
+from scripts.sync.asset_ops import (
+    file_to_intent_sig as _file_to_intent_sig,
+    load_candidate_timestamps as _load_candidate_timestamps,
+    load_spans_timestamps as _load_spans_timestamps,
 )
 from scripts.hub_config import save_hub_config
 from scripts.policy_config import STABLE_MIN_ATTEMPTS
@@ -420,14 +420,14 @@ def _init_hub_worktree(worktree: Path, remote: str, branch: str = "emerge-hub") 
 
 
 def test_git_fetch_and_detect_no_changes(git_setup):
-    from scripts.emerge_sync import git_has_remote_changes
+    from scripts.sync.git_ops import git_has_remote_changes
     bare_remote, worktree, hub_home = git_setup
     _init_hub_worktree(worktree, str(bare_remote))
     assert git_has_remote_changes(worktree, "emerge-hub") is False
 
 
 def test_git_push_commits_and_updates_remote(git_setup, connector_home):
-    from scripts.emerge_sync import git_push
+    from scripts.sync.git_ops import git_push
     bare_remote, worktree, hub_home = git_setup
     connectors, _, state_root = connector_home
     _make_connector(connectors, "gmail", state_root)
@@ -445,7 +445,7 @@ def test_git_push_commits_and_updates_remote(git_setup, connector_home):
 # ── Push/pull flow tests ────────────────────────────────────────────────────
 
 def test_push_flow_exports_and_pushes(git_setup, connector_home):
-    from scripts.emerge_sync import push_flow
+    from scripts.sync.sync_flow import push_flow
     bare_remote, worktree, hub_home = git_setup
     connectors, _, state_root = connector_home
     _make_connector(connectors, "gmail", state_root)
@@ -456,7 +456,7 @@ def test_push_flow_exports_and_pushes(git_setup, connector_home):
 
 
 def test_pull_flow_imports_remote_changes(git_setup, connector_home):
-    from scripts.emerge_sync import pull_flow, push_flow
+    from scripts.sync.sync_flow import pull_flow, push_flow
     bare_remote, worktree_a, hub_home = git_setup
     connectors_a, _, state_root = connector_home
 
@@ -476,7 +476,8 @@ def test_pull_flow_imports_remote_changes(git_setup, connector_home):
 
 def test_apply_pending_resolutions_theirs_writes_remote_version(git_setup, connector_home):
     """'theirs' resolution must actually overwrite the local file with the remote version."""
-    from scripts.emerge_sync import _apply_pending_resolutions, push_flow
+    from scripts.sync.git_ops import apply_pending_resolutions as _apply_pending_resolutions
+    from scripts.sync.sync_flow import push_flow
     from scripts.hub_config import load_pending_conflicts, save_pending_conflicts, new_conflict_id
 
     bare_remote, worktree, hub_home = git_setup
@@ -524,7 +525,8 @@ def test_apply_pending_resolutions_theirs_writes_remote_version(git_setup, conne
 
 def test_apply_pending_resolutions_ours_marks_applied_without_git_change(git_setup, connector_home):
     """'ours' resolution is a no-op (file stays at HEAD) but must be marked applied."""
-    from scripts.emerge_sync import _apply_pending_resolutions, push_flow
+    from scripts.sync.git_ops import apply_pending_resolutions as _apply_pending_resolutions
+    from scripts.sync.sync_flow import push_flow
     from scripts.hub_config import load_pending_conflicts, save_pending_conflicts, new_conflict_id
 
     bare_remote, worktree, hub_home = git_setup
@@ -601,11 +603,10 @@ def test_run_stable_events_skips_pull_when_push_conflicts(git_setup, connector_h
 
 def test_run_event_loop_fires_stable_events_on_queue_write(tmp_path, monkeypatch):
     """Writing to sync-queue.jsonl must trigger _run_stable_events immediately."""
-    from scripts import emerge_sync
     import threading
+    import scripts.sync.sync_flow as _sync_flow
 
     fired = threading.Event()
-    import scripts.sync.sync_flow as _sync_flow
     monkeypatch.setattr(_sync_flow, "_run_stable_events", lambda: fired.set())
     monkeypatch.setattr(_sync_flow, "_run_pull_cycle", lambda: None)
 
@@ -615,7 +616,7 @@ def test_run_event_loop_fires_stable_events_on_queue_write(tmp_path, monkeypatch
                         lambda: {"poll_interval_seconds": 999})
 
     stop = threading.Event()
-    t = threading.Thread(target=emerge_sync.run_event_loop, args=(stop,), daemon=True)
+    t = threading.Thread(target=_sync_flow.run_event_loop, args=(stop,), daemon=True)
     t.start()
 
     queue.write_text('{"type":"stable"}\n')
@@ -626,11 +627,10 @@ def test_run_event_loop_fires_stable_events_on_queue_write(tmp_path, monkeypatch
 
 def test_run_event_loop_pull_cycle_fires_on_timer(tmp_path, monkeypatch):
     """_run_pull_cycle must fire after poll_interval_seconds."""
-    from scripts import emerge_sync
     import threading
+    import scripts.sync.sync_flow as _sync_flow
 
     pulled = threading.Event()
-    import scripts.sync.sync_flow as _sync_flow
     monkeypatch.setattr(_sync_flow, "_run_stable_events", lambda: None)
     monkeypatch.setattr(_sync_flow, "_run_pull_cycle", lambda: pulled.set())
     monkeypatch.setattr(_sync_flow, "sync_queue_path", lambda: tmp_path / "q.jsonl")
@@ -638,7 +638,7 @@ def test_run_event_loop_pull_cycle_fires_on_timer(tmp_path, monkeypatch):
                         lambda: {"poll_interval_seconds": 1})  # 1s for test speed
 
     stop = threading.Event()
-    t = threading.Thread(target=emerge_sync.run_event_loop, args=(stop,), daemon=True)
+    t = threading.Thread(target=_sync_flow.run_event_loop, args=(stop,), daemon=True)
     t.start()
 
     assert pulled.wait(timeout=4.0), "pull cycle never fired"

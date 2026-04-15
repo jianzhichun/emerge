@@ -1,4 +1,4 @@
-"""Memory Hub sync agent — CLI entry point and backward-compat shim.
+"""Memory Hub sync agent — CLI entry point.
 
 Real code lives in:
   scripts/sync/asset_ops.py  — connector asset export/import
@@ -8,7 +8,6 @@ Real code lives in:
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -16,36 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Re-export public API for backward compatibility
-from scripts.sync.asset_ops import (  # noqa: E402, F401
-    connectors_root as _connectors_root,
-    export_vertical,
-    import_vertical,
-    write_json as _write_json,
-    file_to_intent_sig as _file_to_intent_sig,
-    load_candidate_timestamps as _load_candidate_timestamps,
-    load_spans_timestamps as _load_spans_timestamps,
-    export_spans_json as _export_spans_json,
-    import_spans_json as _import_spans_json,
-)
-from scripts.sync.git_ops import (  # noqa: E402, F401
-    git_has_remote_changes,
-    git_merge_remote,
-    git_push,
-    git_setup_worktree,
-    record_conflicts,
-    apply_pending_resolutions as _apply_pending_resolutions,
-    build_conflict_entries as _build_conflict_entries,
-)
-from scripts.sync.sync_flow import (  # noqa: E402, F401
-    push_flow,
-    pull_flow,
-    run_event_loop,
-    run_poll_loop,
-    _run_stable_events,
-    _run_pull_cycle,
-)
-
+from scripts.sync.asset_ops import connectors_root as _connectors_root  # noqa: E402
+from scripts.sync.git_ops import git_setup_worktree  # noqa: E402
+from scripts.sync.sync_flow import push_flow, pull_flow, run_event_loop  # noqa: E402
 from scripts.hub_config import (  # noqa: E402
     is_configured,
     load_hub_config,

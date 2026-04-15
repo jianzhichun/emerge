@@ -173,7 +173,7 @@ def cmd_connector_export(
     state_root: Path | None = None,
 ) -> dict:
     """Pack a connector directory and its registry entries into a zip file."""
-    from scripts.admin.api import _local_plugin_version
+    from scripts.admin.shared import _local_plugin_version
     c_root = connector_root if connector_root is not None else _resolve_connector_root()
     connector_dir = c_root / connector
     if not connector_dir.exists():

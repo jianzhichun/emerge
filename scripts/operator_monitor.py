@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 from collections import deque
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from scripts.observer_plugin import AdapterRegistry
 from scripts.pattern_detector import PatternDetector, PatternSummary
@@ -17,7 +17,6 @@ class OperatorMonitor(threading.Thread):
     def __init__(
         self,
         machines: dict[str, Any],
-        push_fn: Callable[[str, dict, PatternSummary], None] | None = None,
         poll_interval_s: float = 5.0,
         event_root: Path | None = None,
         adapter_root: Path | None = None,
@@ -25,7 +24,6 @@ class OperatorMonitor(threading.Thread):
     ) -> None:
         super().__init__(daemon=True, name="OperatorMonitor")
         self._machines = machines
-        self._push_fn = push_fn  # deprecated: kept for backward compat
         self._poll_interval_s = poll_interval_s
         self._event_root = event_root or (Path.home() / ".emerge" / "operator-events")
         self._state_root = state_root or (Path.home() / ".emerge" / "repl")
@@ -104,6 +102,3 @@ class OperatorMonitor(threading.Thread):
             }
             with events_local.open("a", encoding="utf-8") as f:
                 f.write(_json.dumps(alert, ensure_ascii=False) + "\n")
-            # Deprecated callback path (backward compat)
-            if self._push_fn is not None:
-                self._push_fn(summary.policy_stage, context, summary)

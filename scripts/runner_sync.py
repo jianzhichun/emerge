@@ -75,8 +75,7 @@ def _runner_version(runner_url: str) -> str:
 
 def _deploy(runner_url: str, profile: str) -> None:
     """Run runner-deploy for the given profile."""
-    # Import repl_admin functions directly to avoid subprocess overhead
-    from scripts.repl_admin import cmd_runner_deploy
+    from scripts.admin.runner import cmd_runner_deploy
     cmd_runner_deploy(runner_url=runner_url, target_profile=profile)
 
 

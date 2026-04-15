@@ -124,7 +124,7 @@ def handle_icc_hub(
         save_hub_config(cfg)
 
         try:
-            from scripts.emerge_sync import git_setup_worktree
+            from scripts.sync.git_ops import git_setup_worktree
             from scripts.hub_config import hub_worktree_path
             worktree = hub_worktree_path()
             result = git_setup_worktree(worktree, remote, branch, author)
@@ -133,7 +133,7 @@ def handle_icc_hub(
             if action_taken == "cloned" and cfg.get("selected_verticals"):
                 import logging as _logging
 
-                from scripts.emerge_sync import import_vertical as _import_vertical
+                from scripts.sync.asset_ops import import_vertical as _import_vertical
 
                 _log = _logging.getLogger(__name__)
                 for _connector in cfg["selected_verticals"]:

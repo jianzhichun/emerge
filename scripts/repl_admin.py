@@ -1,12 +1,12 @@
-"""Local REPL state admin utility — CLI entry point and coordination layer.
+"""Local REPL state admin utility — CLI entry point.
 
 All business logic lives in the sub-packages:
-  scripts/admin/api.py      — cockpit data API (no HTTP)
-  scripts/admin/cockpit.py  — CockpitHTTPServer and HTTP handlers
-  scripts/admin/runner.py   — runner SSH deploy / bootstrap / config
-
-This file re-exports every public name from those modules so that existing
-importers (tests, emerge_daemon) keep working without change.
+  scripts/admin/shared.py    — path resolvers, _local_plugin_version
+  scripts/admin/api.py       — SSE, cockpit HTML, goal, settings, status
+  scripts/admin/control_plane.py — all cmd_control_plane_* functions
+  scripts/admin/pipeline.py  — pipeline/connector operations
+  scripts/admin/cockpit.py   — CockpitHTTPServer and HTTP handlers
+  scripts/admin/runner.py    — runner SSH deploy / bootstrap / config
 """
 from __future__ import annotations
 
@@ -19,25 +19,16 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# ---------------------------------------------------------------------------
-# Re-export everything from sub-packages (backward compatibility)
-# ---------------------------------------------------------------------------
-
+from scripts.admin.shared import (  # noqa: E402
+    _local_plugin_version,
+    _resolve_state_root,
+    _resolve_repl_root,
+    _resolve_connector_root,
+)
 from scripts.admin.api import (  # noqa: E402
     _sse_clients,
     _sse_lock,
     _sse_broadcast,
-    _local_plugin_version,
-    _resolve_state_root,
-    _resolve_repl_root,
-    _resolve_session_id,
-    _session_paths,
-    _load_hook_state_summary,
-    _resolve_connector_root,
-    _normalize_pipeline_key,
-    _load_registry,
-    _save_registry,
-    _normalize_intent_signature,
     _COCKPIT_INJECTED_HTML,
     _COCKPIT_INJECT_LOCK,
     _MAX_INJECTED_PER_CONNECTOR,
@@ -46,21 +37,21 @@ from scripts.admin.api import (  # noqa: E402
     _cockpit_list_injected_html,
     _validate_action,
     _enrich_actions,
-    _span_policy_label,
     _cmd_set_goal,
     _cmd_goal_history,
     _cmd_goal_rollback,
     _cmd_save_settings,
     cmd_status,
     cmd_clear,
-    cmd_policy_status,
-    cmd_pipeline_delete,
-    cmd_pipeline_set,
-    cmd_connector_export,
-    cmd_connector_import,
-    cmd_normalize_intents,
     cmd_assets,
     cmd_submit_actions,
+    render_policy_status_pretty,
+)
+from scripts.admin.control_plane import (  # noqa: E402
+    _resolve_session_id,
+    _session_paths,
+    _load_hook_state_summary,
+    _span_policy_label,
     cmd_control_plane_state,
     cmd_control_plane_intents,
     cmd_control_plane_session,
@@ -79,9 +70,19 @@ from scripts.admin.api import (  # noqa: E402
     cmd_control_plane_policy_unfreeze,
     cmd_control_plane_session_export,
     cmd_control_plane_session_reset,
-    render_policy_status_pretty,
 )
-
+from scripts.admin.pipeline import (  # noqa: E402
+    _normalize_pipeline_key,
+    _load_registry,
+    _save_registry,
+    _normalize_intent_signature,
+    cmd_policy_status,
+    cmd_pipeline_delete,
+    cmd_pipeline_set,
+    cmd_connector_export,
+    cmd_connector_import,
+    cmd_normalize_intents,
+)
 from scripts.admin.cockpit import (  # noqa: E402
     _make_cockpit_handler,
     _ReuseAddrTCPServer,
@@ -92,7 +93,6 @@ from scripts.admin.cockpit import (  # noqa: E402
     cmd_serve,
     cmd_serve_stop,
 )
-
 from scripts.admin.runner import (  # noqa: E402
     cmd_runner_status,
     cmd_runner_deploy,

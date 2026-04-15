@@ -35,53 +35,10 @@ from scripts.policy_config import (  # noqa: E402
     atomic_write_json,
     default_hook_state_root,
 )
+from scripts.admin.shared import _resolve_state_root, _resolve_repl_root, _resolve_connector_root, _local_plugin_version  # noqa: E402
+from scripts.admin.control_plane import _session_paths, _resolve_session_id  # noqa: E402
 from scripts.goal_control_plane import EVENT_HUMAN_EDIT, GoalControlPlane  # noqa: E402
 from scripts.state_tracker import StateTracker, load_tracker, save_tracker  # noqa: E402
-
-# ---------------------------------------------------------------------------
-# Re-exports from sub-modules (backward compatibility)
-# ---------------------------------------------------------------------------
-from scripts.admin.shared import (  # noqa: E402,F401
-    _resolve_state_root,
-    _resolve_repl_root,
-    _resolve_connector_root,
-)
-from scripts.admin.control_plane import (  # noqa: E402,F401
-    _resolve_session_id,
-    _session_paths,
-    _load_hook_state_summary,
-    _span_policy_label,
-    cmd_control_plane_state,
-    cmd_control_plane_intents,
-    cmd_control_plane_session,
-    cmd_control_plane_hook_state,
-    cmd_control_plane_exec_events,
-    cmd_control_plane_tool_events,
-    cmd_control_plane_pipeline_events,
-    cmd_control_plane_spans,
-    cmd_control_plane_span_candidates,
-    cmd_control_plane_reflection_cache,
-    cmd_control_plane_monitors,
-    cmd_control_plane_delta_reconcile,
-    cmd_control_plane_risk_update,
-    cmd_control_plane_risk_add,
-    cmd_control_plane_policy_freeze,
-    cmd_control_plane_policy_unfreeze,
-    cmd_control_plane_session_export,
-    cmd_control_plane_session_reset,
-)
-from scripts.admin.pipeline import (  # noqa: E402,F401
-    _normalize_pipeline_key,
-    _load_registry,
-    _save_registry,
-    _normalize_intent_signature,
-    cmd_policy_status,
-    cmd_pipeline_delete,
-    cmd_pipeline_set,
-    cmd_connector_export,
-    cmd_connector_import,
-    cmd_normalize_intents,
-)
 
 # ---------------------------------------------------------------------------
 # SSE client registry (for standalone cockpit HTTP server)
@@ -104,18 +61,6 @@ def _sse_broadcast(event: dict) -> None:
                 dead.append(wfile)
         for d in dead:
             _sse_clients.remove(d)
-
-
-# ---------------------------------------------------------------------------
-# Path resolvers (local to api.py)
-# ---------------------------------------------------------------------------
-
-def _local_plugin_version() -> str:
-    manifest = ROOT / ".claude-plugin" / "plugin.json"
-    data = json.loads(manifest.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        return ""
-    return str(data.get("version", "") or "").strip()
 
 
 # ---------------------------------------------------------------------------

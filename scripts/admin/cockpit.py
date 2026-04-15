@@ -26,16 +26,20 @@ from scripts.admin.api import (
     _sse_clients,
     _sse_lock,
     _sse_broadcast,
-    _resolve_repl_root,
-    _resolve_connector_root,
-    _load_hook_state_summary,
     _cockpit_inject_html,
     _cockpit_list_injected_html,
     _COCKPIT_INJECTED_HTML,
     _COCKPIT_INJECT_LOCK,
-    cmd_policy_status,
     cmd_assets,
     cmd_submit_actions,
+    _cmd_set_goal,
+    _cmd_goal_history,
+    _cmd_goal_rollback,
+    _cmd_save_settings,
+)
+from scripts.admin.shared import _resolve_repl_root, _resolve_connector_root
+from scripts.admin.control_plane import (
+    _load_hook_state_summary,
     cmd_control_plane_state,
     cmd_control_plane_intents,
     cmd_control_plane_session,
@@ -54,11 +58,8 @@ from scripts.admin.api import (
     cmd_control_plane_policy_unfreeze,
     cmd_control_plane_session_export,
     cmd_control_plane_session_reset,
-    _cmd_set_goal,
-    _cmd_goal_history,
-    _cmd_goal_rollback,
-    _cmd_save_settings,
 )
+from scripts.admin.pipeline import cmd_policy_status
 
 
 def _make_cockpit_handler(cockpit: "CockpitHTTPServer"):

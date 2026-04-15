@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.emerge_daemon import EmergeDaemon
 from scripts import repl_admin
-from scripts import runner_admin
+from scripts.admin import runner as runner_admin
 from scripts.admin import runner as runner_admin_impl  # real impl module for monkeypatching
 from scripts.remote_runner import RunnerExecutor, RunnerHTTPHandler, ThreadingHTTPServer
 

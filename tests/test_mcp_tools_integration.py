@@ -3295,7 +3295,7 @@ def test_process_local_file_reads_new_events(tmp_path):
     import json, time
     from scripts.operator_monitor import OperatorMonitor
 
-    monitor = OperatorMonitor(machines={}, push_fn=lambda *a: None)
+    monitor = OperatorMonitor(machines={})
 
     machine_dir = tmp_path / "machine-1"
     machine_dir.mkdir()
@@ -3318,7 +3318,7 @@ def test_process_local_file_skips_already_seen_events(tmp_path):
     import json, time
     from scripts.operator_monitor import OperatorMonitor
 
-    monitor = OperatorMonitor(machines={}, push_fn=lambda *a: None)
+    monitor = OperatorMonitor(machines={})
 
     machine_dir = tmp_path / "machine-1"
     machine_dir.mkdir()

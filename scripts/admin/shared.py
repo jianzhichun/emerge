@@ -13,7 +13,20 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+import json as _json
+
 from scripts.policy_config import default_exec_root  # noqa: E402
+
+_SHARED_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _local_plugin_version() -> str:
+    """Return the plugin version from .claude-plugin/plugin.json."""
+    manifest = _SHARED_ROOT / ".claude-plugin" / "plugin.json"
+    data = _json.loads(manifest.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("version", "") or "").strip()
 
 
 def _resolve_state_root() -> Path:
