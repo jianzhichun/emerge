@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
-import sys
+import re
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -92,7 +92,7 @@ class AdapterRegistry:
                         names.append(d.name)
         return [{"name": n} for n in names]
 
-    _SAFE_NAME_RE = __import__("re").compile(r"^[a-z0-9][a-z0-9_-]*$")
+    _SAFE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
     def get_plugin(self, name: str) -> ObserverPlugin:
         if name in self._cache:

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+# Compiled once at module load — shared across all validator functions.
+_SIG_RE = re.compile(r'^[a-z][a-z0-9_-]*\.(read|write)\.[a-z][a-z0-9_./-]*$')
+_SAFE_SEG_RE = re.compile(r'^[a-z0-9][a-z0-9_-]*$')
+_VAR_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
 
 def main() -> None:
@@ -25,8 +31,6 @@ def main() -> None:
     error_msg: str | None = None
     _sig_normalized_from: str | None = None
     _sig_normalized_to: str | None = None
-
-    # icc_read / icc_write are fully deleted. Use icc_span_open for bridge execution.
 
     if tool_name.endswith("__icc_exec"):
         mode = str(arguments.get("mode", "inline_code")).strip()
@@ -50,7 +54,6 @@ def main() -> None:
                 "State setup calls (imports, object creation) must NOT use no_replay."
             )
         else:
-            import re as _re
             # Check for common 2-part mistake (connector omitted)
             if len(intent_signature.split(".")) == 2:
                 error_msg = (
@@ -60,8 +63,7 @@ def main() -> None:
                 )
             else:
                 # Must be <connector>.(read|write).<name> — middle segment must be read or write
-                _sig_pattern = _re.compile(r'^[a-z][a-z0-9_-]*\.(read|write)\.[a-z][a-z0-9_./-]*$')
-                if not _sig_pattern.match(intent_signature):
+                if not _SIG_RE.match(intent_signature):
                     error_msg = (
                         f"icc_exec: intent_signature {intent_signature!r} is invalid. "
                         "Must be <connector>.(read|write).<name> — e.g. 'zwcad.read.state', "
@@ -71,8 +73,7 @@ def main() -> None:
                 else:
                     result_var = str(arguments.get("result_var", "")).strip()
                     if result_var:
-                        _var_pattern = _re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-                        if not _var_pattern.match(result_var):
+                        if not _VAR_RE.match(result_var):
                             error_msg = (
                                 f"icc_exec: result_var {result_var!r} is invalid. "
                                 "Must be a Python identifier, e.g. '__result' or 'output_rows'."
@@ -95,12 +96,11 @@ def main() -> None:
         connector = str(arguments.get("connector", "")).strip()
         pipeline_name = str(arguments.get("pipeline_name", "")).strip()
         mode = str(arguments.get("mode", "")).strip()
-        _safe_seg = __import__("re").compile(r"^[a-z0-9][a-z0-9_-]*$")
         if not intent_signature:
             error_msg = "icc_crystallize: 'intent_signature' is required"
         elif not connector:
             error_msg = "icc_crystallize: 'connector' is required"
-        elif not _safe_seg.match(connector):
+        elif not _SAFE_SEG_RE.match(connector):
             error_msg = "icc_crystallize: 'connector' must be lowercase alphanumeric/underscore/dash, no path separators"
         elif not pipeline_name:
             error_msg = "icc_crystallize: 'pipeline_name' is required"
@@ -110,7 +110,6 @@ def main() -> None:
             error_msg = f"icc_crystallize: 'mode' must be read or write, got {mode!r}"
 
     elif tool_name.endswith("__icc_span_open"):
-        import re as _re
         _sig_raw = str(arguments.get("intent_signature", "")).strip()
         intent_signature = _sig_raw.lower()
         if intent_signature != _sig_raw:
@@ -122,7 +121,7 @@ def main() -> None:
                 "(e.g. 'lark.read.get-doc'). "
                 "Format: <connector>.(read|write).<name>"
             )
-        elif not _re.compile(r'^[a-z][a-z0-9_-]*\.(read|write)\.[a-z][a-z0-9_./-]*$').match(intent_signature):
+        elif not _SIG_RE.match(intent_signature):
             error_msg = (
                 f"icc_span_open: intent_signature {intent_signature!r} is invalid. "
                 "Must be <connector>.(read|write).<name> — e.g. 'lark.read.get-doc'."
@@ -136,7 +135,6 @@ def main() -> None:
             )
 
     elif tool_name.endswith("__icc_span_approve"):
-        import re as _re
         _sig_raw = str(arguments.get("intent_signature", "")).strip()
         intent_signature = _sig_raw.lower()
         if intent_signature != _sig_raw:
@@ -144,7 +142,7 @@ def main() -> None:
             _sig_normalized_to = intent_signature
         if not intent_signature:
             error_msg = "icc_span_approve: 'intent_signature' is required"
-        elif not _re.compile(r'^[a-z][a-z0-9_-]*\.(read|write)\.[a-z][a-z0-9_./-]*$').match(intent_signature):
+        elif not _SIG_RE.match(intent_signature):
             error_msg = (
                 f"icc_span_approve: intent_signature {intent_signature!r} is invalid. "
                 "Must be <connector>.(read|write).<name> — e.g. 'lark.read.get-doc'."
