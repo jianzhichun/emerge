@@ -3072,32 +3072,18 @@ def test_hub_resolve_elicitation_used_when_resolution_not_provided():
     mock_elicit.assert_called_once()
 
 
-def test_event_router_replaces_pending_monitor(tmp_path):
-    """EventRouter must rename pending-actions.json to .processed.json."""
-    import threading, json, time, os
+def test_event_router_starts_without_pending_actions(tmp_path):
+    """EventRouter starts cleanly without pending-actions handler (removed)."""
+    import json, time, os
     from scripts.emerge_daemon import EmergeDaemon
 
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path)
     daemon = EmergeDaemon()
     daemon.start_event_router()
     time.sleep(0.1)
-
-    pending = tmp_path / "pending-actions.json"
-    pending.write_text(json.dumps({
-        "submitted_at": int(time.time() * 1000),
-        "actions": [{"type": "prompt", "prompt": "hello"}]
-    }))
-
-    # Wait for EventRouter to pick it up and rename
-    deadline = time.time() + 3.0
-    while time.time() < deadline and pending.exists():
-        time.sleep(0.05)
-
     daemon.stop_event_router()
     os.environ.pop("EMERGE_STATE_ROOT", None)
-
-    assert not pending.exists()
-    assert (tmp_path / "pending-actions.processed.json").exists()
+    # Smoke test: no errors, router starts and stops
 
 
 # ---------------------------------------------------------------------------
@@ -3365,23 +3351,26 @@ def test_span_close_stable_includes_skeleton_path(tmp_path, monkeypatch):
     assert "icc_span_approve" in inner.get("next_step", "")
 
 
-def test_on_pending_actions_renames_to_processed(tmp_path, monkeypatch):
-    """_on_pending_actions renames to .processed.json for hook/monitor pickup."""
+def test_cockpit_submit_writes_events_jsonl_via_write_event(tmp_path, monkeypatch):
+    """CockpitHTTPServer.write_event() appends cockpit_action to events.jsonl."""
     import json
     import time
-    from scripts.emerge_daemon import EmergeDaemon
-    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
-    daemon = EmergeDaemon()
+    from scripts.admin.cockpit import CockpitHTTPServer, _StandaloneDaemonStub
 
-    pending = tmp_path / "pending-actions.json"
-    pending.write_text(json.dumps({
-        "submitted_at": int(time.time() * 1000),
-        "actions": [{"type": "prompt", "prompt": "hello"}],
-    }))
-    daemon._on_pending_actions()
+    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
+    srv = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), repl_root=tmp_path)
+    event = {
+        "type": "cockpit_action",
+        "ts_ms": int(time.time() * 1000),
+        "actions": [{"type": "global-prompt", "prompt": "hello"}],
+    }
+    srv.write_event(event)
 
-    assert not pending.exists()
-    assert (tmp_path / "pending-actions.processed.json").exists()
+    events_path = tmp_path / "events.jsonl"
+    assert events_path.exists()
+    written = json.loads(events_path.read_text(encoding="utf-8").strip())
+    assert written["type"] == "cockpit_action"
+    assert written["actions"][0]["prompt"] == "hello"
 
 
 def test_initialize_declares_resource_subscribe_capability():

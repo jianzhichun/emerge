@@ -73,7 +73,6 @@ class EmergeDaemon:
             self._version = "0.0.0"
         self._operator_monitor: "OperatorMonitor | None" = None
         self._event_router = None
-        self._last_seen_pending_ts: int = 0
         self._elicit_events: dict[str, threading.Event] = {}
         self._elicit_results: dict[str, dict] = {}
         from scripts.span_tracker import SpanTracker
@@ -821,13 +820,11 @@ class EmergeDaemon:
             self._operator_monitor.stop()
 
     def start_event_router(self) -> None:
-        """Start EventRouter to watch pending-actions.json and local operator events."""
+        """Start EventRouter to watch local operator events."""
         from scripts.event_router import EventRouter
         from pathlib import Path as _Path
 
-        handlers: dict = {
-            self._state_root / "pending-actions.json": lambda _: self._on_pending_actions(),
-        }
+        handlers: dict = {}
         # Register local operator-events handler when OperatorMonitor is active.
         # The handler delegates to OperatorMonitor.process_local_file() which owns the
         # PatternDetector + event buffer state.
@@ -841,37 +838,6 @@ class EmergeDaemon:
     def stop_event_router(self) -> None:
         if self._event_router is not None:
             self._event_router.stop()
-
-    def _on_pending_actions(self) -> None:
-        """Called by EventRouter when pending-actions.json is created/modified.
-
-        Renames to .processed.json so the UserPromptSubmit hook fallback can
-        drain it into additionalContext on the next user message.
-        """
-        pending_path = self._state_root / "pending-actions.json"
-        if not pending_path.exists():
-            return
-        try:
-            text = pending_path.read_text(encoding="utf-8")
-        except OSError:
-            return
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            try:
-                pending_path.rename(self._state_root / "pending-actions.invalid.json")
-            except OSError:
-                pass
-            return
-        ts = int(data.get("submitted_at", 0))
-        if ts <= self._last_seen_pending_ts:
-            return
-        try:
-            processed = self._state_root / "pending-actions.processed.json"
-            pending_path.rename(processed)
-            self._last_seen_pending_ts = ts
-        except OSError:
-            pass
 
     def _on_local_event_file(self, path) -> None:
         """Called by EventRouter when an operator events.jsonl file changes.

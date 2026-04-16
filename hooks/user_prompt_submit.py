@@ -17,29 +17,6 @@ _REFLECTION_TURN_THRESHOLD = 1
 _SPAN_REMINDER_INTERVAL = 5
 
 
-def _drain_pending_actions(state_root: Path) -> str:
-    """Read and consume pending cockpit actions. Returns formatted text or ''."""
-    from scripts.pending_actions import format_pending_actions
-    for name in ("pending-actions.processed.json", "pending-actions.json"):
-        p = state_root / name
-        if not p.exists():
-            continue
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        actions = data.get("actions", [])
-        if not actions:
-            continue
-        delivered = state_root / "pending-actions.delivered.json"
-        try:
-            p.rename(delivered)
-        except OSError:
-            continue
-        return format_pending_actions(actions)
-    return ""
-
-
 def main() -> None:
     payload_text = sys.stdin.read().strip()
     try:
@@ -89,10 +66,6 @@ def main() -> None:
                 "e.g. 'lark.read.get-doc'."
             )
             context_text = reminder + "\n\n" + context_text
-
-    pending_text = _drain_pending_actions(state_root)
-    if pending_text:
-        context_text = pending_text + "\n\n" + context_text
 
     out = {
         "hookSpecificOutput": {

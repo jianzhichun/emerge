@@ -93,14 +93,14 @@ def test_event_router_watchdog_fires_on_atomic_rename(tmp_path):
     except ImportError:
         pytest.skip("watchdog not installed — polling fallback doesn't catch rename")
     fired = []
-    target = tmp_path / "pending-actions.json"
+    target = tmp_path / "test-events.jsonl"
     router = EventRouter({target: lambda p: fired.append(p)})
     router.start()
     # Small delay to let watchdog register
     time.sleep(0.2)
-    # Atomic write (the same pattern used by cockpit submit)
-    tmp = tmp_path / "pending-actions.json.tmp"
-    tmp.write_text('{"submitted_at": 1, "actions": []}')
+    # Atomic write
+    tmp = tmp_path / "test-events.jsonl.tmp"
+    tmp.write_text('{"type": "test", "ts_ms": 1}')
     os.rename(str(tmp), str(target))
     # Wait for event
     deadline = time.time() + 3.0

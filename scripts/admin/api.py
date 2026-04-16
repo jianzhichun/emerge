@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import shutil
 import threading
-import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,7 +32,7 @@ from scripts.policy_config import (  # noqa: E402
     STABLE_MIN_VERIFY_RATE,
     atomic_write_json,
 )
-from scripts.admin.shared import _resolve_state_root, _resolve_repl_root, _resolve_connector_root, _local_plugin_version  # noqa: E402
+from scripts.admin.shared import _resolve_state_root, _resolve_connector_root, _local_plugin_version  # noqa: E402
 from scripts.admin.control_plane import _session_paths, _resolve_session_id  # noqa: E402
 from scripts.state_tracker import StateTracker, load_tracker, save_tracker  # noqa: E402
 
@@ -178,37 +177,6 @@ def _validate_action(action: dict) -> str | None:
         if not action.get("key"):
             return f"{atype} action missing 'key'"
     return None
-
-
-def cmd_submit_actions(actions: list) -> dict:
-    """Atomically write pending-actions.json to trigger CC dispatch loop."""
-    if not isinstance(actions, list) or not actions:
-        return {"ok": False, "error": "invalid_actions", "message": "actions must be a non-empty list"}
-    for i, action in enumerate(actions):
-        err = _validate_action(action)
-        if err:
-            return {"ok": False, "error": "invalid_action", "message": f"action[{i}]: {err}"}
-    state_root = _resolve_repl_root()
-    state_root.mkdir(parents=True, exist_ok=True)
-    pending_path = state_root / "pending-actions.json"
-    if pending_path.exists():
-        return {"ok": False, "error": "already_pending",
-                "message": "Previous submission not yet processed by CC — please wait."}
-    tmp_p = state_root / "pending-actions.json.tmp"
-    payload = {
-        "submitted_at": int(time.time() * 1000),
-        "actions": actions,
-    }
-    tmp_p.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    try:
-        tmp_p.rename(pending_path)
-    except Exception:
-        try:
-            tmp_p.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
-    return {"ok": True, "action_count": len(actions), "pending_path": str(pending_path)}
 
 
 def _enrich_actions(actions: list) -> list:

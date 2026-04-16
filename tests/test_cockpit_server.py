@@ -45,32 +45,12 @@ def test_cmd_assets_connector_without_notes_or_components(tmp_path: Path, monkey
     assert c["components"] == []
 
 
-def test_cmd_submit_actions_writes_pending_file(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
-
-    from scripts.admin.api import cmd_submit_actions
-    actions = [
-        {"type": "pipeline-delete", "key": "mock.read.does-not-exist"},
-        {"type": "pipeline-set", "key": "mock.read.layers", "fields": {"status": "canary"}},
-    ]
-    result = cmd_submit_actions(actions)
-
-    assert result["ok"] is True
-    assert result["action_count"] == 2
-    pending = json.loads((tmp_path / "pending-actions.json").read_text())
-    assert len(pending["actions"]) == 2
-    assert pending["actions"][0]["type"] == "pipeline-delete"
-    assert pending["submitted_at"] > 0
-
-
-def test_cmd_submit_actions_atomic_write(tmp_path: Path, monkeypatch):
-    """Verify tmp file is used (no partial writes)."""
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
-    from scripts.admin.api import cmd_submit_actions
-    cmd_submit_actions([{"type": "pipeline-delete", "key": "x"}])
-    # tmp file should not exist after rename
-    assert not (tmp_path / "pending-actions.json.tmp").exists()
-    assert (tmp_path / "pending-actions.json").exists()
+def test_validate_action_rejects_bad_types(tmp_path: Path, monkeypatch):
+    from scripts.admin.api import _validate_action
+    assert _validate_action({"type": "bogus"}) is not None
+    assert _validate_action({"type": "tool-call"}) is not None  # missing call
+    assert _validate_action({"type": "pipeline-delete"}) is not None  # missing key
+    assert _validate_action({"type": "pipeline-delete", "key": "x"}) is None  # valid
 
 
 import urllib.request
@@ -157,12 +137,11 @@ def test_serve_get_reflection_cache_endpoint(tmp_path, monkeypatch):
     assert "exists" in data
 
 
-def test_serve_status_and_submit_prefer_repl_root(tmp_path, monkeypatch):
-    """Cockpit handshake files should consistently use EMERGE_REPL_ROOT."""
+def test_serve_submit_writes_events_jsonl(tmp_path, monkeypatch):
+    """POST /api/submit must write a cockpit_action event to events.jsonl."""
     repl_root = tmp_path / "repl-root"
-    state_root = tmp_path / "state-root"
     monkeypatch.setenv("EMERGE_REPL_ROOT", str(repl_root))
-    monkeypatch.setenv("EMERGE_STATE_ROOT", str(state_root))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(repl_root))
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
     (tmp_path / "connectors").mkdir(exist_ok=True)
 
@@ -178,13 +157,14 @@ def test_serve_status_and_submit_prefer_repl_root(tmp_path, monkeypatch):
     with urllib.request.urlopen(req) as resp:
         submit = json.loads(resp.read())
     assert submit["ok"] is True
-    assert (repl_root / "pending-actions.json").exists()
-    assert not (state_root / "pending-actions.json").exists()
 
-    with urllib.request.urlopen(f"{base}/api/status") as resp:
-        status = json.loads(resp.read())
-    assert status["ok"] is True
-    assert status["pending"] is True
+    events_path = repl_root / "events.jsonl"
+    assert events_path.exists()
+    lines = events_path.read_text(encoding="utf-8").strip().splitlines()
+    event = json.loads(lines[-1])
+    assert event["type"] == "cockpit_action"
+    assert len(event["actions"]) == 1
+    assert event["actions"][0]["type"] == "pipeline-delete"
 
 
 def test_serve_get_root_returns_html(tmp_path, monkeypatch):
@@ -205,7 +185,7 @@ def test_serve_component_path_traversal_rejected(tmp_path, monkeypatch):
 
 
 def test_cockpit_full_flow(tmp_path, monkeypatch):
-    """Full flow: start server, check assets, submit actions, verify pending-actions.json written."""
+    """Full flow: start server, check assets, submit actions, verify events.jsonl written with enriched actions."""
     import urllib.request
 
     connector_root = tmp_path / "connectors"
@@ -252,10 +232,17 @@ def test_cockpit_full_flow(tmp_path, monkeypatch):
         result = json.loads(resp.read())
     assert result["ok"]
 
-    pending = json.loads((tmp_path / "pending-actions.json").read_text())
-    assert len(pending["actions"]) == 2
-    assert pending["actions"][0]["type"] == "notes-comment"
-    assert pending["actions"][1]["type"] == "tool-call"
+    events_path = tmp_path / "events.jsonl"
+    assert events_path.exists()
+    lines = events_path.read_text(encoding="utf-8").strip().splitlines()
+    event = json.loads(lines[-1])
+    assert event["type"] == "cockpit_action"
+    assert len(event["actions"]) == 2
+    assert event["actions"][0]["type"] == "notes-comment"
+    assert event["actions"][1]["type"] == "tool-call"
+    # Enrichment should have added instruction fields
+    assert "instruction" in event["actions"][0]
+    assert "instruction" in event["actions"][1]
 
 
 def test_session_reset_blocked_when_span_active(tmp_path, monkeypatch):

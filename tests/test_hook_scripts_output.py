@@ -430,40 +430,22 @@ def test_pre_hook_allows_valid_span_approve():
     assert hook_out.get("permissionDecision") != "deny"
 
 
-def test_user_prompt_submit_drains_pending_actions(tmp_path: Path):
-    """UserPromptSubmit injects cockpit pending actions into additionalContext."""
+def test_user_prompt_submit_no_longer_drains_pending_actions(tmp_path: Path):
+    """UserPromptSubmit no longer drains pending-actions files (dispatch moved to events.jsonl)."""
     processed = tmp_path / "pending-actions.processed.json"
     processed.write_text(json.dumps({
         "submitted_at": 1000,
         "actions": [
             {"type": "tool-call", "call": {"tool": "icc_exec", "arguments": {"intent_signature": "a.read.b"}}, "meta": {}},
-            {"type": "notes-comment", "connector": "myconn", "comment": "operator note"},
         ],
     }))
     out = _run("user_prompt_submit.py", {}, tmp_path)
     parsed = json.loads(out)
     ctx = parsed["hookSpecificOutput"]["additionalContext"]
-    assert "[Cockpit]" in ctx
-    assert "icc_exec" in ctx
-    assert "Append comment" in ctx
-    # File renamed to .delivered.json
-    assert not processed.exists()
-    assert (tmp_path / "pending-actions.delivered.json").exists()
-
-
-def test_user_prompt_submit_drains_unprocessed_pending_actions(tmp_path: Path):
-    """UserPromptSubmit also picks up pending-actions.json (not yet processed by daemon)."""
-    pending = tmp_path / "pending-actions.json"
-    pending.write_text(json.dumps({
-        "submitted_at": 2000,
-        "actions": [{"type": "pipeline-delete", "key": "x.read.y"}],
-    }))
-    out = _run("user_prompt_submit.py", {}, tmp_path)
-    parsed = json.loads(out)
-    ctx = parsed["hookSpecificOutput"]["additionalContext"]
-    assert "pipeline-delete" in ctx
-    assert not pending.exists()
-    assert (tmp_path / "pending-actions.delivered.json").exists()
+    # Should NOT contain cockpit action text — delivery is via watch_emerge.py now
+    assert "[Cockpit]" not in ctx
+    # File should not be renamed or consumed
+    assert processed.exists()
 
 
 def test_watch_pending_emits_and_renames(tmp_path: Path):

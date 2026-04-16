@@ -333,7 +333,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 | Command          | Description                                                                                      |
 | ---------------- | ------------------------------------------------------------------------------------------------ |
 | `/init`          | Initialize a vertical flywheel from natural language context                                     |
-| `/cockpit`       | Browser control plane — SSE real-time status, intent overview, delta/risk/span/exec panels, audit trail, session mgmt, reflection-cache observability, and runner monitor state (Monitors tab). Operator submits reach the agent via `watch_emerge.py` Monitor + `UserPromptSubmit` hook fallback. |
+| `/cockpit`       | Browser control plane — SSE real-time status, intent overview, delta/risk/span/exec panels, audit trail, session mgmt, reflection-cache observability, and runner monitor state (Monitors tab). Operator submits are validated/enriched at `/api/submit`, written as `cockpit_action` events to `events.jsonl`, and delivered to the agent in real time via `watch_emerge.py` Monitor. |
 | `/runner-status` | Show remote runner health status                                                                 |
 | `/import`        | Import a connector asset package zip into local connector/pipeline state                         |
 | `/export`        | Export a connector asset package zip (connector files + registry entries)                        |

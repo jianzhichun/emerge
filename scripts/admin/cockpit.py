@@ -26,7 +26,8 @@ from scripts.admin.api import (
     _cockpit_inject_html,
     _cockpit_list_injected_html,
     cmd_assets,
-    cmd_submit_actions,
+    _enrich_actions,
+    _validate_action,
     _cmd_save_settings,
 )
 from scripts.admin.shared import _resolve_repl_root, _resolve_connector_root
@@ -160,8 +161,6 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self._json(cmd_assets(injected_html=self._cockpit._injected_html))
         elif path == "/api/status":
             import time as _t_status
-            state_root = _resolve_repl_root()
-            pending = (state_root / "pending-actions.json").exists()
             _CC_ACTIVE_WINDOW_S = 120
             last_mcp_ts = 0.0
             if self._cockpit is not None:
@@ -169,7 +168,7 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                 if hsrv is not None:
                     last_mcp_ts = getattr(hsrv, "_last_mcp_ts", 0.0)
             cc_active = (_t_status.time() - last_mcp_ts) < _CC_ACTIVE_WINDOW_S if last_mcp_ts else False
-            self._json({"ok": True, "pending": pending, "server_online": True, "cc_active": cc_active})
+            self._json({"ok": True, "pending": False, "server_online": True, "cc_active": cc_active})
         elif path == "/api/settings":
             from scripts.policy_config import load_settings, default_settings_path
             s = load_settings()
@@ -307,7 +306,33 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         body: dict = json.loads(self.rfile.read(length)) if length else {}
         if path == "/api/submit":
             actions = body.get("actions", [])
-            result = cmd_submit_actions(actions)
+            if not isinstance(actions, list) or not actions:
+                result = {
+                    "ok": False,
+                    "error": "invalid_actions",
+                    "message": "actions must be a non-empty list",
+                }
+                self._json(result)
+                return
+            for i, action in enumerate(actions):
+                err = _validate_action(action)
+                if err:
+                    result = {
+                        "ok": False,
+                        "error": "invalid_action",
+                        "message": f"action[{i}]: {err}",
+                    }
+                    self._json(result)
+                    return
+            enriched_actions = _enrich_actions(actions)
+            self._cockpit.write_event(
+                {
+                    "type": "cockpit_action",
+                    "ts_ms": int(time.time() * 1000),
+                    "actions": enriched_actions,
+                }
+            )
+            result = {"ok": True, "action_count": len(enriched_actions)}
             self._json(result)
             if result.get("ok"):
                 _ev = {"pending": True, "action_count": result.get("action_count", 0),
@@ -524,6 +549,9 @@ class InProcessCockpitBridge:
     def broadcast(self, event: dict) -> None:
         self._http_srv.cockpit_broadcast(event)
 
+    def write_event(self, event: dict) -> None:
+        self._http_srv._append_event(self._http_srv._state_root / "events.jsonl", event)
+
 
 class _StandaloneDaemonStub:
     """Minimal daemon stub for CockpitHTTPServer in standalone CLI mode.
@@ -601,6 +629,12 @@ class CockpitHTTPServer:
                     dead.append(wfile)
             for wfile in dead:
                 self._sse_clients.remove(wfile)
+
+    def write_event(self, event: dict) -> None:
+        path = self._repl_root / "events.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
     def get_monitor_data(self) -> dict:
         """Return runner monitor data. Reads from daemon memory; falls back to file."""
