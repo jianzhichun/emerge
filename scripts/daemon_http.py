@@ -614,12 +614,12 @@ def _make_handler(srv: "DaemonHTTPServer"):
             parsed = _up.urlparse(self.path)
             path = parsed.path or "/"
             qs = _up.parse_qs(parsed.query)
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length) if length else b""
             if _is_cockpit_http_path(path):
                 self._cockpit = _bridge
                 return _CockpitHandler.do_POST(self)
             self._cockpit = None
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length else b""
             if path == "/mcp":
                 srv._last_mcp_ts = time.time()
                 session_id = qs.get("session_id", [None])[0]
