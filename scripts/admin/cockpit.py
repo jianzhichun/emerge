@@ -31,6 +31,7 @@ from scripts.admin.api import (
     _validate_action,
     _cmd_save_settings,
 )
+from scripts.admin.actions import ActionRegistry
 from scripts.admin.shared import _resolve_repl_root, _resolve_connector_root
 from scripts.admin.control_plane import (
     cmd_control_plane_state,
@@ -61,6 +62,8 @@ _SESSION_ID_PARAM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _STATUS_TAIL_BYTES = 256 * 1024
+_MAX_QUEUE_ACTIONS = 50
+_MAX_INJECT_HTML_BYTES = 64 * 1024
 
 
 def _load_recent_jsonl(path: Path, max_tail_bytes: int = _STATUS_TAIL_BYTES) -> list[dict]:
@@ -220,6 +223,10 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self._json(cmd_policy_status(session_id=session_id_q))
         elif path == "/api/assets":
             self._json(cmd_assets(injected_html=self._cockpit._injected_html))
+        elif path == "/api/action-types":
+            self._json({"ok": True, "types": ActionRegistry.describe()})
+        elif path == "/api/cockpit-sdk.js":
+            self._serve_cockpit_sdk_js()
         elif path == "/api/status":
             import time as _t_status
             _CC_ACTIVE_WINDOW_S = 120
@@ -385,6 +392,16 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                 }
                 self._json(result)
                 return
+            if len(actions) > _MAX_QUEUE_ACTIONS:
+                self._json(
+                    {
+                        "ok": False,
+                        "error": "too_many_actions",
+                        "message": f"actions exceeds limit ({_MAX_QUEUE_ACTIONS})",
+                    },
+                    status=400,
+                )
+                return
             for i, action in enumerate(actions):
                 err = _validate_action(action)
                 if err:
@@ -397,6 +414,10 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                     return
             enriched_actions = _enrich_actions(actions)
             event_id = f"cockpit-{uuid.uuid4().hex}"
+            enriched_actions = [
+                {**action, "action_id": f"{event_id}:{index + 1}"}
+                for index, action in enumerate(enriched_actions)
+            ]
             self._cockpit.write_event(
                 {
                     "type": "cockpit_action",
@@ -420,6 +441,16 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/inject-component":
             connector = str(body.get("connector", "")).strip()
             html = str(body.get("html", ""))
+            if len(html.encode("utf-8")) > _MAX_INJECT_HTML_BYTES:
+                self._json(
+                    {
+                        "ok": False,
+                        "error": "html_too_large",
+                        "message": f"html exceeds {_MAX_INJECT_HTML_BYTES} bytes",
+                    },
+                    status=400,
+                )
+                return
             replace = bool(body.get("replace", False))
             slot_id: str | None = body.get("id") or None
             if slot_id is not None:
@@ -490,6 +521,32 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_cockpit_sdk_js(self) -> None:
+        body = (
+            "(function(){\n"
+            "  if (window.emerge) { return; }\n"
+            "  function post(kind, payload) {\n"
+            "    window.parent.postMessage(Object.assign({type: kind}, payload || {}), window.location.origin);\n"
+            "  }\n"
+            "  var cache = null;\n"
+            "  window.emerge = {\n"
+            "    enqueue: function(action){ post('emerge:enqueue', {action: action}); },\n"
+            "    dequeue: function(id){ post('emerge:dequeue', {id: id}); },\n"
+            "    clear: function(){ post('emerge:clear', {}); },\n"
+            "    actionTypes: function(){\n"
+            "      if (cache) { return Promise.resolve(cache); }\n"
+            "      return fetch('/api/action-types').then(function(r){ return r.json(); }).then(function(v){ cache = v; return v; });\n"
+            "    }\n"
+            "  };\n"
+            "})();\n"
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/javascript; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.wfile.write(body)
 

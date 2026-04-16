@@ -55,7 +55,7 @@ Always invoke the admin CLI via the **Emerge plugin root**.
      runner_notify(
          runner_profile="{profile}",
          ui_spec={"type": "input", "title": "emerge — 需要确认", "body": "<question>"})
-     Store answer in NOTES.md via notes-comment cockpit action.
+     Store answer in NOTES.md via notes.comment cockpit action.
 
    - SendMessage(team_lead, summary of action taken)
    - Return to idle.
@@ -92,7 +92,7 @@ No need to recreate the team.
 - Each watcher's Monitor fires as a notification in the watcher's own conversation.
 - The team lead does not process pattern alerts directly — that is the watcher's job.
 - Knowledge distillation answers (from input popups) are written to
-  `~/.emerge/connectors/{connector}/NOTES.md` via `notes-comment` cockpit action.
+  `~/.emerge/connectors/{connector}/NOTES.md` via `notes.comment` cockpit action.
 - Silence principle: only interrupt for authorization (canary takeover) or genuine
   ambiguity. Never popup for execution in progress/completed, read-only queries,
   or errors CC can resolve autonomously.

@@ -612,13 +612,13 @@ def test_cli_normalize_intents(tmp_path):
 
 
 def test_enrich_actions_injects_notes_content_for_notes_comment(tmp_path):
-    """_enrich_actions enriches notes-comment with current_notes, notes_path, instruction."""
+    """_enrich_actions enriches notes.comment with current_notes, notes_path, instruction."""
     connector_root = tmp_path / "connectors"
     notes_path = connector_root / "zwcad" / "NOTES.md"
     notes_path.parent.mkdir(parents=True)
     notes_path.write_text("# ZWCAD Notes\nCOM quirk: init order matters.", encoding="utf-8")
 
-    actions = [{"type": "notes-comment", "connector": "zwcad", "comment": "fix the init order section"}]
+    actions = [{"type": "notes.comment", "connector": "zwcad", "comment": "fix the init order section"}]
 
     import os
     old = os.environ.get("EMERGE_CONNECTOR_ROOT")
@@ -641,10 +641,10 @@ def test_enrich_actions_injects_notes_content_for_notes_comment(tmp_path):
 
 
 def test_enrich_actions_passes_through_non_notes_actions(tmp_path):
-    """_enrich_actions leaves non-notes-comment actions unchanged."""
+    """_enrich_actions leaves non-notes.comment actions unchanged."""
     actions = [
-        {"type": "pipeline-promote", "key": "zwcad.read.state"},
-        {"type": "pipeline-demote", "key": "zwcad.write.add-wall"},
+        {"type": "pipeline.set", "key": "zwcad.read.state", "fields": {"status": "canary"}},
+        {"type": "core.crystallize", "connector": "zwcad", "component": "preview"},
     ]
     result = _enrich_actions(actions)
     assert result == actions
@@ -654,7 +654,7 @@ def test_enrich_actions_handles_missing_notes_file(tmp_path):
     """_enrich_actions still enriches even when NOTES.md doesn't exist yet."""
     connector_root = tmp_path / "connectors"
     connector_root.mkdir()
-    actions = [{"type": "notes-comment", "connector": "zwcad", "comment": "first note"}]
+    actions = [{"type": "notes.comment", "connector": "zwcad", "comment": "first note"}]
 
     import os
     old = os.environ.get("EMERGE_CONNECTOR_ROOT")
@@ -675,7 +675,7 @@ def test_enrich_actions_handles_missing_notes_file(tmp_path):
 def test_enrich_actions_adds_deterministic_instruction_for_tool_call():
     actions = [
         {
-            "type": "tool-call",
+            "type": "core.tool-call",
             "connector": "zwcad",
             "scenario": "health-check",
             "intent_signature": "zwcad.write.apply-test",
@@ -699,7 +699,7 @@ def test_enrich_actions_adds_deterministic_instruction_for_tool_call():
 
 
 def test_enrich_actions_marks_invalid_tool_call_payload():
-    actions = [{"type": "tool-call", "scenario": "x", "call": {"tool": "", "arguments": {}}}]
+    actions = [{"type": "core.tool-call", "scenario": "x", "call": {"tool": "", "arguments": {}}}]
     result = _enrich_actions(actions)
     assert len(result) == 1
     assert "instruction" in result[0]

@@ -13,6 +13,7 @@
   export let queueItems: QueueItem[] = [];
   export let submitting = false;
   export let serverPending = false;
+  export let actionHazards: Record<string, string> = {};
 
   const dispatch = createEventDispatcher<{
     enqueuePrompt: { prompt: string };
@@ -43,6 +44,10 @@
   function clearQueue(): void {
     dispatch('clear');
   }
+
+  function hazardFor(type: string): string {
+    return actionHazards[type] ?? 'write';
+  }
 </script>
 
 <aside class="queue-panel">
@@ -69,13 +74,13 @@
       <p class="empty">Queue is empty</p>
     {:else}
       {#each queueItems as item}
-        <article class={`queue-item ${item.type === 'pipeline-delete' ? 'delete' : item.type === 'global-prompt' ? 'prompt' : ''}`}>
+        <article class={`queue-item hazard-${hazardFor(item.type)}`}>
           <div class="action-label">
-            <b class:del={item.type === 'pipeline-delete'} class:promote={item.label.toLowerCase().includes('promote')} class:prompt-lbl={item.type === 'global-prompt'}>
+            <b class:del={hazardFor(item.type) === 'danger'} class:promote={item.label.toLowerCase().includes('promote')} class:prompt-lbl={item.type === 'core.prompt'}>
               {item.label}
             </b>
             <span>{item.subLabel}</span>
-            {#if item.type !== 'global-prompt'}
+            {#if item.type !== 'core.prompt'}
               <small>{item.command}</small>
             {/if}
           </div>
@@ -181,14 +186,19 @@
     gap: 6px;
   }
 
-  .queue-item.delete {
+  .queue-item.hazard-danger {
     border-color: #4a1a1a;
     background: #231316;
   }
 
-  .queue-item.prompt {
-    background: #0d1117;
-    border-color: #30363d;
+  .queue-item.hazard-safe {
+    background: #111722;
+    border-color: #2b3646;
+  }
+
+  .queue-item.hazard-write {
+    background: #122118;
+    border-color: #28412b;
   }
 
   .action-label {

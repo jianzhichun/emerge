@@ -7,6 +7,10 @@ import re
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from scripts.admin.actions.registry import ActionRegistry
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,6 +35,13 @@ class ObserverPlugin(ABC):
     @abstractmethod
     def execute(self, intent: str, params: dict) -> dict:
         """Takeover execution after operator confirms. Returns {ok, summary, ...}."""
+
+    def register_actions(self, registry: "ActionRegistry") -> None:
+        """Register adapter-specific cockpit action types.
+
+        Override in vertical adapters to extend `ActionRegistry`.
+        """
+        _ = registry
 
     def emit_event(self, event: dict) -> None:
         """Write an operator event to the local EventBus.

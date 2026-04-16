@@ -194,3 +194,23 @@ export interface AssetConnector {
 export interface AssetsResponse {
   connectors?: Record<string, AssetConnector>;
 }
+
+export interface ActionSchemaProperty {
+  type?: string;
+}
+
+export interface ActionSchema {
+  required?: string[];
+  properties?: Record<string, ActionSchemaProperty>;
+}
+
+export interface ActionTypeEntry {
+  type: string;
+  hazard?: 'safe' | 'write' | 'danger' | string;
+  description?: string;
+  schema?: ActionSchema;
+}
+
+export interface ActionTypesResponse extends ApiOkResponse {
+  types?: ActionTypeEntry[];
+}

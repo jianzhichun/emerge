@@ -14,7 +14,7 @@
   import { api } from './lib/api';
   import { navigate, readRouteFromUrl } from './lib/router';
   import { createSseClient } from './lib/sse';
-  import type { AssetConnector } from './lib/types';
+  import type { ActionTypeEntry, AssetConnector } from './lib/types';
   import { monitorsStore } from './stores/monitors';
   import { policyStore } from './stores/policy';
   import { sessionStore } from './stores/session';
@@ -57,6 +57,7 @@
   let queueSubmitting = false;
   let statusMessage: string | null = null;
   let sseStatus = 'idle';
+  let actionTypesById: Record<string, ActionTypeEntry> = {};
 
   function isGlobalTab(tab: string): tab is GlobalTabId {
     return tab === 'overview' || controlTabs.some((item) => item.id === tab);
@@ -182,6 +183,38 @@
     }
   }
 
+  async function refreshActionTypes(): Promise<void> {
+    try {
+      const payload = await api.getActionTypes();
+      const entries = Array.isArray(payload.types) ? payload.types : [];
+      actionTypesById = Object.fromEntries(
+        entries
+          .filter((row): row is ActionTypeEntry => Boolean(row && typeof row.type === 'string' && row.type.trim()))
+          .map((row) => [row.type, row])
+      );
+    } catch {
+      actionTypesById = {};
+    }
+  }
+
+  function buildQueueDraftFromAction(action: Record<string, unknown>): QueueDraft {
+    const actionType = String(action.type ?? '').trim();
+    const typeMeta = actionTypesById[actionType];
+    const label = actionType || 'custom.action';
+    const rawPreview = JSON.stringify(action) ?? actionType;
+    const subLabel =
+      rawPreview.length > 80
+        ? `${rawPreview.slice(0, 80)}...`
+        : rawPreview;
+    return {
+      type: label,
+      label,
+      subLabel,
+      command: label,
+      data: action
+    };
+  }
+
   async function refreshShellData(): Promise<void> {
     const route = readRouteFromUrl();
     const routeSession = route.session;
@@ -191,6 +224,7 @@
       sessionStore.refresh(routeSession),
       stateStore.refresh(),
       refreshAssets(),
+      refreshActionTypes(),
       refreshStatus()
     ]);
 
@@ -211,11 +245,11 @@
   function enqueuePrompt(event: CustomEvent<{ prompt: string }>): void {
     const prompt = event.detail.prompt;
     queueStore.enqueue({
-      type: 'global-prompt',
+      type: 'core.prompt',
       label: 'Instruction',
       subLabel: prompt.length > 60 ? `${prompt.slice(0, 60)}...` : prompt,
-      command: 'global-prompt',
-      data: { type: 'global-prompt', prompt },
+      command: 'core.prompt',
+      data: { type: 'core.prompt', prompt },
     });
   }
 
@@ -321,10 +355,40 @@
     });
     sse.start();
     const onPopState = () => syncTabFromUrl();
+    const onControlMessage = (event: MessageEvent): void => {
+      if (event.origin !== window.location.origin) {
+        return;
+      }
+      const payload = event.data;
+      if (!payload || typeof payload !== 'object') {
+        return;
+      }
+      const messageType = String((payload as { type?: unknown }).type ?? '');
+      if (messageType === 'emerge:enqueue') {
+        const action = (payload as { action?: unknown }).action;
+        if (!action || typeof action !== 'object' || Array.isArray(action)) {
+          return;
+        }
+        queueStore.enqueue(buildQueueDraftFromAction(action as Record<string, unknown>));
+        return;
+      }
+      if (messageType === 'emerge:dequeue') {
+        const id = Number((payload as { id?: unknown }).id);
+        if (Number.isFinite(id) && id > 0) {
+          queueStore.dequeue(id);
+        }
+        return;
+      }
+      if (messageType === 'emerge:clear') {
+        queueStore.clear();
+      }
+    };
     window.addEventListener('popstate', onPopState);
+    window.addEventListener('message', onControlMessage);
     return () => {
       clearInterval(fallbackInterval);
       window.removeEventListener('popstate', onPopState);
+      window.removeEventListener('message', onControlMessage);
       sse.stop();
     };
   });
@@ -463,6 +527,9 @@
         queueItems={$queueStore.items}
         submitting={queueSubmitting}
         {serverPending}
+        actionHazards={Object.fromEntries(
+          Object.entries(actionTypesById).map(([type, row]) => [type, String(row.hazard ?? 'write')])
+        )}
         on:enqueuePrompt={enqueuePrompt}
         on:dequeue={(event) => queueStore.dequeue(event.detail.id)}
         on:clear={() => queueStore.clear()}

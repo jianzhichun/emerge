@@ -1,9 +1,9 @@
 # Emerge
 
-![Version](https://img.shields.io/badge/version-v0.3.80-blue)
+![Version](https://img.shields.io/badge/version-v0.3.81-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
-![Tests](https://img.shields.io/badge/tests-652%20passing-brightgreen?logo=pytest)
+![Tests](https://img.shields.io/badge/tests-659%20passing-brightgreen?logo=pytest)
 
 **Emerge** solves a core problem: AI operators repeat the same work but do not learn from it, so every session re-reasons from scratch. It uses a **dual flywheel** to crystallize repeated work into deterministic pipelines: a **forward flywheel** (`icc_exec`/`icc_span_open` tracking → policy promotion explore→canary→stable → auto-crystallized `.py+.yaml` pipelines → zero-LLM execution), and a **reverse flywheel** (`OperatorMonitor` observes human operators → `PatternDetector` detects repetition → elicitation captures intent → AI takes over).
 
@@ -333,7 +333,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 | Command          | Description                                                                                      |
 | ---------------- | ------------------------------------------------------------------------------------------------ |
 | `/init`          | Initialize a vertical flywheel from natural language context                                     |
-| `/cockpit`       | Browser control plane — SSE real-time status, intent overview, delta/risk/span/exec panels, audit trail, session mgmt, reflection-cache observability, and runner monitor state (Monitors tab). Operator submits are validated/enriched at `/api/submit`, written as `cockpit_action` events (`event_id`) to `events.jsonl`, delivered to the agent in real time via `watch_emerge.py`, and acked in `cockpit-action-acks.jsonl` for delivery visibility. |
+| `/cockpit`       | Browser control plane — SSE real-time status, intent overview, delta/risk/span/exec panels, audit trail, session mgmt, reflection-cache observability, and runner monitor state (Monitors tab). Action types are registry-driven (`/api/action-types`) and controls enqueue via `window.emerge.enqueue()` (`/api/cockpit-sdk.js`) into the shell queue; only the shell queue can submit to `/api/submit`. Submits are validated/enriched, written as `cockpit_action` events (`event_id`) to `events.jsonl`, delivered to the agent in real time via `watch_emerge.py`, and acked in `cockpit-action-acks.jsonl` for delivery visibility. |
 | `/runner-status` | Show remote runner health status                                                                 |
 | `/import`        | Import a connector asset package zip into local connector/pipeline state                         |
 | `/export`        | Export a connector asset package zip (connector files + registry entries)                        |
@@ -381,7 +381,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 python -m pytest tests -q
 ```
 
-Current baseline: **652** tests passing.
+Current baseline: **659** tests passing.
 
 ### Runner SSE parser benchmark (optional)
 

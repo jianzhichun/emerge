@@ -34,6 +34,7 @@ from scripts.policy_config import (  # noqa: E402
 )
 from scripts.admin.shared import _resolve_state_root, _resolve_connector_root, _local_plugin_version  # noqa: E402
 from scripts.admin.control_plane import _session_paths, _resolve_session_id  # noqa: E402
+from scripts.admin.actions import ActionContext, ActionRegistry  # noqa: E402
 from scripts.state_tracker import StateTracker, load_tracker, save_tracker  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -148,96 +149,15 @@ def cmd_assets(injected_html: dict) -> dict:
     return {"connectors": connectors}
 
 
-_VALID_ACTION_TYPES = {
-    "pipeline-set", "pipeline-delete",
-    "notes-comment", "notes-edit",
-    "tool-call", "crystallize-component",
-    "global-prompt",
-}
-
-
 def _validate_action(action: dict) -> str | None:
     """Return an error string if the action is invalid, else None."""
-    if not isinstance(action, dict):
-        return "action must be an object"
-    atype = action.get("type")
-    if not atype:
-        return "action missing 'type'"
-    if atype not in _VALID_ACTION_TYPES:
-        return f"unknown action type '{atype}'"
-    if atype == "tool-call":
-        call = action.get("call")
-        if not isinstance(call, dict):
-            return "tool-call action missing 'call' object"
-        if not call.get("tool"):
-            return "tool-call action missing 'call.tool'"
-        if not isinstance(call.get("arguments"), dict):
-            return "tool-call action missing 'call.arguments' dict"
-    if atype in ("pipeline-set", "pipeline-delete"):
-        if not action.get("key"):
-            return f"{atype} action missing 'key'"
-    return None
+    return ActionRegistry.validate(action)
 
 
 def _enrich_actions(actions: list) -> list:
     """Enrich action payloads with context CC needs to execute them intelligently."""
     connector_root = _resolve_connector_root()
-    enriched = []
-    for action in actions:
-        a = dict(action)
-        if a.get("type") == "global-prompt":
-            a["instruction"] = (
-                "The user has queued a free-form instruction via the Emerge Cockpit. "
-                "Execute the `prompt` field as a direct user request. "
-                "Treat it exactly as if the user had typed it in the chat."
-            )
-        elif a.get("type") == "notes-comment":
-            connector = a.get("connector", "")
-            if connector:
-                notes_path = connector_root / connector / "NOTES.md"
-                try:
-                    notes_path.resolve().relative_to(connector_root.resolve())
-                    current_notes = notes_path.read_text(encoding="utf-8") if notes_path.exists() else ""
-                except (ValueError, OSError):
-                    current_notes = ""
-                a["current_notes"] = current_notes
-                a["notes_path"] = str(notes_path)
-                a["instruction"] = (
-                    "The user has provided an edit instruction for the connector's NOTES.md. "
-                    "Read `current_notes`, apply the `comment` as a natural-language edit "
-                    "(e.g. fix a mistake, add a detail, restructure a section, remove stale info). "
-                    "Rewrite the file at `notes_path` with your judgment — do NOT blindly append. "
-                    "Preserve existing useful content. Keep the file concise and accurate."
-                )
-        elif a.get("type") == "tool-call":
-            call = a.get("call")
-            if not isinstance(call, dict):
-                a["instruction"] = (
-                    "Invalid cockpit tool-call action: missing `call` object. "
-                    "Do not improvise; ask user to re-submit."
-                )
-            else:
-                tool_name = str(call.get("tool", "")).strip()
-                arguments = call.get("arguments", {})
-                if not tool_name or not isinstance(arguments, dict):
-                    a["instruction"] = (
-                        "Invalid cockpit tool-call payload. "
-                        "Expected call.tool (any icc_* tool name) and call.arguments object."
-                    )
-                else:
-                    auto = a.get("auto") if isinstance(a.get("auto"), dict) else {}
-                    auto_mode = str(auto.get("mode", "assist"))
-                    a["instruction"] = (
-                        "Deterministic tool call (no free-form reasoning): "
-                        f"call `{tool_name}` exactly once with `call.arguments`; "
-                        "return the tool output to the user. "
-                        f"intent_signature={a.get('intent_signature', '')}. "
-                        f"automation_mode={auto_mode}. "
-                        "Only if automation_mode=auto AND flywheel.synthesis_ready=true, "
-                        "queue a follow-up crystallization suggestion."
-                    )
-        enriched.append(a)
-    return enriched
+    return ActionRegistry.enrich(actions, ActionContext(connector_root=connector_root))
 
 
 def _cmd_save_settings(patch: dict) -> dict:

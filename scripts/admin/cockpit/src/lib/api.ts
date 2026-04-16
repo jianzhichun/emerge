@@ -14,7 +14,8 @@ import type {
   SessionResponse,
   SessionsResponse,
   StatusResponse,
-  StateResponse
+  StateResponse,
+  ActionTypesResponse
 } from './types';
 
 export interface ApiClientOptions {
@@ -203,6 +204,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       }),
     getAssets: () =>
       request<AssetsResponse>('/api/assets'),
+    getActionTypes: () =>
+      request<ActionTypesResponse>('/api/action-types'),
     getRunnerInstallUrl: () =>
       request<{ ok: boolean; bash?: string; powershell?: string; team_lead_url?: string; error?: string }>(
         '/api/control-plane/runner-install-url'

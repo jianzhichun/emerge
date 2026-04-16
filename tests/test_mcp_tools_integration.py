@@ -3362,7 +3362,7 @@ def test_cockpit_submit_writes_events_jsonl_via_write_event(tmp_path, monkeypatc
     event = {
         "type": "cockpit_action",
         "ts_ms": int(time.time() * 1000),
-        "actions": [{"type": "global-prompt", "prompt": "hello"}],
+        "actions": [{"type": "core.prompt", "prompt": "hello"}],
     }
     srv.write_event(event)
 

@@ -25,6 +25,8 @@ from scripts.policy_config import (  # noqa: E402
 from scripts.crystallizer import PipelineCrystallizer  # noqa: E402
 from scripts.runner_client import RunnerRouter  # noqa: E402
 from scripts.exec_session import ExecSession  # noqa: E402
+from scripts.observer_plugin import AdapterRegistry  # noqa: E402
+from scripts.admin.actions import ActionRegistry  # noqa: E402
 _stdout_lock = threading.Lock()
 
 
@@ -115,6 +117,7 @@ class EmergeDaemon:
             elicit=lambda *a, **kw: self._elicit(*a, **kw),
             is_http_mode=lambda: getattr(self, "_http_mode", False),
         )
+        self._register_adapter_actions()
 
     def _cockpit_broadcast(self, event: dict) -> None:
         """Forward event to cockpit SSE clients (no-op if not in HTTP mode)."""
@@ -122,6 +125,20 @@ class EmergeDaemon:
         if http_srv is None:
             return
         http_srv._notify_cockpit_broadcast(event)
+
+    def _register_adapter_actions(self) -> None:
+        """Load adapters once at daemon boot and let them register custom action specs."""
+        registry = AdapterRegistry()
+        for item in registry.list_plugins():
+            name = str(item.get("name", "")).strip()
+            if not name:
+                continue
+            plugin = registry.get_plugin(name)
+            try:
+                plugin.register_actions(ActionRegistry)
+            except Exception:
+                # Adapter extensions are optional and must not block daemon startup.
+                continue
 
     def _hook_state_path(self) -> Path:
         return Path(default_hook_state_root()) / "state.json"

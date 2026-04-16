@@ -436,7 +436,7 @@ def test_user_prompt_submit_no_longer_drains_pending_actions(tmp_path: Path):
     processed.write_text(json.dumps({
         "submitted_at": 1000,
         "actions": [
-            {"type": "tool-call", "call": {"tool": "icc_exec", "arguments": {"intent_signature": "a.read.b"}}, "meta": {}},
+            {"type": "core.tool-call", "call": {"tool": "icc_exec", "arguments": {"intent_signature": "a.read.b"}}, "meta": {}},
         ],
     }))
     out = _run("user_prompt_submit.py", {}, tmp_path)
@@ -466,7 +466,7 @@ def test_watch_pending_emits_and_renames(tmp_path: Path):
             "type": "cockpit_action",
             "event_id": event_id,
             "ts_ms": int(time.time() * 1000),
-            "actions": [{"type": "tool-call", "call": {"tool": "icc_exec", "arguments": {"intent_signature": "a.read.b"}}, "meta": {}}],
+            "actions": [{"type": "core.tool-call", "call": {"tool": "icc_exec", "arguments": {"intent_signature": "a.read.b"}}, "meta": {}}],
         }) + "\n")
     time.sleep(0.6)
     proc.send_signal(signal.SIGTERM)
@@ -533,7 +533,7 @@ def test_format_pending_actions_tool_call():
     from scripts.pending_actions import format_pending_actions
     actions = [
         {
-            "type": "tool-call",
+            "type": "core.tool-call",
             "call": {"tool": "icc_exec", "arguments": {"intent_signature": "test.read.pipe"}},
             "meta": {"scope": "connector"},
         }
@@ -546,14 +546,14 @@ def test_format_pending_actions_tool_call():
 
 def test_format_pending_actions_pipeline_set():
     from scripts.pending_actions import format_pending_actions
-    actions = [{"type": "pipeline-set", "key": "foo", "fields": {"stable": True}}]
+    actions = [{"type": "pipeline.set", "key": "foo", "fields": {"stable": True}}]
     result = format_pending_actions(actions)
-    assert "pipeline-set foo" in result
+    assert "pipeline.set foo" in result
 
 
 def test_format_pending_actions_notes_edit():
     from scripts.pending_actions import format_pending_actions
-    actions = [{"type": "notes-edit", "connector": "gmail"}]
+    actions = [{"type": "notes.edit", "connector": "gmail"}]
     result = format_pending_actions(actions)
     assert "gmail" in result
     assert "NOTES.md" in result

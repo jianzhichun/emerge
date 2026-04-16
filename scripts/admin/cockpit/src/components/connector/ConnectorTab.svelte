@@ -70,33 +70,33 @@
 
   function makeQueueItemFromAction(action: PipelineActionEvent): QueueDraft | null {
     const map: Record<string, { label: string; type: string; fields?: Record<string, unknown> }> = {
-      'promote-canary': { label: 'Promote -> canary', type: 'pipeline-set', fields: { status: 'canary', rollout_pct: 20 } },
-      'promote-stable': { label: 'Promote -> stable', type: 'pipeline-set', fields: { status: 'stable', rollout_pct: 100 } },
-      'demote-explore': { label: 'Demote -> explore', type: 'pipeline-set', fields: { status: 'explore', rollout_pct: 0 } },
-      'demote-canary': { label: 'Demote -> canary', type: 'pipeline-set', fields: { status: 'canary', rollout_pct: 20 } },
-      'reset-failures': { label: 'Reset failures', type: 'pipeline-set', fields: { consecutive_failures: 0 } },
-      delete: { label: 'Delete pipeline', type: 'pipeline-delete' }
+      'promote-canary': { label: 'Promote -> canary', type: 'pipeline.set', fields: { status: 'canary', rollout_pct: 20 } },
+      'promote-stable': { label: 'Promote -> stable', type: 'pipeline.set', fields: { status: 'stable', rollout_pct: 100 } },
+      'demote-explore': { label: 'Demote -> explore', type: 'pipeline.set', fields: { status: 'explore', rollout_pct: 0 } },
+      'demote-canary': { label: 'Demote -> canary', type: 'pipeline.set', fields: { status: 'canary', rollout_pct: 20 } },
+      'reset-failures': { label: 'Reset failures', type: 'pipeline.set', fields: { consecutive_failures: 0 } },
+      delete: { label: 'Delete pipeline', type: 'pipeline.delete' }
     };
     const def = map[action.action];
     if (!def) {
       return null;
     }
-    if (def.type === 'pipeline-delete') {
+    if (def.type === 'pipeline.delete') {
       return {
         type: def.type,
         label: def.label,
         subLabel: action.key,
-        command: `pipeline-delete ${action.key}`,
-        data: { type: 'pipeline-delete', key: action.key }
+        command: `pipeline.delete ${action.key}`,
+        data: { type: 'pipeline.delete', key: action.key }
       };
     }
     return {
       type: def.type,
       label: def.label,
       subLabel: action.key,
-      command: `pipeline-set ${action.key} ${JSON.stringify(def.fields ?? {})}`,
+      command: `pipeline.set ${action.key} ${JSON.stringify(def.fields ?? {})}`,
       data: {
-        type: 'pipeline-set',
+        type: 'pipeline.set',
         key: action.key,
         fields: def.fields ?? {}
       }
@@ -125,11 +125,11 @@
     }
     notesCommentDraft = '';
     dispatch('enqueue', {
-      type: 'notes-comment',
+      type: 'notes.comment',
       label: 'Add NOTES comment',
       subLabel: `${connectorName}: ${comment.slice(0, 40)}`,
-      command: `notes-comment ${connectorName}`,
-      data: { type: 'notes-comment', connector: connectorName, comment }
+      command: `notes.comment ${connectorName}`,
+      data: { type: 'notes.comment', connector: connectorName, comment }
     });
   }
 

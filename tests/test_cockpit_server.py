@@ -48,13 +48,15 @@ def test_cmd_assets_connector_without_notes_or_components(tmp_path: Path, monkey
 def test_validate_action_rejects_bad_types(tmp_path: Path, monkeypatch):
     from scripts.admin.api import _validate_action
     assert _validate_action({"type": "bogus"}) is not None
-    assert _validate_action({"type": "tool-call"}) is not None  # missing call
-    assert _validate_action({"type": "pipeline-delete"}) is not None  # missing key
-    assert _validate_action({"type": "pipeline-delete", "key": "x"}) is None  # valid
+    assert _validate_action({"type": "core.tool-call"}) is not None  # missing call
+    assert _validate_action({"type": "pipeline.delete"}) is not None  # missing key
+    assert _validate_action({"type": "pipeline.delete", "key": "x"}) is None  # valid
 
 
 import urllib.request
+import urllib.error
 import threading
+import pytest
 
 
 def _start_test_server(tmp_path, monkeypatch):
@@ -151,7 +153,7 @@ def test_serve_submit_writes_events_jsonl(tmp_path, monkeypatch):
     from scripts.repl_admin import cmd_serve
     base = cmd_serve(port=0, open_browser=False)["url"]
 
-    actions = [{"type": "pipeline-delete", "key": "x"}]
+    actions = [{"type": "pipeline.delete", "key": "x"}]
     body = json.dumps({"actions": actions}).encode()
     req = urllib.request.Request(
         f"{base}/api/submit", data=body,
@@ -169,7 +171,8 @@ def test_serve_submit_writes_events_jsonl(tmp_path, monkeypatch):
     assert event["type"] == "cockpit_action"
     assert event.get("event_id") == submit.get("event_id")
     assert len(event["actions"]) == 1
-    assert event["actions"][0]["type"] == "pipeline-delete"
+    assert event["actions"][0]["type"] == "pipeline.delete"
+    assert str(event["actions"][0].get("action_id", "")).startswith(f"{submit['event_id']}:")
 
 
 def test_serve_status_reports_ack_progress(tmp_path, monkeypatch):
@@ -190,7 +193,7 @@ def test_serve_status_reports_ack_progress(tmp_path, monkeypatch):
                 "type": "cockpit_action",
                 "event_id": event_id,
                 "ts_ms": 1000,
-                "actions": [{"type": "pipeline-delete", "key": "x"}],
+                "actions": [{"type": "pipeline.delete", "key": "x"}],
             }
         )
         + "\n",
@@ -254,9 +257,9 @@ def test_cockpit_full_flow(tmp_path, monkeypatch):
     assert "scenarios" not in assets["connectors"]["myconn"]
 
     actions = [
-        {"type": "notes-comment", "connector": "myconn", "comment": "test comment"},
+        {"type": "notes.comment", "connector": "myconn", "comment": "test comment"},
         {
-            "type": "tool-call",
+            "type": "core.tool-call",
             "intent_signature": "myconn.write.apply-test",
             "call": {
                 "tool": "icc_exec",
@@ -286,11 +289,81 @@ def test_cockpit_full_flow(tmp_path, monkeypatch):
     event = json.loads(lines[-1])
     assert event["type"] == "cockpit_action"
     assert len(event["actions"]) == 2
-    assert event["actions"][0]["type"] == "notes-comment"
-    assert event["actions"][1]["type"] == "tool-call"
+    assert event["actions"][0]["type"] == "notes.comment"
+    assert event["actions"][1]["type"] == "core.tool-call"
     # Enrichment should have added instruction fields
     assert "instruction" in event["actions"][0]
     assert "instruction" in event["actions"][1]
+
+
+def test_serve_get_action_types_and_sdk(tmp_path, monkeypatch):
+    url = _start_test_server(tmp_path, monkeypatch)
+    with urllib.request.urlopen(f"{url}/api/action-types") as resp:
+        data = json.loads(resp.read())
+    assert data["ok"] is True
+    type_names = {row["type"] for row in data["types"]}
+    assert "pipeline.set" in type_names
+    assert "core.prompt" in type_names
+
+    with urllib.request.urlopen(f"{url}/api/cockpit-sdk.js") as resp:
+        script = resp.read().decode("utf-8")
+    assert "window.emerge" in script
+    assert "emerge:enqueue" in script
+
+
+def test_submit_rejects_legacy_action_names(tmp_path, monkeypatch):
+    repl_root = tmp_path / "repl-root"
+    monkeypatch.setenv("EMERGE_REPL_ROOT", str(repl_root))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(repl_root))
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
+    (tmp_path / "connectors").mkdir(exist_ok=True)
+    from scripts.repl_admin import cmd_serve
+
+    base = cmd_serve(port=0, open_browser=False)["url"]
+    body = json.dumps({"actions": [{"type": "pipeline-delete", "key": "x"}]}).encode()
+    req = urllib.request.Request(
+        f"{base}/api/submit",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req) as resp:
+        result = json.loads(resp.read())
+    assert result["ok"] is False
+    assert result["error"] == "invalid_action"
+
+
+def test_submit_and_inject_limits(tmp_path, monkeypatch):
+    repl_root = tmp_path / "repl-root"
+    monkeypatch.setenv("EMERGE_REPL_ROOT", str(repl_root))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(repl_root))
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
+    (tmp_path / "connectors").mkdir(exist_ok=True)
+    from scripts.repl_admin import cmd_serve
+
+    base = cmd_serve(port=0, open_browser=False)["url"]
+
+    many = [{"type": "pipeline.delete", "key": f"x{i}"} for i in range(51)]
+    req_many = urllib.request.Request(
+        f"{base}/api/submit",
+        data=json.dumps({"actions": many}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc_submit:
+        urllib.request.urlopen(req_many)
+    assert exc_submit.value.code == 400
+
+    huge_html = "x" * (64 * 1024 + 1)
+    req_html = urllib.request.Request(
+        f"{base}/api/inject-component",
+        data=json.dumps({"connector": "acme", "html": huge_html}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc_html:
+        urllib.request.urlopen(req_html)
+    assert exc_html.value.code == 400
 
 
 def test_session_reset_blocked_when_span_active(tmp_path, monkeypatch):
