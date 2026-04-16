@@ -3448,7 +3448,7 @@ def test_resource_read_state_deltas_is_valid_json():
     resp = daemon.handle_jsonrpc(req)
     resource = resp["result"]["resource"]
     data = json.loads(resource["text"])
-    assert "open_risks" in data or "deltas" in data or "goal" in data
+    assert "open_risks" in data or "deltas" in data
 
 
 def test_format_context_trims_risks_when_over_budget():
@@ -3465,8 +3465,6 @@ def test_format_context_trims_risks_when_over_budget():
              "source_delta_id": "", "intent_signature": ""}
             for i in range(50)
         ],
-        "goal": "test goal",
-        "goal_source": "test",
     }
 
     # Tiny budget that can't hold all 50 risks
@@ -3491,8 +3489,6 @@ def test_format_context_does_not_trim_risks_under_budget():
              "created_at_ms": 1, "snoozed_until_ms": 0, "handled_reason": "",
              "source_delta_id": "", "intent_signature": ""}
         ],
-        "goal": "",
-        "goal_source": "unset",
     }
 
     ctx = tracker.format_context(budget_chars=10000)  # large budget

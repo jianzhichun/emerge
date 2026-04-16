@@ -323,7 +323,7 @@ def test_post_tool_use_records_action_when_span_active(tmp_path):
     hook_state = tmp_path / "hook-state"
     hook_state.mkdir()
     state = {"active_span_id": "span-123", "active_span_intent": "lark.read.get-doc",
-             "goal": "", "goal_source": "unset", "deltas": []}
+             "deltas": []}
     (hook_state / "state.json").write_text(json.dumps(state), encoding="utf-8")
     _run_post_hook({"tool_name": "mcp__lark_doc__get",
                     "tool_result": {"content": [{"type": "text", "text": "{}"}]}},
@@ -340,7 +340,7 @@ def test_post_tool_use_excludes_icc_exec_from_span(tmp_path):
     hook_state = tmp_path / "hook-state"
     hook_state.mkdir()
     state = {"active_span_id": "span-123", "active_span_intent": "lark.read.get-doc",
-             "goal": "", "goal_source": "unset", "deltas": []}
+             "deltas": []}
     (hook_state / "state.json").write_text(json.dumps(state), encoding="utf-8")
     _run_post_hook({"tool_name": "emerge__icc_exec",
                     "tool_result": {"content": [{"type": "text", "text": "{}"}]}},
@@ -367,7 +367,7 @@ def test_post_tool_use_preserves_active_span_id_across_calls(tmp_path):
     hook_state = tmp_path / "hook-state"
     hook_state.mkdir()
     state = {"active_span_id": "span-xyz", "active_span_intent": "lark.read.get-doc",
-             "goal": "", "goal_source": "unset", "deltas": []}
+             "deltas": []}
     (hook_state / "state.json").write_text(json.dumps(state), encoding="utf-8")
     _run_post_hook({"tool_name": "mcp__lark_doc__get",
                     "tool_result": {"content": [{"type": "text", "text": "{}"}]}},
