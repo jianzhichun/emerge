@@ -117,7 +117,7 @@ def main() -> None:
     parser.add_argument("--runner-url", default="", help="Runner URL")
     parser.add_argument("--as-default", action="store_true", help="Set default runner URL")
     parser.add_argument("--clear-default", action="store_true", help="Clear default runner URL")
-    parser.add_argument("--target-profile", default="", help="Target profile key (runner map / install URL)")
+    parser.add_argument("--target-profile", default="", help="Target profile key (runner map / deploy routing)")
     parser.add_argument("--runner-port", type=int, default=8787, help="Remote runner bind port")
     parser.add_argument(
         "--daemon-port",

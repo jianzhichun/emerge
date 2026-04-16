@@ -20,19 +20,21 @@
 </script>
 
 <nav class="tab-bar" aria-label="Cockpit tabs">
-  {#each leftTabs as tab}
-    <button
-      type="button"
-      class={`tab ${tab.id === activeTab ? 'tab--active' : ''} ${tab.subtle ? 'tab--subtle' : ''}`}
-      aria-current={tab.id === activeTab ? 'page' : undefined}
-      on:click={() => handleSelect(tab.id)}
-    >
-      {tab.label}
-      {#if tab.warn}
-        <span class="warn">⚠</span>
-      {/if}
-    </button>
-  {/each}
+  <div class="left-tabs">
+    {#each leftTabs as tab}
+      <button
+        type="button"
+        class={`tab ${tab.id === activeTab ? 'tab--active' : ''} ${tab.subtle ? 'tab--subtle' : ''}`}
+        aria-current={tab.id === activeTab ? 'page' : undefined}
+        on:click={() => handleSelect(tab.id)}
+      >
+        {tab.label}
+        {#if tab.warn}
+          <span class="warn">⚠</span>
+        {/if}
+      </button>
+    {/each}
+  </div>
 
   <div class="right-tabs">
     {#each rightTabs as tab}
@@ -54,10 +56,20 @@
 <style>
   .tab-bar {
     display: flex;
+    align-items: stretch;
+    gap: 8px;
     border-bottom: 1px solid var(--color-border);
     background: var(--color-surface);
-    overflow-x: auto;
     flex-shrink: 0;
+  }
+
+  .left-tabs {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: min(72vw, calc(100% - 320px));
+    overflow-x: auto;
+    overflow-y: hidden;
   }
 
   .tab {
@@ -90,8 +102,9 @@
   }
 
   .right-tabs {
-    margin-left: auto;
     display: flex;
+    flex: 0 0 auto;
+    margin-left: auto;
   }
 
   .warn {

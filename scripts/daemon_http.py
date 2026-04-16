@@ -515,6 +515,17 @@ def _make_handler(srv: "DaemonHTTPServer"):
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
+            elif path == "/runner-dist/runner.tar.gz.sha256":
+                from scripts.admin.runner import _build_runner_tarball
+                _plugin_root = Path(__file__).resolve().parents[1]
+                data = _build_runner_tarball(_plugin_root)
+                digest = hashlib.sha256(data).hexdigest()
+                body = f"{digest}  runner.tar.gz\n".encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
             elif path in ("/runner-install.sh", "/runner-install.ps1"):
                 import urllib.parse as _up_ri
                 qs_ri = _up_ri.parse_qs(_up_ri.urlparse(self.path).query)

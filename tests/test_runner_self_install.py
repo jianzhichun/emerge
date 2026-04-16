@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import sys
 import tarfile
@@ -71,6 +72,15 @@ def test_generate_install_sh_embeds_config():
     assert "launchctl" in script
     assert "systemctl" in script
     assert "runner.tar.gz" in script
+    assert "runner.tar.gz.sha256" in script
+    assert "SHA256 mismatch" in script
+    assert "command -v curl" in script
+    assert "command -v tar" in script
+    assert "START_MODE=" in script
+    assert "INSTALL_STAGE=" in script
+    assert "[Install][$INSTALL_STAGE] failed" in script
+    assert "cron @reboot configured" in script
+    assert "xdg-autostart" in script
 
 
 def test_generate_install_ps1_embeds_config():
@@ -86,6 +96,13 @@ def test_generate_install_ps1_embeds_config():
     assert "$RUNNER_PORT = 8787" in script
     assert "EmergeRunner" in script
     assert "runner.tar.gz" in script
+    assert "runner.tar.gz.sha256" in script
+    assert "SHA256 mismatch" in script
+    assert "-Encoding utf8" in script
+    assert "$INSTALL_STAGE = " in script
+    assert "[Install][$INSTALL_STAGE]" in script
+    assert "start_mode=$START_MODE" in script
+    assert "startup-folder" in script
     assert "winget" in script
 
 
@@ -155,6 +172,13 @@ def test_daemon_serves_runner_tarball(tmp_path):
         with tarfile.open(fileobj=buf, mode="r:gz") as tar:
             names = tar.getnames()
         assert "scripts/remote_runner.py" in names
+
+        sha_req = urllib.request.Request(f"http://127.0.0.1:{port}/runner-dist/runner.tar.gz.sha256")
+        with urllib.request.urlopen(sha_req, timeout=5) as resp:
+            sha_text = resp.read().decode("utf-8")
+        assert resp.status == 200
+        expected = hashlib.sha256(data).hexdigest()
+        assert sha_text.startswith(expected)
     finally:
         srv.stop()
 

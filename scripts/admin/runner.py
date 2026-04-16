@@ -290,9 +290,11 @@ def _generate_runner_install_sh(
 set -euo pipefail
 
 TEAM_LEAD_URL={tl_json}
-PROFILE="${{PROFILE:-$(hostname -s 2>/dev/null || hostname)}}"
+PROFILE="${{EMERGE_PROFILE:-${{PROFILE:-$(hostname -s 2>/dev/null || hostname)}}}}"
 RUNNER_PORT="{runner_port}"
 RUNNER_ROOT="$HOME/.emerge/runner"
+INSTALL_STAGE="init"
+trap 'rc=$?; if [ $rc -ne 0 ]; then echo "[Install][$INSTALL_STAGE] failed (exit=$rc)" >&2; fi' EXIT
 
 echo "=== Emerge Runner Installer ==="
 
@@ -335,8 +337,29 @@ fi
 
 echo "[OK] $($PYTHON --version)"
 
+INSTALL_STAGE="dependency_check"
+if ! command -v curl >/dev/null 2>&1; then
+  echo "[Install] curl is required but not found." >&2
+  exit 1
+fi
+if ! command -v tar >/dev/null 2>&1; then
+  echo "[Install] tar is required but not found." >&2
+  exit 1
+fi
+
+INSTALL_STAGE="download"
 mkdir -p "$RUNNER_ROOT"
-curl -fsSL "$TEAM_LEAD_URL/runner-dist/runner.tar.gz" | tar -xzf - -C "$RUNNER_ROOT"
+curl -fsSL "$TEAM_LEAD_URL/runner-dist/runner.tar.gz" -o "$RUNNER_ROOT/runner.tar.gz"
+curl -fsSL "$TEAM_LEAD_URL/runner-dist/runner.tar.gz.sha256" -o "$RUNNER_ROOT/runner.tar.gz.sha256"
+EXPECTED_SHA="$(awk '{{print $1}}' "$RUNNER_ROOT/runner.tar.gz.sha256" | tr -d '\r\n')"
+ACTUAL_SHA="$($PYTHON -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$RUNNER_ROOT/runner.tar.gz")"
+if [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
+  echo "[Install] runner.tar.gz SHA256 mismatch — aborting." >&2
+  exit 1
+fi
+INSTALL_STAGE="extract"
+tar -xzf "$RUNNER_ROOT/runner.tar.gz" -C "$RUNNER_ROOT"
+rm -f "$RUNNER_ROOT/runner.tar.gz" "$RUNNER_ROOT/runner.tar.gz.sha256"
 
 PIP_ARGS=""
 if [ "$USE_CN_MIRROR" = "1" ]; then
@@ -357,6 +380,8 @@ cat > "$HOME/.emerge/runner-config.json" <<JSON
 JSON
 
 OS="$(uname -s)"
+START_MODE="unknown"
+INSTALL_STAGE="autostart"
 if [ "$OS" = "Darwin" ]; then
   PYTHON_BIN="$(command -v "$PYTHON")"
   PLIST="$HOME/Library/LaunchAgents/com.emerge.runner.plist"
@@ -383,11 +408,16 @@ PLIST
   launchctl bootout gui/"$(id -u)" "$PLIST" 2>/dev/null || true
   launchctl bootstrap gui/"$(id -u)" "$PLIST"
   echo "[OK] macOS LaunchAgent registered"
+  START_MODE="launchctl"
 else
   PYTHON_BIN="$(command -v "$PYTHON")"
-  SERVICE_DIR="$HOME/.config/systemd/user"
-  mkdir -p "$SERVICE_DIR"
-  cat > "$SERVICE_DIR/emerge-runner.service" <<SERVICE
+  start_now() {{
+    nohup "$PYTHON_BIN" "$RUNNER_ROOT/scripts/runner_watchdog.py" --host 0.0.0.0 --port "$RUNNER_PORT" >/dev/null 2>&1 &
+  }}
+  if command -v systemctl >/dev/null 2>&1; then
+    SERVICE_DIR="$HOME/.config/systemd/user"
+    mkdir -p "$SERVICE_DIR"
+    cat > "$SERVICE_DIR/emerge-runner.service" <<SERVICE
 [Unit]
 Description=Emerge Runner
 After=network.target
@@ -401,11 +431,46 @@ Environment="EMERGE_TEAM_LEAD_URL=$TEAM_LEAD_URL"
 [Install]
 WantedBy=default.target
 SERVICE
-  systemctl --user daemon-reload 2>/dev/null || true
-  systemctl --user enable --now emerge-runner 2>/dev/null || true
-  echo "[OK] systemd user service configured (if available)"
+    if systemctl --user daemon-reload 2>/dev/null && systemctl --user enable --now emerge-runner 2>/dev/null; then
+      echo "[OK] systemd user service configured"
+      START_MODE="systemd-user"
+    else
+      echo "[Warn] systemd user service unavailable — falling back to non-systemd autostart." >&2
+    fi
+  fi
+  if [ "$START_MODE" = "unknown" ] && command -v crontab >/dev/null 2>&1; then
+    CRON_LINE="@reboot \"$PYTHON_BIN\" \"$RUNNER_ROOT/scripts/runner_watchdog.py\" --host 0.0.0.0 --port $RUNNER_PORT >/dev/null 2>&1"
+    (
+      crontab -l 2>/dev/null | awk 'index($0,"runner_watchdog.py")==0' || true
+      echo "$CRON_LINE"
+    ) | crontab -
+    start_now
+    echo "[OK] cron @reboot configured"
+    START_MODE="cron"
+  fi
+  if [ "$START_MODE" = "unknown" ] && [ -d "$HOME/.config" ]; then
+    AUTOSTART_DIR="$HOME/.config/autostart"
+    mkdir -p "$AUTOSTART_DIR"
+    cat > "$AUTOSTART_DIR/emerge-runner.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Emerge Runner
+Exec="$PYTHON_BIN" "$RUNNER_ROOT/scripts/runner_watchdog.py" --host 0.0.0.0 --port $RUNNER_PORT
+X-GNOME-Autostart-enabled=true
+Terminal=false
+DESKTOP
+    start_now
+    echo "[OK] XDG autostart desktop entry configured"
+    START_MODE="xdg-autostart"
+  fi
+  if [ "$START_MODE" = "unknown" ]; then
+    start_now
+    START_MODE="manual-no-boot-autostart"
+    echo "[Warn] No autostart manager detected — started watchdog only for current session." >&2
+  fi
 fi
 
+INSTALL_STAGE="health_check"
 sleep 2
 if curl -s --max-time 5 "http://localhost:$RUNNER_PORT/health" 2>/dev/null | grep -q 'true'; then
   echo "[OK] Runner healthy at http://localhost:$RUNNER_PORT"
@@ -413,7 +478,8 @@ else
   echo "[Warn] Check: curl http://localhost:$RUNNER_PORT/health"
 fi
 
-echo "=== Done. Profile $PROFILE (override: EMERGE_PROFILE=<name>) → $TEAM_LEAD_URL ==="
+INSTALL_STAGE="done"
+echo "=== Done. Profile $PROFILE (override: EMERGE_PROFILE=<name>) → $TEAM_LEAD_URL (start_mode=$START_MODE) ==="
 """
 
 
@@ -430,6 +496,12 @@ $TEAM_LEAD_URL = {ps1_tl}
 $RUNNER_NAME = if ($env:EMERGE_PROFILE) {{ $env:EMERGE_PROFILE }} else {{ $env:COMPUTERNAME }}
 $RUNNER_PORT = {runner_port}
 $RUNNER_ROOT = "$env:USERPROFILE\\.emerge\\runner"
+$INSTALL_STAGE = "init"
+$START_MODE = "unknown"
+trap {{
+    Write-Host "[Install][$INSTALL_STAGE] $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}}
 
 Write-Host "=== Emerge Runner Installer ===" -ForegroundColor Cyan
 
@@ -469,10 +541,20 @@ if (-not $PYTHON) {{
 
 Write-Host "[OK] $(& $PYTHON --version)"
 
+$INSTALL_STAGE = "download"
 New-Item -Force -ItemType Directory -Path $RUNNER_ROOT | Out-Null
 $tarPath = "$env:TEMP\\emerge-runner.tar.gz"
+$shaPath = "$env:TEMP\\emerge-runner.tar.gz.sha256"
 Invoke-WebRequest -Uri "$TEAM_LEAD_URL/runner-dist/runner.tar.gz" -OutFile $tarPath
+Invoke-WebRequest -Uri "$TEAM_LEAD_URL/runner-dist/runner.tar.gz.sha256" -OutFile $shaPath
+$expectedSha = (Get-Content -Path $shaPath -Raw).Split()[0].Trim()
+$actualSha = & $PYTHON -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" $tarPath
+if ($expectedSha -ne $actualSha.Trim()) {{
+    throw "runner.tar.gz SHA256 mismatch"
+}}
+$INSTALL_STAGE = "extract"
 tar -xzf $tarPath -C $RUNNER_ROOT
+Remove-Item -Force -ErrorAction SilentlyContinue $tarPath, $shaPath
 
 $pipArgs = @()
 if ($USE_CN_MIRROR) {{ $pipArgs = @("--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple") }}
@@ -496,18 +578,30 @@ Set sh = CreateObject("WScript.Shell")
 sh.CurrentDirectory = "$RUNNER_ROOT"
 sh.Run Chr(34) & "$pythonPath" & Chr(34) & " " & Chr(34) & "$RUNNER_ROOT\\scripts\\runner_watchdog.py" & Chr(34) & " --host 0.0.0.0 --port $RUNNER_PORT", 0, False
 "@
-$vbs | Out-File -FilePath $vbsPath -Encoding ascii
+$vbs | Out-File -FilePath $vbsPath -Encoding utf8
 
 $regKey = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-Set-ItemProperty -Path $regKey -Name "EmergeRunner" -Value "wscript.exe `"$vbsPath`""
-Write-Host "[OK] Registry autostart: EmergeRunner"
-
+$INSTALL_STAGE = "autostart"
 try {{
-    winget --version | Out-Null
-}} catch {{}}
+    Set-ItemProperty -Path $regKey -Name "EmergeRunner" -Value "wscript.exe `"$vbsPath`""
+    $START_MODE = "registry-run"
+    Write-Host "[OK] Registry autostart: EmergeRunner"
+}} catch {{
+    $startupDir = [System.Environment]::GetFolderPath("Startup")
+    if ($startupDir) {{
+        $startupVbs = Join-Path $startupDir "EmergeRunner.vbs"
+        Copy-Item -Force $vbsPath $startupVbs
+        $START_MODE = "startup-folder"
+        Write-Host "[Warn] Registry autostart unavailable — using Startup folder fallback." -ForegroundColor Yellow
+    }} else {{
+        $START_MODE = "manual-no-boot-autostart"
+        Write-Host "[Warn] No autostart target found — current session only." -ForegroundColor Yellow
+    }}
+}}
 
 Start-Process "wscript.exe" -ArgumentList "`"$vbsPath`""
 
+$INSTALL_STAGE = "health_check"
 Start-Sleep 4
 try {{
     $h = Invoke-RestMethod -Uri "http://localhost:$RUNNER_PORT/health" -TimeoutSec 5
@@ -516,7 +610,8 @@ try {{
     Write-Host "[Warn] Runner may still be starting."
 }}
 
-Write-Host "=== Done. Profile $RUNNER_NAME (override: `$env:EMERGE_PROFILE=<name>) -> $TEAM_LEAD_URL ===" -ForegroundColor Cyan
+$INSTALL_STAGE = "done"
+Write-Host "=== Done. Profile $RUNNER_NAME (override: `$env:EMERGE_PROFILE=<name>) -> $TEAM_LEAD_URL (start_mode=$START_MODE) ===" -ForegroundColor Cyan
 """
 
 

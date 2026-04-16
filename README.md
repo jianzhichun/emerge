@@ -151,9 +151,10 @@ The runner is a **stateless Python executor** — it accepts `icc_exec` only. Al
 
 | Endpoint | Purpose |
 | -------- | ------- |
-| `GET /runner-install.sh?profile=<p>&port=<n>` | Generated bash installer (embeds LAN daemon URL) |
-| `GET /runner-install.ps1?profile=<p>&port=<n>` | Generated PowerShell installer |
+| `GET /runner-install.sh?port=<n>` | Generated bash installer (embeds LAN daemon URL) |
+| `GET /runner-install.ps1?port=<n>` | Generated PowerShell installer |
 | `GET /runner-dist/runner.tar.gz` | Bundle of runner scripts + `requirements-runner.txt` |
+| `GET /runner-dist/runner.tar.gz.sha256` | SHA256 checksum for installer integrity verification |
 
 CLI: `python3 scripts/repl_admin.py runner-install-url --target-profile <p> --pretty`. Cockpit: `GET /api/control-plane/runner-install-url?profile=<p>`.
 
@@ -214,6 +215,10 @@ pythonw scripts/runner_watchdog.py --host 0.0.0.0 --port 8787
 python3 scripts/repl_admin.py runner-install-url --target-profile "cad-win" --pretty
 # Or open Cockpit → Monitors → Add Runner and copy the curl / irm commands.
 ```
+
+Installer defaults runner profile to hostname; override explicitly with `EMERGE_PROFILE=<name>` (bash) or `$env:EMERGE_PROFILE="<name>"` (PowerShell) before running install.
+On Linux, installer autostart preference order is: `systemd --user` → `cron @reboot` → XDG autostart desktop entry → current-session watchdog only. The final install line prints `start_mode=...`.
+On Windows, autostart preference is: registry `HKCU\...\Run` → Startup folder fallback → current-session watchdog only. Install failures are tagged with stage markers (`[Install][download]`, `[Install][extract]`, etc.) for faster troubleshooting.
 
 ### 4. Hook and context flow
 
