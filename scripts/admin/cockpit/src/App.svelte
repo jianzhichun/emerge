@@ -51,6 +51,7 @@
   let stateRefreshSignal = 0;
   let serverPending = false;
   let ccActive = false;
+  let queueSubmitting = false;
   let statusMessage: string | null = null;
   let sseStatus = 'idle';
 
@@ -210,7 +211,8 @@
 
   async function submitQueue(): Promise<void> {
     const items = $queueStore.items;
-    if (!items.length || $queueStore.submitting || serverPending) return;
+    if (!items.length || queueSubmitting || serverPending) return;
+    queueSubmitting = true;
     statusMessage = 'Submitting queue...';
     try {
       const result = await api.request<{ ok?: boolean; action_count?: number; error?: string }>(
@@ -226,6 +228,8 @@
       await refreshShellData();
     } catch (error) {
       statusMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      queueSubmitting = false;
     }
   }
 
@@ -438,7 +442,7 @@
     {#if showQueuePanel}
       <QueuePanel
         queueItems={$queueStore.items}
-        submitting={false}
+        submitting={queueSubmitting}
         {serverPending}
         on:enqueuePrompt={enqueuePrompt}
         on:dequeue={(event) => queueStore.dequeue(event.detail.id)}
