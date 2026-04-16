@@ -66,3 +66,4 @@ secrets.json
 .mcp.json
 
 .superpowers/
+scripts/admin/cockpit/node_modules/

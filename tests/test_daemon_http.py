@@ -102,6 +102,13 @@ def test_apis_path_not_routed_to_cockpit(tmp_path):
     srv.stop()
 
 
+def test_assets_path_is_routed_to_cockpit_handler():
+    """`/assets/*` must be treated as cockpit route (Svelte dist assets)."""
+    from scripts.daemon_http import _is_cockpit_http_path
+    assert _is_cockpit_http_path("/assets/index.js") is True
+    assert _is_cockpit_http_path("/apis") is False
+
+
 def test_get_absolute_request_target_without_path_serves_cockpit(tmp_path):
     """RFC 7230 absolute-form ``GET http://host:port`` has empty path → must serve ``/``."""
     srv = _make_server(tmp_path)

@@ -131,7 +131,8 @@ class _ReuseAddrTCPServer(socketserver.ThreadingTCPServer):
 
 
 class _CockpitHandler(http.server.BaseHTTPRequestHandler):
-    _shell_path: "Path" = Path(__file__).parent.parent / "cockpit_shell.html"
+    _dist_dir: "Path" = Path(__file__).parent / "cockpit" / "dist"
+    _dist_index_path: "Path" = _dist_dir / "index.html"
     _cockpit: "CockpitHTTPServer | None" = None  # set by _make_cockpit_handler()
 
     def log_message(self, fmt: str, *args: object) -> None:  # suppress request logs
@@ -160,6 +161,8 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             return self._json({"ok": False, "error": "invalid session_id"}, status=400)
         if path in ("/", "/index.html"):
             self._serve_shell()
+        elif path.startswith("/assets/"):
+            self._serve_asset(path)
         elif path == "/api/policy":
             self._json(cmd_policy_status(session_id=session_id_q))
         elif path == "/api/assets":
@@ -398,17 +401,62 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self._err(404)
 
     def _serve_shell(self) -> None:
-        if not self._shell_path.exists():
-            body = b"<html><body><h1>Emerge Cockpit</h1><p>cockpit_shell.html not found</p></body></html>"
+        if not self._dist_index_path.is_file():
+            body = (
+                "<!doctype html><html><head><meta charset='utf-8'>"
+                "<title>Emerge Cockpit</title></head><body>"
+                "<h1>Emerge Cockpit</h1>"
+                "<p>Build output missing: scripts/admin/cockpit/dist/index.html</p>"
+                "<p>Run <code>cd scripts/admin/cockpit && npm install && npm run build</code>.</p>"
+                "</body></html>"
+            ).encode("utf-8")
             self.send_response(200)
-            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
             return
-        body = self._shell_path.read_bytes()
+        body = self._dist_index_path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_asset(self, path: str) -> None:
+        raw_rel = path[len("/assets/") :]
+        rel = urllib.parse.unquote(raw_rel)
+        rel_path = Path(rel)
+        if (
+            not rel
+            or rel_path.is_absolute()
+            or any(part in {"", ".", ".."} for part in rel_path.parts)
+        ):
+            self._err(404)
+            return
+        assets_root = (self._dist_dir / "assets").resolve()
+        try:
+            fpath = (assets_root / rel_path).resolve()
+            fpath.relative_to(assets_root)
+        except (ValueError, OSError):
+            self._err(404)
+            return
+        if not fpath.is_file():
+            self._err(404)
+            return
+
+        suffix = fpath.suffix.lower()
+        content_types = {
+            ".js": "application/javascript; charset=utf-8",
+            ".css": "text/css; charset=utf-8",
+            ".svg": "image/svg+xml",
+            ".png": "image/png",
+            ".ico": "image/x-icon",
+            ".map": "application/json; charset=utf-8",
+        }
+        body = fpath.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_types.get(suffix, "application/octet-stream"))
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

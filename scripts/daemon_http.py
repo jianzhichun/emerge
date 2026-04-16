@@ -55,7 +55,7 @@ def _runtime_fingerprint() -> str:
         root / "scripts" / "emerge_daemon.py",
         root / "scripts" / "admin" / "cockpit.py",
         root / "scripts" / "admin" / "control_plane.py",
-        root / "scripts" / "cockpit_shell.html",
+        root / "scripts" / "admin" / "cockpit" / "dist" / "index.html",
     )
     h = hashlib.sha1()
     for p in watched:
@@ -480,7 +480,9 @@ def _is_cockpit_http_path(path: str) -> bool:
     """True for cockpit routes. Avoids matching /apis, /apix, etc. (prefix /api alone is wrong)."""
     if path in ("/", "/index.html"):
         return True
-    return path == "/api" or path.startswith("/api/")
+    if path == "/api" or path.startswith("/api/"):
+        return True
+    return path.startswith("/assets/")
 
 
 def _coerce_request_target_to_path(handler: Any) -> None:
