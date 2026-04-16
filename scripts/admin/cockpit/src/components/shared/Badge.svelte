@@ -15,11 +15,11 @@
     align-items: center;
     gap: 0.35rem;
     border: 1px solid transparent;
-    border-radius: 999px;
-    padding: 0.15rem 0.5rem;
-    font-size: 0.75rem;
+    border-radius: var(--radius-sm);
+    padding: 1px 6px;
+    font-size: 11px;
     line-height: 1.2;
-    font-weight: 600;
+    font-weight: 400;
     white-space: nowrap;
   }
 

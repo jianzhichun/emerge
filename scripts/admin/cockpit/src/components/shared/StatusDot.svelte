@@ -13,11 +13,10 @@
 <style>
   .status-dot {
     display: inline-block;
-    width: 0.625rem;
-    height: 0.625rem;
+    width: 6px;
+    height: 6px;
     border-radius: 999px;
     background: var(--color-text-muted);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
   }
 
   .status-dot--online {
@@ -37,8 +36,8 @@
   }
 
   .status-label {
-    margin-left: 0.4rem;
+    margin-left: 0.3rem;
     color: var(--color-text-muted);
-    font-size: 0.75rem;
+    font-size: 11px;
   }
 </style>

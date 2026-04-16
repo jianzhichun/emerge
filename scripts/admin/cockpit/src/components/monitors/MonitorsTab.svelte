@@ -100,10 +100,9 @@
   });
 
   $: runnerCount = $monitorsStore.runners.length;
-  $: onlineCount = $monitorsStore.runners.filter((runner) => runner.connected !== false).length;
 </script>
 
-<section class="monitors-tab">
+<section class="monitors-tab monitors-wrap">
   <div class="team-status">
     <span class:offline={!$monitorsStore.teamActive || !runnerCount} class="team-dot"></span>
     {#if runnerCount}
@@ -140,13 +139,6 @@
       {/each}
     </div>
   {/if}
-
-  <div class="footer">
-    <span>{onlineCount} online</span>
-    {#if $monitorsStore.lastUpdatedMs}
-      <span>Last refresh: {new Date($monitorsStore.lastUpdatedMs).toLocaleTimeString()}</span>
-    {/if}
-  </div>
 </section>
 
 <style>
@@ -203,28 +195,18 @@
 
   .empty-state {
     text-align: center;
-    color: #6e7681;
+    color: #484f58;
     padding: 2.5rem 1rem;
-    border: 1px dashed rgba(139, 148, 158, 0.35);
-    border-radius: 0.6rem;
   }
 
   .empty-hint {
     margin-top: 0.45rem;
-    font-size: 0.7rem;
+    font-size: 11px;
+    color: #484f58;
   }
 
   .error-text {
     margin: 0;
     color: #ff8b8b;
-  }
-
-  .footer {
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    gap: 0.8rem;
-    color: #8b949e;
-    font-size: 0.64rem;
   }
 </style>

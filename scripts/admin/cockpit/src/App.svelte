@@ -4,12 +4,13 @@
   import ConnectorTab from './components/connector/ConnectorTab.svelte';
   import MonitorsTab from './components/monitors/MonitorsTab.svelte';
   import OverviewTab from './components/overview/OverviewTab.svelte';
+  import QueuePanel from './components/overview/QueuePanel.svelte';
   import SessionTab from './components/session/SessionTab.svelte';
   import StateTab from './components/state/StateTab.svelte';
   import Badge from './components/shared/Badge.svelte';
+  import CockpitDropdown from './components/shared/CockpitDropdown.svelte';
   import GoalBar from './components/shared/GoalBar.svelte';
   import SettingsModal from './components/shared/SettingsModal.svelte';
-  import StatusDot from './components/shared/StatusDot.svelte';
   import TabBar from './components/shared/TabBar.svelte';
   import ThresholdsBar from './components/shared/ThresholdsBar.svelte';
   import { api } from './lib/api';
@@ -26,6 +27,8 @@
   interface TabBarItem {
     id: string;
     label: string;
+    warn?: boolean;
+    subtle?: boolean;
   }
 
   interface QueueItem {
@@ -53,9 +56,10 @@
 
   type GlobalTabId = 'overview' | 'monitors' | 'audit' | 'session' | 'state';
   type ConnectorPanelId = 'pipelines' | 'notes' | 'controls';
+  const STATUS_REFRESH_MS = 10_000;
 
-  const globalTabs: { id: GlobalTabId; label: string }[] = [
-    { id: 'overview', label: 'Overview' },
+  const primaryTab: { id: GlobalTabId; label: string } = { id: 'overview', label: 'Overview' };
+  const controlTabs: { id: Exclude<GlobalTabId, 'overview'>; label: string }[] = [
     { id: 'monitors', label: 'Monitors' },
     { id: 'audit', label: 'Audit' },
     { id: 'session', label: 'Session' },
@@ -70,22 +74,32 @@
 
   let monitorsRefreshSignal = 0;
   let auditRefreshSignal = 0;
+  let stateRefreshSignal = 0;
   let queueItems: QueueItem[] = [];
   let queueIdSeq = 0;
   let queueSubmitting = false;
   let serverPending = false;
   let statusMessage: string | null = null;
+  let sseStatus = 'idle';
+  let nowMs = Date.now();
+  let nextRefreshDeadlineMs = Date.now() + STATUS_REFRESH_MS;
+  let lastRefreshAtMs: number | null = null;
 
   function isGlobalTab(tab: string): tab is GlobalTabId {
-    return globalTabs.some((item) => item.id === tab);
+    return tab === 'overview' || controlTabs.some((item) => item.id === tab);
   }
 
-  function connectorNamesFromAssets(): string[] {
-    return Object.keys(connectorAssets).sort();
+  function connectorNamesFromData(
+    assets: Record<string, AssetConnector>,
+    pipelines: Array<{ key?: string }>
+  ): string[] {
+    const assetNames = Object.keys(assets);
+    const policyNames = pipelines.map((pipeline) => String(pipeline.key ?? '').split('.')[0] || '').filter((name) => name.length > 0);
+    return Array.from(new Set([...assetNames, ...policyNames])).sort();
   }
 
   function isConnectorTab(tab: string): boolean {
-    return connectorNamesFromAssets().includes(tab);
+    return connectorNames.includes(tab);
   }
 
   function toConnectorPanel(panel: string | undefined): ConnectorPanelId {
@@ -114,7 +128,6 @@
 
   function syncTabFromUrl(): void {
     const route = readRouteFromUrl();
-    const connectorNames = connectorNamesFromAssets();
     const resolved = resolveTab(route.tab, connectorNames);
     activeTab = resolved;
     if (!isGlobalTab(resolved) && route.panel) {
@@ -137,6 +150,23 @@
         tab: tabId,
         session: currentRoute.session,
         panel: isGlobalTab(tabId) ? undefined : selectedConnectorPanel(tabId, currentRoute.panel)
+      },
+      { replace: true }
+    );
+  }
+
+  function handleOverviewConnectorOpen(event: CustomEvent<{ id: string }>): void {
+    const connectorId = event.detail.id;
+    if (!isConnectorTab(connectorId)) {
+      return;
+    }
+    const currentRoute = readRouteFromUrl();
+    activeTab = connectorId;
+    navigate(
+      {
+        tab: connectorId,
+        session: currentRoute.session,
+        panel: selectedConnectorPanel(connectorId, currentRoute.panel)
       },
       { replace: true }
     );
@@ -187,13 +217,14 @@
     ]);
 
     syncTabFromUrl();
-    const connectorNames = connectorNamesFromAssets();
     const currentRoute = readRouteFromUrl();
     if (!isGlobalTab(currentRoute.tab) && !connectorNames.includes(currentRoute.tab)) {
       activeTab = 'overview';
       navigate({ tab: 'overview', session: currentRoute.session }, { replace: true });
     }
     auditRefreshSignal += 1;
+    stateRefreshSignal += 1;
+    lastRefreshAtMs = Date.now();
   }
 
   function queueMonitorsRefresh(): void {
@@ -211,6 +242,17 @@
 
   function clearQueue(): void {
     queueItems = [];
+  }
+
+  function enqueuePrompt(event: CustomEvent<{ prompt: string }>): void {
+    const prompt = event.detail.prompt;
+    enqueue({
+      type: 'global-prompt',
+      label: 'Instruction',
+      subLabel: prompt.length > 60 ? `${prompt.slice(0, 60)}...` : prompt,
+      command: 'global-prompt',
+      data: { type: 'global-prompt', prompt }
+    });
   }
 
   async function submitQueue(): Promise<void> {
@@ -238,8 +280,7 @@
     }
   }
 
-  function handleSessionSelect(event: CustomEvent<{ sessionId: string }>): void {
-    const sessionId = event.detail.sessionId.trim() || undefined;
+  function switchSession(sessionId?: string): void {
     const route = readRouteFromUrl();
     navigate(
       {
@@ -250,6 +291,11 @@
       { replace: true }
     );
     void refreshShellData();
+  }
+
+  function handleSessionDropdownChange(event: CustomEvent<{ value: string }>): void {
+    const sessionId = event.detail.value.trim() || undefined;
+    switchSession(sessionId);
   }
 
   function handleSessionRefreshRequested(): void {
@@ -285,8 +331,15 @@
     void refreshShellData();
     const statusInterval = setInterval(() => {
       void refreshStatus();
-    }, 10_000);
+      nextRefreshDeadlineMs = Date.now() + STATUS_REFRESH_MS;
+    }, STATUS_REFRESH_MS);
+    const tickerInterval = setInterval(() => {
+      nowMs = Date.now();
+    }, 500);
     const sse = createSseClient<Record<string, unknown>>({
+      onStatus: (status) => {
+        sseStatus = status;
+      },
       onMessage: (message) => {
         const payload = message.data;
         if (!payload || typeof payload !== 'object') {
@@ -305,107 +358,163 @@
     window.addEventListener('popstate', onPopState);
     return () => {
       clearInterval(statusInterval);
+      clearInterval(tickerInterval);
       window.removeEventListener('popstate', onPopState);
       sse.stop();
     };
   });
 
-  $: connectorNames = connectorNamesFromAssets();
-  $: tabs = [...globalTabs, ...connectorNames.map((name) => ({ id: name, label: name }))] as TabBarItem[];
-  $: activeTabLabel = isGlobalTab(activeTab) ? (tabs.find((tab) => tab.id === activeTab)?.label ?? 'Overview') : `Connector: ${activeTab}`;
-  $: monitorsOnlineCount = $monitorsStore.runners.filter((runner) => runner.connected !== false).length;
+  $: connectorNames = connectorNamesFromData(connectorAssets, $policyStore.pipelines);
+  $: rollbackThreshold = Number($policyStore.thresholds?.rollback_consecutive_failures ?? 2);
+  $: leftTabs = [
+    primaryTab,
+    ...connectorNames.map((name) => {
+      const hasCritical = $policyStore.pipelines.some(
+        (pipeline) => String(pipeline.key ?? '').startsWith(`${name}.`) && Number(pipeline.consecutive_failures ?? 0) >= rollbackThreshold
+      );
+      return {
+        id: name,
+        label: name,
+        warn: hasCritical
+      } as TabBarItem;
+    })
+  ];
+  $: rightTabs = controlTabs.map((item) => ({ ...item, subtle: true }));
+  $: allTabs = [...leftTabs, ...rightTabs];
+  $: activeTabLabel = isGlobalTab(activeTab) ? (allTabs.find((tab) => tab.id === activeTab)?.label ?? 'Overview') : `Connector: ${activeTab}`;
   $: shellLoading =
     $policyStore.loading || $monitorsStore.loading || $sessionStore.loading || $goalStore.loading || $stateStore.loading || assetsLoading;
   $: shellError =
     $policyStore.error ?? $monitorsStore.error ?? $sessionStore.error ?? $goalStore.error ?? $stateStore.error ?? assetsError;
   $: routeSessionId = readRouteFromUrl().session ?? $sessionStore.currentSessionId ?? null;
+  $: connectorMode = !isGlobalTab(activeTab) && isConnectorTab(activeTab);
+  $: showQueuePanel = activeTab === 'overview' || isConnectorTab(activeTab);
   $: activeConnectorPanel = isGlobalTab(activeTab) ? 'pipelines' : selectedConnectorPanel(activeTab, readRouteFromUrl().panel);
   $: activeConnector = isGlobalTab(activeTab) ? null : (connectorAssets[activeTab] ?? null);
   $: activeConnectorPipelines = isGlobalTab(activeTab)
     ? []
     : $policyStore.pipelines.filter((pipeline) => String(pipeline.key ?? '').startsWith(`${activeTab}.`));
+  $: queuedKeys = new Set(
+    queueItems.map((item) => String((item.data && item.data.key) ?? '')).filter((key) => key.length > 0)
+  );
+  $: refreshRemainingMs = Math.max(0, nextRefreshDeadlineMs - nowMs);
+  $: refreshBarWidth = `${Math.max(0, Math.min(100, (refreshRemainingMs / STATUS_REFRESH_MS) * 100))}%`;
+  $: refreshTickLabel = `in ${Math.ceil(refreshRemainingMs / 1000)}s`;
+  $: refreshLastLabel = `last ${lastRefreshAtMs ? new Date(lastRefreshAtMs).toLocaleTimeString() : '--:--:--'}`;
+  $: serverIndicatorText = sseStatus === 'connected' ? '● Server online' : '◐ Connecting to server…';
+
+  $: sessionDropdownOptions = [
+    { value: '', label: '(default/current)' },
+    ...$sessionStore.sessions.map((row) => ({
+      value: String(row.session_id ?? ''),
+      label: String(row.session_id ?? '').slice(0, 44) || '(unknown)'
+    }))
+  ];
 </script>
 
 <main class="app">
   <header class="app-header">
-    <div>
-      <h1>Cockpit</h1>
-      <p class="subtitle">Svelte shell scaffold for control-plane tabs</p>
-    </div>
-    <div class="status-line">
-      <StatusDot status={$monitorsStore.teamActive ? 'online' : 'offline'} label={$monitorsStore.teamActive ? 'Monitors active' : 'Monitors idle'} />
-      <Badge label={`${monitorsOnlineCount} runner(s) online`} variant={monitorsOnlineCount > 0 ? 'success' : 'neutral'} />
+    <h1>🌀 Emerge Cockpit</h1>
+    <GoalBar embedded={true} />
+    <div class="header-session">
+      <span class="session-label" id="cockpit-session-label">Session</span>
+      <CockpitDropdown
+        dropdownId="cockpit-session-dropdown"
+        labelledBy="cockpit-session-label"
+        ariaLabel="Control-plane session"
+        title="Select control-plane session"
+        options={sessionDropdownOptions}
+        value={routeSessionId ?? ''}
+        minWidth="180px"
+        maxWidth="min(360px, 38vw)"
+        emptyMenuLabel="(no sessions)"
+        on:change={handleSessionDropdownChange}
+      />
     </div>
   </header>
 
-  <TabBar tabs={tabs} activeTab={activeTab} on:select={handleTabSelect} />
-
   <section class="shared-meta">
-    <GoalBar />
     <ThresholdsBar thresholds={$policyStore.thresholds} on:edit={openSettingsModal} />
   </section>
+  <div class="shell-tabs">
+    <TabBar {leftTabs} {rightTabs} activeTab={activeTab} on:select={handleTabSelect} />
+  </div>
 
-  <section class="tab-outlet" aria-label="Active tab placeholder">
-    <header class="tab-outlet-header">
-      <h2>{activeTabLabel}</h2>
-      <Badge label={shellLoading ? 'Refreshing' : 'Ready'} variant={shellLoading ? 'info' : 'neutral'} />
-    </header>
-    {#if activeTab === 'overview'}
-      <OverviewTab
-        pipelines={$policyStore.pipelines}
-        thresholds={$policyStore.thresholds}
-        {queueItems}
-        {queueSubmitting}
-        {serverPending}
-        on:enqueue={(event) => enqueue(event.detail)}
-        on:dequeue={(event) => dequeue(event.detail.id)}
-        on:clearQueue={clearQueue}
-        on:submitQueue={() => void submitQueue()}
-      />
-    {:else if activeTab === 'monitors'}
-      <MonitorsTab refreshSignal={monitorsRefreshSignal} />
-    {:else if activeTab === 'audit'}
-      <AuditTab sessionId={routeSessionId ?? undefined} refreshSignal={auditRefreshSignal} />
-    {:else if activeTab === 'session'}
-      <SessionTab
-        sessions={$sessionStore.sessions}
-        selectedSessionId={routeSessionId}
-        session={$sessionStore.session}
-        hookState={$sessionStore.hookState}
-        loading={$sessionStore.loading}
-        error={$sessionStore.error}
-        on:selectSession={handleSessionSelect}
-        on:refreshRequested={handleSessionRefreshRequested}
-        on:notify={handleSessionNotify}
-      />
-    {:else if activeTab === 'state'}
-      <StateTab
-        deltas={$stateStore.deltas}
-        risks={$stateStore.risks}
-        verificationState={$stateStore.verificationState}
-        activeSpanId={$stateStore.activeSpanId}
-        activeSpanIntent={$stateStore.activeSpanIntent}
-        loading={$stateStore.loading}
-        error={$stateStore.error}
-      />
-    {:else if isConnectorTab(activeTab)}
-      <ConnectorTab
-        connectorName={activeTab}
-        connector={activeConnector}
-        pipelines={activeConnectorPipelines}
-        selectedPanel={activeConnectorPanel}
-        on:selectPanel={handleConnectorPanelSelect}
-      />
-    {:else}
-      <p>This tab is not available.</p>
-      {#if shellError}
-        <p class="error-text">{shellError}</p>
+  <section class="main-layout">
+    <section
+      class={`tab-outlet ${connectorMode ? 'connector-mode' : ''}`}
+      class:no-scroll={activeTab === 'state'}
+      aria-label="Active tab placeholder"
+    >
+      {#if !connectorMode}
+        <header class="tab-outlet-header">
+          <h2>{activeTabLabel}</h2>
+          <Badge label={shellLoading ? 'Refreshing' : 'Ready'} variant={shellLoading ? 'info' : 'neutral'} />
+        </header>
       {/if}
-    {/if}
-    {#if statusMessage}
-      <p class="status-text">{statusMessage}</p>
+      {#if activeTab === 'overview'}
+        <OverviewTab
+          pipelines={$policyStore.pipelines}
+          thresholds={$policyStore.thresholds}
+          connectorNames={connectorNames}
+          queueSize={queueItems.length}
+          on:openConnector={handleOverviewConnectorOpen}
+        />
+      {:else if activeTab === 'monitors'}
+        <MonitorsTab refreshSignal={monitorsRefreshSignal} />
+      {:else if activeTab === 'audit'}
+        <AuditTab sessionId={routeSessionId ?? undefined} refreshSignal={auditRefreshSignal} />
+      {:else if activeTab === 'session'}
+        <SessionTab
+          session={$sessionStore.session}
+          hookPlane={$sessionStore.hookPlane}
+          sessionId={routeSessionId ?? undefined}
+          loading={$sessionStore.loading}
+          error={$sessionStore.error}
+          on:refreshRequested={handleSessionRefreshRequested}
+          on:notify={handleSessionNotify}
+        />
+      {:else if activeTab === 'state'}
+        <StateTab sessionId={routeSessionId ?? undefined} refreshSignal={stateRefreshSignal} />
+      {:else if isConnectorTab(activeTab)}
+        <ConnectorTab
+          connectorName={activeTab}
+          connector={activeConnector}
+          pipelines={activeConnectorPipelines}
+          selectedPanel={activeConnectorPanel}
+          {queuedKeys}
+          criticalThreshold={rollbackThreshold}
+          on:selectPanel={handleConnectorPanelSelect}
+          on:enqueue={(event) => enqueue(event.detail)}
+        />
+      {:else}
+        <p>This tab is not available.</p>
+        {#if shellError}
+          <p class="error-text">{shellError}</p>
+        {/if}
+      {/if}
+    </section>
+    {#if showQueuePanel}
+      <QueuePanel
+        {queueItems}
+        submitting={queueSubmitting}
+        {serverPending}
+        on:enqueuePrompt={enqueuePrompt}
+        on:dequeue={(event) => dequeue(event.detail.id)}
+        on:clear={clearQueue}
+        on:submit={() => void submitQueue()}
+      />
     {/if}
   </section>
+  <div class="status-bar">
+    <span class="status-msg">{statusMessage ?? 'Ready'}</span>
+    <span class={`cc-indicator ${sseStatus === 'connected' ? 'online' : 'connecting'}`}>{serverIndicatorText}</span>
+    <span class="refresh-timer">
+      <span class="bar-track"><span class="bar-fill" style={`width:${refreshBarWidth}`}></span></span>
+      <span class="tick">{refreshTickLabel}</span>
+      <span class="last">{refreshLastLabel}</span>
+    </span>
+  </div>
 
   <SettingsModal
     open={$uiStore.activeModal === 'settings'}
@@ -417,77 +526,224 @@
 
 <style>
   .app {
-    max-width: 68rem;
-    margin: 0 auto;
-    padding: 1.25rem 1.25rem 2rem;
+    box-sizing: border-box;
+    flex: 1;
+    min-height: 0;
+    max-width: none;
+    margin: 0;
+    width: 100%;
+    padding: 0 0 22px;
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 0;
+    overflow: hidden;
   }
 
   .app-header {
+    flex-shrink: 0;
     display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 0.75rem;
+    align-items: center;
+    gap: 12px;
+    background: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    padding: 6px 16px;
+  }
+
+  .shell-tabs {
+    flex-shrink: 0;
   }
 
   h1 {
     margin: 0;
-    font-size: 1.6rem;
-    line-height: 1.2;
+    font-size: 14px;
+    line-height: 1;
+    color: var(--color-text);
   }
 
-  .subtitle {
-    margin: 0.25rem 0 0;
-    color: var(--color-text-muted);
-    font-size: 0.9rem;
-  }
-
-  .status-line {
-    display: inline-flex;
+  .header-session {
+    display: flex;
     align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    justify-content: flex-end;
+    gap: 6px;
+    margin-left: auto;
+    flex-shrink: 0;
+    min-width: 0;
+  }
+
+  .header-session .session-label {
+    font-size: 10px;
+    color: var(--color-text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    flex-shrink: 0;
   }
 
   .shared-meta {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: 0;
+    flex-shrink: 0;
   }
 
+  /* One scroll surface (legacy #main-panel). State tab: no-scroll, inner panes scroll. */
   .tab-outlet {
-    min-height: 12rem;
-    border: 1px dashed color-mix(in srgb, var(--color-text-muted) 65%, transparent);
-    border-radius: 0.75rem;
-    padding: 0.9rem;
-    background: color-mix(in srgb, var(--color-bg) 90%, black);
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    border: none;
+    border-radius: 0;
+    padding: 0 16px 28px;
+    background: var(--color-bg);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .tab-outlet.no-scroll {
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding-top: 0;
+  }
+
+  .tab-outlet.no-scroll > :global(*) {
+    min-height: 0;
+  }
+
+  .tab-outlet.no-scroll .tab-outlet-header {
+    flex-shrink: 0;
+  }
+
+  .main-layout {
+    display: flex;
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+    align-items: stretch;
+    overflow: hidden;
   }
 
   .tab-outlet-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 0.6rem;
+    gap: 10px;
+    margin: 12px 0 8px;
+  }
+
+  .tab-outlet.connector-mode {
+    padding-top: 0;
   }
 
   .tab-outlet h2 {
     margin: 0;
-    font-size: 1.15rem;
+    font-size: 13px;
+    color: var(--color-text);
   }
 
   .tab-outlet p {
-    margin: 0.7rem 0 0;
+    margin: 8px 0 0;
   }
 
   .error-text {
-    color: #ff9e9e;
+    color: var(--color-red);
   }
 
-  .status-text {
-    color: #8fd4ff;
-    font-size: 0.82rem;
+  .status-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 22px;
+    background: #161b22;
+    border-top: 1px solid #21262d;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    font-size: 10px;
+    color: #8b949e;
+    gap: 16px;
+    z-index: 10;
+  }
+
+  .status-msg {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cc-indicator {
+    font-size: 11px;
+    margin-left: 12px;
+  }
+
+  .cc-indicator.online {
+    color: #3fb950;
+  }
+
+  .cc-indicator.connecting {
+    color: #d29922;
+  }
+
+  .refresh-timer {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: #484f58;
+  }
+
+  .refresh-timer .bar-track {
+    width: 48px;
+    height: 4px;
+    background: #21262d;
+    border-radius: 2px;
+    overflow: hidden;
+    display: inline-block;
+  }
+
+  .refresh-timer .bar-fill {
+    display: block;
+    height: 100%;
+    background: linear-gradient(90deg, #1f6feb 0%, #58a6ff 50%, #1f6feb 100%);
+    background-size: 200% 100%;
+    border-radius: 2px;
+    transition: width 1s linear;
+    animation: refresh-shimmer 1.4s linear infinite;
+  }
+
+  .refresh-timer .tick {
+    font-size: 9px;
+    min-width: 32px;
+    text-align: right;
+    color: #8b949e;
+  }
+
+  .refresh-timer .last {
+    font-size: 9px;
+    min-width: 78px;
+    color: #6e7681;
+  }
+
+  @keyframes refresh-shimmer {
+    0% {
+      background-position: 200% 0;
+    }
+    100% {
+      background-position: -200% 0;
+    }
+  }
+
+  @media (max-width: 70rem) {
+    .main-layout {
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .tab-outlet {
+      flex: 1;
+      min-height: 0;
+    }
   }
 </style>

@@ -1,0 +1,93 @@
+/* Shared “cockpit” dropdown — same surface as legacy goal-history + session picker. */
+
+.cockpit-dropdown {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.cockpit-dropdown-trigger {
+  box-sizing: border-box;
+  width: 100%;
+  background: var(--color-bg);
+  color: var(--color-text-soft);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 3px 8px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cockpit-dropdown-trigger:hover {
+  border-color: var(--color-blue);
+}
+
+.cockpit-dropdown-trigger:focus {
+  outline: none;
+  border-color: var(--color-blue);
+}
+
+.cockpit-dropdown-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  min-width: 100%;
+  width: max-content;
+  max-width: min(420px, 96vw);
+  max-height: 240px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(1, 4, 9, 0.7);
+  z-index: 30;
+}
+
+.cockpit-dropdown-menu.open {
+  display: block;
+}
+
+.cockpit-dropdown-empty {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  padding: 8px;
+}
+
+.cockpit-dropdown-item {
+  display: block;
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--color-border-dim);
+  background: transparent;
+  color: var(--color-text-soft);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: left;
+  padding: 6px 8px;
+  cursor: pointer;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.cockpit-dropdown-item:last-child {
+  border-bottom: none;
+}
+
+.cockpit-dropdown-item:hover {
+  background: var(--color-surface);
+}
+
+.cockpit-dropdown-item.active {
+  background: #0d1f33;
+  color: var(--color-text);
+}

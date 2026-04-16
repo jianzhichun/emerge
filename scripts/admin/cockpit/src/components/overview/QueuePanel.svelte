@@ -46,13 +46,12 @@
 </script>
 
 <aside class="queue-panel">
-  <header>
-    <h3>Pending Actions ({queueItems.length})</h3>
-  </header>
+  <header class="queue-header">Pending Actions ({queueItems.length})</header>
 
-  <div class="prompt-row">
+  <div class="prompt-input-area">
     <textarea
       bind:value={prompt}
+      class="prompt-textarea"
       rows="3"
       placeholder="Free-form instruction..."
       on:keydown={(event) => {
@@ -62,176 +61,242 @@
         }
       }}
     ></textarea>
-    <button type="button" on:click={handleAddPrompt}>Add to Queue</button>
+    <button type="button" class="prompt-add-btn" on:click={handleAddPrompt}>+ Add to Queue</button>
   </div>
 
-  <div class="items">
+  <div class="queue-items">
     {#if !queueItems.length}
       <p class="empty">Queue is empty</p>
     {:else}
       {#each queueItems as item}
-        <article class={`item ${item.type === 'pipeline-delete' ? 'delete' : item.type === 'global-prompt' ? 'prompt' : ''}`}>
-          <div class="label">
-            <b>{item.label}</b>
+        <article class={`queue-item ${item.type === 'pipeline-delete' ? 'delete' : item.type === 'global-prompt' ? 'prompt' : ''}`}>
+          <div class="action-label">
+            <b class:del={item.type === 'pipeline-delete'} class:promote={item.label.toLowerCase().includes('promote')} class:prompt-lbl={item.type === 'global-prompt'}>
+              {item.label}
+            </b>
             <span>{item.subLabel}</span>
             {#if item.type !== 'global-prompt'}
               <small>{item.command}</small>
             {/if}
           </div>
-          <button type="button" on:click={() => remove(item.id)}>x</button>
+          <button type="button" class="remove-btn" on:click={() => remove(item.id)}>x</button>
         </article>
       {/each}
     {/if}
   </div>
 
-  <footer>
-    <button type="button" class="clear" on:click={clearQueue} disabled={!queueItems.length || submitting}>Clear</button>
-    <button type="button" class="submit" on:click={submitQueue} disabled={!queueItems.length || submitting || serverPending}>
+  <footer class="queue-footer">
+    <button type="button" class="submit-btn" on:click={submitQueue} disabled={!queueItems.length || submitting || serverPending}>
       {submitting ? 'Submitting...' : `Submit (${queueItems.length})`}
     </button>
+    <button type="button" class="clear-btn" on:click={clearQueue} disabled={!queueItems.length || submitting}>Clear Queue</button>
   </footer>
 </aside>
 
 <style>
+  /* Legacy: same row as main-panel — fill content row height; list flexes between header and footer. */
   .queue-panel {
-    border: 1px solid #21262d;
-    border-radius: 0.7rem;
-    background: #0f141d;
+    box-sizing: border-box;
+    width: 300px;
+    flex: 0 0 300px;
+    align-self: stretch;
+    min-height: 0;
+    border-left: 1px solid #21262d;
+    background: #0d1117;
     display: flex;
     flex-direction: column;
-    min-height: 18rem;
+    overflow: hidden;
   }
 
-  header {
-    padding: 0.65rem 0.75rem;
+  .queue-header {
+    padding: 10px 14px;
+    font-size: 11px;
+    color: #58a6ff;
+    text-transform: uppercase;
+    letter-spacing: 1px;
     border-bottom: 1px solid #21262d;
+    flex-shrink: 0;
   }
 
-  h3 {
-    margin: 0;
-    font-size: 0.84rem;
-    color: #8fd4ff;
-  }
-
-  .prompt-row {
-    padding: 0.65rem 0.75rem;
+  .prompt-input-area {
+    padding: 8px 10px;
     border-bottom: 1px solid #21262d;
+    flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.45rem;
+    gap: 5px;
   }
 
-  textarea {
+  .prompt-textarea {
     width: 100%;
     resize: vertical;
     border: 1px solid #30363d;
-    border-radius: 0.45rem;
+    border-radius: 4px;
     background: #0d1117;
-    color: var(--color-text);
-    font-size: 0.78rem;
-    padding: 0.4rem 0.45rem;
+    color: #e6edf3;
+    font-size: 11px;
+    padding: 4px 8px;
   }
 
-  .prompt-row button {
+  .prompt-add-btn {
     align-self: flex-end;
+    background: #162032;
+    border: 1px solid #1f6feb;
+    border-radius: 4px;
+    color: #58a6ff;
+    font-size: 11px;
+    padding: 4px 10px;
+    cursor: pointer;
   }
 
-  .items {
-    flex: 1;
-    overflow: auto;
-    padding: 0.55rem;
+  .prompt-add-btn:hover {
+    background: #1f3a5a;
+  }
+
+  .queue-items {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 8px;
     display: flex;
     flex-direction: column;
-    gap: 0.45rem;
+    gap: 4px;
   }
 
   .empty {
     margin: 0;
-    color: var(--color-text-muted);
-    font-size: 0.78rem;
+    color: #6e7681;
+    font-size: 11px;
   }
 
-  .item {
+  .queue-item {
     border: 1px solid #28412b;
-    border-radius: 0.45rem;
+    border-radius: 4px;
     background: #122118;
-    padding: 0.4rem 0.45rem;
+    padding: 6px 8px;
     display: flex;
+    align-items: flex-start;
     justify-content: space-between;
-    gap: 0.45rem;
+    gap: 6px;
   }
 
-  .item.delete {
+  .queue-item.delete {
     border-color: #4a1a1a;
     background: #231316;
   }
 
-  .item.prompt {
+  .queue-item.prompt {
+    background: #0d1117;
     border-color: #30363d;
-    background: #10151f;
   }
 
-  .label {
+  .action-label {
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.2rem;
+    gap: 2px;
   }
 
-  b {
-    font-size: 0.75rem;
-    color: #d0d7e2;
+  .action-label b {
+    font-size: 11px;
+    color: #58a6ff;
+    display: block;
   }
 
-  span {
-    font-size: 0.72rem;
+  .action-label b.del {
+    color: #f85149;
+  }
+
+  .action-label b.promote {
+    color: #3fb950;
+  }
+
+  .action-label b.prompt-lbl {
+    color: #d2a8ff;
+  }
+
+  .action-label span {
+    font-size: 10px;
     color: #8b949e;
     white-space: pre-wrap;
     word-break: break-word;
   }
 
-  small {
-    font-size: 0.66rem;
+  .action-label small {
+    font-size: 9px;
     color: #6e7681;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .item button {
-    border: none;
+  .remove-btn {
     background: transparent;
-    color: #8b949e;
+    border: none;
+    color: #484f58;
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
   }
 
-  footer {
+  .remove-btn:hover {
+    color: #f85149;
+  }
+
+  .queue-footer {
     border-top: 1px solid #21262d;
-    padding: 0.6rem 0.75rem;
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.45rem;
+    padding: 10px 12px;
+    flex-shrink: 0;
   }
 
-  button {
-    border-radius: 0.4rem;
-    border: 1px solid #30363d;
-    background: #111822;
-    color: var(--color-text);
-    padding: 0.28rem 0.55rem;
-    font-size: 0.76rem;
+  .submit-btn {
+    width: 100%;
+    padding: 8px;
+    background: #1a3a2a;
+    border: 1px solid #3fb950;
+    border-radius: 5px;
+    color: #3fb950;
+    font-size: 13px;
+    font-weight: 600;
     cursor: pointer;
   }
 
-  .submit {
-    border-color: rgba(97, 218, 124, 0.45);
-    background: rgba(30, 140, 66, 0.2);
-    color: #8bea9d;
+  .submit-btn:hover {
+    background: #2a4a3a;
   }
 
-  button:disabled {
-    opacity: 0.55;
+  .submit-btn:disabled {
+    opacity: 0.4;
     cursor: default;
+  }
+
+  .clear-btn {
+    width: 100%;
+    padding: 4px;
+    background: none;
+    border: none;
+    color: #484f58;
+    font-size: 11px;
+    cursor: pointer;
+    margin-top: 4px;
+  }
+
+  .clear-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  @media (max-width: 70rem) {
+    .queue-panel {
+      width: 100%;
+      flex: 0 1 auto;
+      height: auto;
+      max-height: min(50vh, 460px);
+      align-self: auto;
+      border-left: none;
+      border-top: 1px solid #21262d;
+    }
   }
 </style>

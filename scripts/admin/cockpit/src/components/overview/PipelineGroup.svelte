@@ -86,47 +86,49 @@
 <style>
   .empty {
     margin: 0;
-    color: var(--color-text-muted);
-    font-size: 0.8rem;
+    color: #484f58;
+    font-size: 11px;
+    padding: 6px 0;
   }
 
   .connector-groups {
     display: flex;
     flex-direction: column;
-    gap: 0.7rem;
+    gap: 0;
   }
 
   .connector-group {
-    border: 1px solid color-mix(in srgb, var(--color-text-muted) 40%, transparent);
-    border-radius: 0.6rem;
-    background: color-mix(in srgb, var(--color-bg) 88%, black);
-    padding: 0.6rem;
+    margin-top: 10px;
+  }
+
+  .connector-group:first-child {
+    margin-top: 0;
   }
 
   header {
     display: flex;
     align-items: center;
-    gap: 0.45rem;
-    margin-bottom: 0.55rem;
+    gap: 8px;
+    margin-bottom: 4px;
+    padding: 2px 0;
   }
 
   .name {
-    font-size: 0.68rem;
+    font-size: 10px;
     font-weight: 700;
-    letter-spacing: 0.05em;
-    border-radius: 0.25rem;
-    padding: 0.1rem 0.4rem;
-    text-transform: lowercase;
+    letter-spacing: 0.5px;
+    border-radius: 3px;
+    padding: 1px 7px;
   }
 
   .count {
-    color: var(--color-text-muted);
-    font-size: 0.72rem;
+    color: #484f58;
+    font-size: 10px;
   }
 
   .cards {
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
+    gap: 4px;
   }
 </style>

@@ -107,6 +107,27 @@ export interface SessionResponse extends ApiOkResponse {
   recovery?: JsonObject | null;
 }
 
+/** `GET /api/control-plane/hook-state` — global hook fields + context preview (legacy Session tab). */
+export interface HookFields {
+  turn_count?: number;
+  active_span_id?: string | null;
+  active_span_intent?: string | null;
+  span_nudge_sent?: boolean;
+  goal?: string;
+  goal_source?: string;
+}
+
+export interface RegisteredHookEntry {
+  event?: string;
+  command?: string;
+}
+
+export interface HookStateResponse extends ApiOkResponse {
+  hook_fields?: HookFields;
+  context_preview?: string;
+  registered_hooks?: RegisteredHookEntry[];
+}
+
 export interface EventListResponse<TEvent = JsonObject> extends ApiOkResponse {
   events?: TEvent[];
 }
@@ -184,4 +205,20 @@ export interface GoalSetRequest {
   lock_window_ms?: number;
   force?: boolean;
   [key: string]: unknown;
+}
+
+export interface GoalHistoryEvent extends JsonObject {
+  event_id?: string;
+  event_type?: string;
+  text?: string;
+  goal?: string;
+  ts_ms?: number;
+}
+
+export interface GoalHistoryResponse extends ApiOkResponse {
+  events?: GoalHistoryEvent[];
+}
+
+export interface GoalRollbackResponse extends ApiOkResponse {
+  target_event_id?: string;
 }

@@ -10,6 +10,8 @@
     detail: string;
     outcome: string;
     severity: 'ok' | 'warn' | 'error';
+    toolShort?: string;
+    toolArgs?: string;
   }
 
   export let sessionId: string | undefined;
@@ -69,13 +71,14 @@
     const toolName = toText(event.tool_name);
     const shortName = toolName.split('__').pop() || toolName || '(tool)';
     const argsSummary = toText(event.args_summary);
-    const detail = argsSummary ? `${shortName} ${argsSummary}` : shortName;
     const hasSideEffects = Boolean(event.has_side_effects);
     return {
       id: `tool-${ts}-${index}`,
       ts,
       type: 'tool',
-      detail,
+      detail: argsSummary ? `${shortName} ${argsSummary}` : shortName,
+      toolShort: shortName,
+      toolArgs: argsSummary || undefined,
       outcome: hasSideEffects ? 'write' : 'read',
       severity: hasSideEffects ? 'warn' : 'ok'
     };
@@ -97,15 +100,17 @@
 
   function mapGoal(event: JsonObject, index: number): AuditItem {
     const ts = toTimestamp(event.ts_ms);
-    const eventType = toText(event.event_type) || toText(event.type) || 'event';
-    const text = toText(event.text) || toText(event.goal) || '(goal)';
+    const detailText = toText(event.text) || toText(event.goal) || '(goal)';
+    const detail = detailText.slice(0, 60);
+    const outcome =
+      toText(event.type) || toText(event.event_type) || toText(event.source) || '';
     return {
       id: `goal-${ts}-${index}`,
       ts,
       type: 'goal',
-      detail: `${eventType}: ${text}`.slice(0, 180),
-      outcome: eventType,
-      severity: eventType.includes('rollback') || eventType.includes('rejected') ? 'warn' : 'ok'
+      detail,
+      outcome,
+      severity: outcome.toLowerCase().includes('rollback') || outcome.toLowerCase().includes('rejected') ? 'warn' : 'ok'
     };
   }
 
@@ -114,16 +119,16 @@
     error = null;
     try {
       const [execPayload, pipelinePayload, spanPayload, goalPayload, toolPayload] = await Promise.all([
-        api.getExecEvents({ limit: 60, sessionId }),
-        api.getPipelineEvents({ limit: 60, sessionId }),
+        api.getExecEvents({ limit: 50, sessionId }),
+        api.getPipelineEvents({ limit: 50, sessionId }),
         api.request<{ spans?: JsonObject[] }>('/api/control-plane/spans', {
-          query: { limit: 40 },
+          query: { limit: 30 },
           sessionId
         }),
         api.request<{ events?: JsonObject[] }>('/api/goal-history', {
-          query: { limit: 40 }
+          query: { limit: 30 }
         }),
-        api.getToolEvents({ limit: 120, sessionId })
+        api.getToolEvents({ limit: 200, sessionId })
       ]);
 
       const execItems = (execPayload.events ?? []).map((event, index) => mapExec(event as JsonObject, index));
@@ -163,10 +168,10 @@
 </script>
 
 <section class="audit-tab">
-  <div class="toolbar">
-    <div class="title">Timeline</div>
-    <button type="button" class="refresh-btn" on:click={() => void refreshAudit()} disabled={loading}>
-      {loading ? 'Refreshing...' : 'Refresh'}
+  <div class="audit-head">
+    <h2 class="audit-trail-title">Audit Trail</h2>
+    <button type="button" class="cp-btn-sm" on:click={() => void refreshAudit()} disabled={loading}>
+      {loading ? 'Loading…' : 'Refresh'}
     </button>
   </div>
 
@@ -174,11 +179,13 @@
     <p class="error-text">{error}</p>
   {/if}
 
-  {#if !timeline.length && !loading}
+  {#if loading && !timeline.length}
+    <p class="loading-text">Loading audit data…</p>
+  {:else if !timeline.length}
     <p class="empty-text">No audit events yet.</p>
   {:else}
-    <div class="table-wrap">
-      <table>
+    <div class="cp-intent-table-wrap">
+      <table class="cp-intent-table">
         <thead>
           <tr>
             <th>Time</th>
@@ -190,13 +197,58 @@
         <tbody>
           {#each timeline as item (item.id)}
             <tr>
-              <td class="time-cell">{formatTime(item.ts)}</td>
+              <td>{formatTime(item.ts)}</td>
               <td>
-                <span class={`type-badge type-${item.type}`}>{item.type}</span>
+                {#if item.type === 'exec'}
+                  <span class="source-badge exec">exec</span>
+                {:else if item.type === 'pipeline'}
+                  <span class="source-badge span">pipeline</span>
+                {:else if item.type === 'span'}
+                  <span class="source-badge both">span</span>
+                {:else if item.type === 'goal'}
+                  <span class="goal-pill">goal</span>
+                {:else if item.type === 'tool'}
+                  <span class="tool-pill">tool</span>
+                {/if}
               </td>
-              <td class="detail-cell">{item.detail}</td>
-              <td>
-                <span class={`outcome outcome-${item.severity}`}>{item.outcome}</span>
+              <td class="detail-td">
+                {#if item.type === 'tool' && item.toolShort}
+                  <span class="tool-name">{item.toolShort}</span>
+                  {#if item.toolArgs}
+                    <span class="tool-args">{item.toolArgs}</span>
+                  {/if}
+                {:else}
+                  {item.detail}
+                {/if}
+              </td>
+              <td class="outcome-td">
+                {#if item.type === 'exec'}
+                  {#if item.outcome === 'error'}
+                    <span class="critical">error</span>
+                  {:else}
+                    <span class="stable">ok</span>
+                  {/if}
+                {:else if item.type === 'pipeline'}
+                  {#if item.outcome === 'error'}
+                    <span class="critical">error</span>
+                  {:else}
+                    <span class="stable">ok</span>
+                  {/if}
+                {:else if item.type === 'span'}
+                  {#if item.outcome === 'success'}
+                    <span class="stable">success</span>
+                  {:else}
+                    <span class="critical">{item.outcome}</span>
+                  {/if}
+                {:else if item.type === 'goal'}
+                  {item.outcome}
+                {:else if item.type === 'tool'}
+                  {#if item.outcome === 'write'}
+                    <span class="tool-write">write</span>
+                  {:else}
+                    <span class="tool-read">read</span>
+                  {/if}
+                {/if}
               </td>
             </tr>
           {/each}
@@ -210,139 +262,62 @@
   .audit-tab {
     display: flex;
     flex-direction: column;
-    gap: 0.7rem;
+    gap: 10px;
+    padding: 16px;
+    min-height: 0;
   }
-
-  .toolbar {
+  .audit-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.8rem;
+    gap: 8px;
   }
-
-  .title {
-    font-size: 0.88rem;
-    color: var(--color-text-muted);
-  }
-
-  .refresh-btn {
-    border: 1px solid color-mix(in srgb, var(--color-text-muted) 35%, transparent);
-    border-radius: 0.45rem;
-    background: color-mix(in srgb, var(--color-bg) 82%, black);
-    color: var(--color-text);
-    font-size: 0.76rem;
-    padding: 0.35rem 0.55rem;
-    cursor: pointer;
-  }
-
-  .refresh-btn:disabled {
-    opacity: 0.6;
-    cursor: default;
-  }
-
-  .table-wrap {
-    overflow: auto;
-    border: 1px solid color-mix(in srgb, var(--color-text-muted) 26%, transparent);
-    border-radius: 0.55rem;
-  }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    min-width: 36rem;
-  }
-
-  th,
-  td {
-    text-align: left;
-    border-bottom: 1px solid color-mix(in srgb, var(--color-text-muted) 18%, transparent);
-    padding: 0.45rem 0.55rem;
-    font-size: 0.75rem;
-    vertical-align: top;
-  }
-
-  thead th {
-    color: var(--color-text-muted);
+  .audit-trail-title {
+    margin: 0;
+    font-size: 14px;
+    color: #e6edf3;
     font-weight: 600;
-    position: sticky;
-    top: 0;
-    background: color-mix(in srgb, var(--color-bg) 88%, black);
   }
-
-  .time-cell {
-    white-space: nowrap;
-    color: var(--color-text-muted);
-    width: 5rem;
+  .goal-pill {
+    font-size: 10px;
+    color: #79c0ff;
   }
-
-  .detail-cell {
-    color: var(--color-text);
+  .tool-pill {
+    font-size: 10px;
+    color: #d2a8ff;
+  }
+  .detail-td {
+    color: #cdd9e5;
     word-break: break-word;
   }
-
-  .type-badge {
-    display: inline-block;
-    border-radius: 999px;
-    padding: 0.12rem 0.45rem;
-    font-size: 0.68rem;
-    border: 1px solid transparent;
+  .tool-name {
+    color: #cdd9e5;
   }
-
-  .type-exec {
-    color: #79c0ff;
-    background: rgba(48, 105, 165, 0.2);
-    border-color: rgba(121, 192, 255, 0.42);
+  .tool-args {
+    color: #8b949e;
+    font-size: 10px;
+    margin-left: 4px;
   }
-
-  .type-pipeline {
-    color: #8bea9d;
-    background: rgba(31, 111, 62, 0.2);
-    border-color: rgba(95, 209, 128, 0.4);
+  .outcome-td {
+    font-size: 11px;
   }
-
-  .type-tool {
-    color: #d2a8ff;
-    background: rgba(99, 58, 135, 0.2);
-    border-color: rgba(188, 140, 243, 0.4);
+  .tool-write {
+    color: #ffa657;
+    font-size: 10px;
   }
-
-  .type-span {
-    color: #58a6ff;
-    background: rgba(55, 100, 150, 0.2);
-    border-color: rgba(88, 166, 255, 0.42);
+  .tool-read {
+    color: #8b949e;
+    font-size: 10px;
   }
-
-  .type-goal {
-    color: #f2cc60;
-    background: rgba(122, 99, 35, 0.2);
-    border-color: rgba(242, 204, 96, 0.42);
-  }
-
-  .outcome {
-    font-size: 0.72rem;
-  }
-
-  .outcome-ok {
-    color: #8bea9d;
-  }
-
-  .outcome-warn {
-    color: #f9d27d;
-  }
-
-  .outcome-error {
-    color: #ff9e9e;
-  }
-
   .error-text {
     margin: 0;
-    color: #ff9e9e;
-    font-size: 0.78rem;
+    color: #f85149;
+    font-size: 12px;
   }
-
-  .empty-text {
+  .empty-text,
+  .loading-text {
     margin: 0;
-    color: var(--color-text-muted);
-    font-size: 0.8rem;
+    color: #8b949e;
+    font-size: 11px;
   }
 </style>

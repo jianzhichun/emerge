@@ -1,9 +1,12 @@
 import type {
+  ApiOkResponse,
   AssetsResponse,
   EventListResponse,
   EventQuery,
   GoalResponse,
+  GoalHistoryResponse,
   GoalSetRequest,
+  GoalRollbackResponse,
   MonitorsResponse,
   PolicyResponse,
   RunnerEventsRequest,
@@ -11,6 +14,7 @@ import type {
   SessionExportResponse,
   SessionResetRequest,
   SessionResetResponse,
+  HookStateResponse,
   SessionResponse,
   SessionsResponse,
   StatusResponse,
@@ -135,6 +139,26 @@ export function createApiClient(options: ApiClientOptions = {}) {
       }),
     getSession: (sessionId?: string) =>
       request<SessionResponse>('/api/control-plane/session', { sessionId }),
+    getHookState: () =>
+      request<HookStateResponse>('/api/control-plane/hook-state'),
+    postDeltaReconcile: (
+      body: { delta_id: string; outcome: string; intent_signature?: string },
+      sessionId?: string
+    ) =>
+      request<ApiOkResponse & { delta_id?: string; outcome?: string }>('/api/control-plane/delta/reconcile', {
+        method: 'POST',
+        sessionId,
+        body
+      }),
+    postRiskUpdate: (
+      body: { risk_id: string; action: string; reason?: string; snooze_duration_ms?: number },
+      sessionId?: string
+    ) =>
+      request<ApiOkResponse & { risk_id?: string; action?: string }>('/api/control-plane/risk/update', {
+        method: 'POST',
+        sessionId,
+        body
+      }),
     getExecEvents: (query: EventQuery = {}) =>
       request<EventListResponse>('/api/control-plane/exec-events', {
         sessionId: query.sessionId,
@@ -185,6 +209,15 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<AssetsResponse>('/api/assets'),
     getGoal: () =>
       request<GoalResponse>('/api/goal'),
+    getGoalHistory: (limit = 30) =>
+      request<GoalHistoryResponse>('/api/goal-history', {
+        query: { limit }
+      }),
+    rollbackGoal: (targetEventId: string) =>
+      request<GoalRollbackResponse>('/api/goal/rollback', {
+        method: 'POST',
+        body: { target_event_id: targetEventId }
+      }),
     postGoal: (payload: GoalSetRequest, endpoint = '/api/goal') =>
       request<GoalResponse>(endpoint, {
         method: 'POST',

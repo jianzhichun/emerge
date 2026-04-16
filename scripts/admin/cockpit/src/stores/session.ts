@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store';
 import { api, ApiRequestError } from '../lib/api';
-import type { SessionResponse, SessionSummary, SessionsResponse } from '../lib/types';
+import type { HookStateResponse, SessionResponse, SessionSummary, SessionsResponse } from '../lib/types';
 
 export interface SessionStoreState {
   loading: boolean;
@@ -9,7 +9,8 @@ export interface SessionStoreState {
   currentSessionId: string | null;
   sessions: SessionSummary[];
   session: SessionResponse | null;
-  hookState: Record<string, unknown> | null;
+  /** From `GET /api/control-plane/hook-state` (same as legacy cockpit shell). */
+  hookPlane: HookStateResponse | null;
 }
 
 const initialState: SessionStoreState = {
@@ -19,7 +20,7 @@ const initialState: SessionStoreState = {
   currentSessionId: null,
   sessions: [],
   session: null,
-  hookState: null
+  hookPlane: null
 };
 
 function toErrorMessage(error: unknown): string {
@@ -30,13 +31,6 @@ function toErrorMessage(error: unknown): string {
     return error.message;
   }
   return String(error);
-}
-
-function normalizeHookState(session: SessionResponse): Record<string, unknown> | null {
-  if (!session.recovery || typeof session.recovery !== 'object') {
-    return null;
-  }
-  return session.recovery;
 }
 
 function createSessionStore() {
@@ -51,6 +45,12 @@ function createSessionStore() {
         const sessionsPayload = await api.getSessions();
         const targetSessionId = sessionId ?? sessionsPayload.current_session_id;
         const sessionPayload = await api.getSession(targetSessionId);
+        let hookPlane: HookStateResponse | null = null;
+        try {
+          hookPlane = await api.getHookState();
+        } catch {
+          hookPlane = null;
+        }
         update((state) => ({
           ...state,
           loading: false,
@@ -59,7 +59,7 @@ function createSessionStore() {
           currentSessionId: sessionsPayload.current_session_id ?? null,
           sessions: sessionsPayload.sessions ?? [],
           session: sessionPayload,
-          hookState: normalizeHookState(sessionPayload)
+          hookPlane
         }));
         return { sessions: sessionsPayload, session: sessionPayload };
       } catch (error) {

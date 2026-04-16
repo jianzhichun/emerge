@@ -4,9 +4,12 @@
   interface TabBarItem {
     id: string;
     label: string;
+    warn?: boolean;
+    subtle?: boolean;
   }
 
-  export let tabs: TabBarItem[] = [];
+  export let leftTabs: TabBarItem[] = [];
+  export let rightTabs: TabBarItem[] = [];
   export let activeTab = '';
 
   const dispatch = createEventDispatcher<{ select: { id: string } }>();
@@ -17,50 +20,82 @@
 </script>
 
 <nav class="tab-bar" aria-label="Cockpit tabs">
-  {#each tabs as tab}
+  {#each leftTabs as tab}
     <button
       type="button"
-      class={`tab ${tab.id === activeTab ? 'tab--active' : ''}`}
+      class={`tab ${tab.id === activeTab ? 'tab--active' : ''} ${tab.subtle ? 'tab--subtle' : ''}`}
       aria-current={tab.id === activeTab ? 'page' : undefined}
       on:click={() => handleSelect(tab.id)}
     >
       {tab.label}
+      {#if tab.warn}
+        <span class="warn">⚠</span>
+      {/if}
     </button>
   {/each}
+
+  <div class="right-tabs">
+    {#each rightTabs as tab}
+      <button
+        type="button"
+        class={`tab ${tab.id === activeTab ? 'tab--active' : ''} ${tab.subtle !== false ? 'tab--subtle' : ''}`}
+        aria-current={tab.id === activeTab ? 'page' : undefined}
+        on:click={() => handleSelect(tab.id)}
+      >
+        {tab.label}
+        {#if tab.warn}
+          <span class="warn">⚠</span>
+        {/if}
+      </button>
+    {/each}
+  </div>
 </nav>
 
 <style>
   .tab-bar {
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-    padding: 0.4rem;
-    border: 1px solid color-mix(in srgb, var(--color-text-muted) 45%, transparent);
-    border-radius: 0.7rem;
-    background: color-mix(in srgb, var(--color-bg) 78%, black);
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface);
+    overflow-x: auto;
+    flex-shrink: 0;
   }
 
   .tab {
     appearance: none;
-    border: 1px solid transparent;
-    border-radius: 0.55rem;
+    border: none;
+    border-bottom: 2px solid transparent;
     background: transparent;
     color: var(--color-text-muted);
-    font-size: 0.88rem;
-    font-weight: 600;
-    padding: 0.45rem 0.8rem;
+    font-size: 12px;
+    font-weight: 400;
+    padding: 8px 16px;
+    white-space: nowrap;
+    flex-shrink: 0;
     cursor: pointer;
-    transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+    transition: color 0.12s ease;
+  }
+
+  .tab--subtle {
+    font-size: 11px;
+    opacity: 0.7;
   }
 
   .tab:hover {
-    color: var(--color-text);
-    border-color: color-mix(in srgb, var(--color-text-muted) 45%, transparent);
+    color: var(--color-text-soft);
   }
 
   .tab--active {
     color: var(--color-text);
-    background: color-mix(in srgb, var(--color-text-muted) 20%, transparent);
-    border-color: color-mix(in srgb, var(--color-text-muted) 55%, transparent);
+    border-bottom-color: var(--color-blue);
+  }
+
+  .right-tabs {
+    margin-left: auto;
+    display: flex;
+  }
+
+  .warn {
+    color: var(--color-red);
+    margin-left: 4px;
   }
 </style>
