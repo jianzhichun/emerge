@@ -131,13 +131,20 @@ const THRESHOLD_FIELDS = FIELD_CONFIGS.map((field) => field.key);
   let closeTimer: ReturnType<typeof setTimeout> | null = null;
 
   function syncFromThresholds(): void {
+    let next: Record<ThresholdField, string> = { ...formValues };
     for (const key of THRESHOLD_FIELDS) {
       const value = thresholds[key];
-      formValues = {
-        ...formValues,
+      next = {
+        ...next,
         [key]: value == null ? '' : String(value)
       };
     }
+    formValues = next;
+  }
+
+  /** True when every field is blank (initial state or before policy loaded). */
+  function isFormBlank(): boolean {
+    return THRESHOLD_FIELDS.every((key) => !String(formValues[key] ?? '').trim());
   }
 
   function clearCloseTimer(): void {
@@ -208,6 +215,16 @@ const THRESHOLD_FIELDS = FIELD_CONFIGS.map((field) => field.key);
     clearCloseTimer();
   }
   $: previousOpen = open;
+
+  // If the modal opens before policy finishes loading, thresholds arrive later with `{}` →
+  // filled data. Re-sync only while the form is still blank so we do not clobber in-progress edits.
+  $: if (
+    open &&
+    THRESHOLD_FIELDS.some((key) => thresholds[key] != null) &&
+    isFormBlank()
+  ) {
+    syncFromThresholds();
+  }
 
   onDestroy(() => {
     clearCloseTimer();

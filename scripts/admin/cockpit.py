@@ -23,23 +23,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.admin.api import (
-    _sse_clients,
-    _sse_lock,
-    _sse_broadcast,
     _cockpit_inject_html,
     _cockpit_list_injected_html,
-    _COCKPIT_INJECTED_HTML,
-    _COCKPIT_INJECT_LOCK,
     cmd_assets,
     cmd_submit_actions,
-    _cmd_set_goal,
-    _cmd_goal_history,
-    _cmd_goal_rollback,
     _cmd_save_settings,
 )
 from scripts.admin.shared import _resolve_repl_root, _resolve_connector_root
 from scripts.admin.control_plane import (
-    _load_hook_state_summary,
     cmd_control_plane_state,
     cmd_control_plane_sessions,
     cmd_control_plane_intents,
@@ -166,25 +157,23 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/policy":
             self._json(cmd_policy_status(session_id=session_id_q))
         elif path == "/api/assets":
-            ih = self._cockpit._injected_html if self._cockpit is not None else None
-            self._json(cmd_assets(injected_html=ih))
+            self._json(cmd_assets(injected_html=self._cockpit._injected_html))
         elif path == "/api/status":
+            import time as _t_status
             state_root = _resolve_repl_root()
             pending = (state_root / "pending-actions.json").exists()
-            self._json({"ok": True, "pending": pending, "server_online": True})
+            _CC_ACTIVE_WINDOW_S = 120
+            last_mcp_ts = 0.0
+            if self._cockpit is not None:
+                hsrv = getattr(self._cockpit, "_http_srv", None)
+                if hsrv is not None:
+                    last_mcp_ts = getattr(hsrv, "_last_mcp_ts", 0.0)
+            cc_active = (_t_status.time() - last_mcp_ts) < _CC_ACTIVE_WINDOW_S if last_mcp_ts else False
+            self._json({"ok": True, "pending": pending, "server_online": True, "cc_active": cc_active})
         elif path == "/api/settings":
             from scripts.policy_config import load_settings, default_settings_path
             s = load_settings()
             self._json({"ok": True, "settings": s, "path": str(default_settings_path())})
-        elif path == "/api/goal":
-            self._json({"ok": True, **_load_hook_state_summary()})
-        elif path == "/api/goal-history":
-            raw_limit = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("limit", ["50"])[0]
-            try:
-                limit = max(1, min(500, int(raw_limit)))
-            except Exception:
-                limit = 50
-            self._json(_cmd_goal_history(limit=limit))
         elif path.startswith("/api/components/"):
             self._serve_component(path)
         elif path == "/api/control-plane/state":
@@ -290,12 +279,8 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             }, ensure_ascii=False)
             self.wfile.write(f"data: {msg}\n\n".encode())
             self.wfile.flush()
-            if self._cockpit is not None:
-                with self._cockpit._sse_lock:
-                    self._cockpit._sse_clients.append(self.wfile)
-            else:
-                with _sse_lock:
-                    _sse_clients.append(self.wfile)
+            with self._cockpit._sse_lock:
+                self._cockpit._sse_clients.append(self.wfile)
             try:
                 while True:
                     time.sleep(25)
@@ -304,14 +289,9 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             except OSError:
                 pass
             finally:
-                if self._cockpit is not None:
-                    with self._cockpit._sse_lock:
-                        if self.wfile in self._cockpit._sse_clients:
-                            self._cockpit._sse_clients.remove(self.wfile)
-                else:
-                    with _sse_lock:
-                        if self.wfile in _sse_clients:
-                            _sse_clients.remove(self.wfile)
+                with self._cockpit._sse_lock:
+                    if self.wfile in self._cockpit._sse_clients:
+                        self._cockpit._sse_clients.remove(self.wfile)
             return
         else:
             self._err(404)
@@ -332,16 +312,9 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             if result.get("ok"):
                 _ev = {"pending": True, "action_count": result.get("action_count", 0),
                        "ts_ms": int(time.time() * 1000)}
-                if self._cockpit is not None:
-                    self._cockpit.broadcast(_ev)
-                else:
-                    _sse_broadcast(_ev)
+                self._cockpit.broadcast(_ev)
         elif path == "/api/settings":
             self._json(_cmd_save_settings(body))
-        elif path == "/api/goal":
-            self._json(_cmd_set_goal(body))
-        elif path == "/api/goal/rollback":
-            self._json(_cmd_goal_rollback(body))
         elif path == "/api/inject-component":
             connector = str(body.get("connector", "")).strip()
             html = str(body.get("html", ""))
@@ -350,16 +323,11 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             if slot_id is not None:
                 slot_id = str(slot_id).strip() or None
             if connector and html:
-                if self._cockpit is not None:
-                    store = self._cockpit._injected_html
-                    lock = self._cockpit._inject_lock
-                else:
-                    store, lock = None, None
+                store = self._cockpit._injected_html
+                lock = self._cockpit._inject_lock
                 if replace:
-                    lk = lock if lock is not None else _COCKPIT_INJECT_LOCK
-                    d = store if store is not None else _COCKPIT_INJECTED_HTML
-                    with lk:
-                        d[connector] = [{"id": slot_id, "html": html}]
+                    with lock:
+                        store[connector] = [{"id": slot_id, "html": html}]
                 else:
                     _cockpit_inject_html(connector, html, slot_id, store=store, lock=lock)
             self._json({"ok": True})
@@ -485,8 +453,7 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                 self._err(404)
                 return
             idx = int(m.group(1))
-            store = self._cockpit._injected_html if self._cockpit is not None else None
-            injected = _cockpit_list_injected_html(connector, store=store)
+            injected = _cockpit_list_injected_html(connector, store=self._cockpit._injected_html)
             if not (0 <= idx < len(injected)):
                 self._err(404)
                 return

@@ -7,9 +7,7 @@
   import QueuePanel from './components/overview/QueuePanel.svelte';
   import SessionTab from './components/session/SessionTab.svelte';
   import StateTab from './components/state/StateTab.svelte';
-  import Badge from './components/shared/Badge.svelte';
   import CockpitDropdown from './components/shared/CockpitDropdown.svelte';
-  import GoalBar from './components/shared/GoalBar.svelte';
   import SettingsModal from './components/shared/SettingsModal.svelte';
   import TabBar from './components/shared/TabBar.svelte';
   import ThresholdsBar from './components/shared/ThresholdsBar.svelte';
@@ -17,7 +15,6 @@
   import { navigate, readRouteFromUrl } from './lib/router';
   import { createSseClient } from './lib/sse';
   import type { AssetConnector } from './lib/types';
-  import { goalStore } from './stores/goal';
   import { monitorsStore } from './stores/monitors';
   import { policyStore } from './stores/policy';
   import { sessionStore } from './stores/session';
@@ -31,8 +28,7 @@
     subtle?: boolean;
   }
 
-  interface QueueItem {
-    id: number;
+  interface QueueDraft {
     type: string;
     label: string;
     subLabel: string;
@@ -40,12 +36,8 @@
     data: Record<string, unknown>;
   }
 
-  interface QueueDraft {
-    type: string;
-    label: string;
-    subLabel: string;
-    command: string;
-    data: Record<string, unknown>;
+  interface QueueItem extends QueueDraft {
+    id: number;
   }
 
   interface SubmitResponse {
@@ -56,7 +48,7 @@
 
   type GlobalTabId = 'overview' | 'monitors' | 'audit' | 'session' | 'state';
   type ConnectorPanelId = 'pipelines' | 'notes' | 'controls';
-  const STATUS_REFRESH_MS = 10_000;
+  const FALLBACK_REFRESH_MS = 30_000;
 
   const primaryTab: { id: GlobalTabId; label: string } = { id: 'overview', label: 'Overview' };
   const controlTabs: { id: Exclude<GlobalTabId, 'overview'>; label: string }[] = [
@@ -69,7 +61,6 @@
   let activeTab = 'overview';
   let connectorAssets: Record<string, AssetConnector> = {};
   let connectorPanelByTab: Record<string, ConnectorPanelId> = {};
-  let assetsLoading = false;
   let assetsError: string | null = null;
 
   let monitorsRefreshSignal = 0;
@@ -79,11 +70,9 @@
   let queueIdSeq = 0;
   let queueSubmitting = false;
   let serverPending = false;
+  let ccActive = false;
   let statusMessage: string | null = null;
   let sseStatus = 'idle';
-  let nowMs = Date.now();
-  let nextRefreshDeadlineMs = Date.now() + STATUS_REFRESH_MS;
-  let lastRefreshAtMs: number | null = null;
 
   function isGlobalTab(tab: string): tab is GlobalTabId {
     return tab === 'overview' || controlTabs.some((item) => item.id === tab);
@@ -184,13 +173,14 @@
     try {
       const response = await api.getStatus();
       serverPending = Boolean(response.pending);
+      ccActive = Boolean(response.cc_active);
     } catch {
       serverPending = false;
+      ccActive = false;
     }
   }
 
   async function refreshAssets(): Promise<void> {
-    assetsLoading = true;
     assetsError = null;
     try {
       const payload = await api.getAssets();
@@ -198,8 +188,6 @@
     } catch (error) {
       assetsError = error instanceof Error ? error.message : String(error);
       connectorAssets = {};
-    } finally {
-      assetsLoading = false;
     }
   }
 
@@ -210,7 +198,6 @@
       policyStore.refresh(routeSession),
       monitorsStore.refresh(),
       sessionStore.refresh(routeSession),
-      goalStore.refresh(),
       stateStore.refresh(),
       refreshAssets(),
       refreshStatus()
@@ -224,7 +211,6 @@
     }
     auditRefreshSignal += 1;
     stateRefreshSignal += 1;
-    lastRefreshAtMs = Date.now();
   }
 
   function queueMonitorsRefresh(): void {
@@ -329,13 +315,9 @@
   onMount(() => {
     syncTabFromUrl();
     void refreshShellData();
-    const statusInterval = setInterval(() => {
-      void refreshStatus();
-      nextRefreshDeadlineMs = Date.now() + STATUS_REFRESH_MS;
-    }, STATUS_REFRESH_MS);
-    const tickerInterval = setInterval(() => {
-      nowMs = Date.now();
-    }, 500);
+    const fallbackInterval = setInterval(() => {
+      void refreshShellData();
+    }, FALLBACK_REFRESH_MS);
     const sse = createSseClient<Record<string, unknown>>({
       onStatus: (status) => {
         sseStatus = status;
@@ -351,14 +333,20 @@
         if ('monitors_updated' in payload && Boolean((payload as { monitors_updated?: unknown }).monitors_updated)) {
           queueMonitorsRefresh();
         }
+        if ('data_updated' in payload && Boolean((payload as { data_updated?: unknown }).data_updated)) {
+          const route = readRouteFromUrl();
+          void policyStore.refresh(route.session);
+          void stateStore.refresh();
+          auditRefreshSignal += 1;
+          stateRefreshSignal += 1;
+        }
       }
     });
     sse.start();
     const onPopState = () => syncTabFromUrl();
     window.addEventListener('popstate', onPopState);
     return () => {
-      clearInterval(statusInterval);
-      clearInterval(tickerInterval);
+      clearInterval(fallbackInterval);
       window.removeEventListener('popstate', onPopState);
       sse.stop();
     };
@@ -380,12 +368,8 @@
     })
   ];
   $: rightTabs = controlTabs.map((item) => ({ ...item, subtle: true }));
-  $: allTabs = [...leftTabs, ...rightTabs];
-  $: activeTabLabel = isGlobalTab(activeTab) ? (allTabs.find((tab) => tab.id === activeTab)?.label ?? 'Overview') : `Connector: ${activeTab}`;
-  $: shellLoading =
-    $policyStore.loading || $monitorsStore.loading || $sessionStore.loading || $goalStore.loading || $stateStore.loading || assetsLoading;
   $: shellError =
-    $policyStore.error ?? $monitorsStore.error ?? $sessionStore.error ?? $goalStore.error ?? $stateStore.error ?? assetsError;
+    $policyStore.error ?? $monitorsStore.error ?? $sessionStore.error ?? $stateStore.error ?? assetsError;
   $: routeSessionId = readRouteFromUrl().session ?? $sessionStore.currentSessionId ?? null;
   $: connectorMode = !isGlobalTab(activeTab) && isConnectorTab(activeTab);
   $: showQueuePanel = activeTab === 'overview' || isConnectorTab(activeTab);
@@ -397,11 +381,12 @@
   $: queuedKeys = new Set(
     queueItems.map((item) => String((item.data && item.data.key) ?? '')).filter((key) => key.length > 0)
   );
-  $: refreshRemainingMs = Math.max(0, nextRefreshDeadlineMs - nowMs);
-  $: refreshBarWidth = `${Math.max(0, Math.min(100, (refreshRemainingMs / STATUS_REFRESH_MS) * 100))}%`;
-  $: refreshTickLabel = `in ${Math.ceil(refreshRemainingMs / 1000)}s`;
-  $: refreshLastLabel = `last ${lastRefreshAtMs ? new Date(lastRefreshAtMs).toLocaleTimeString() : '--:--:--'}`;
-  $: serverIndicatorText = sseStatus === 'connected' ? '● Server online' : '◐ Connecting to server…';
+  $: daemonOnline = sseStatus === 'connected';
+  $: ccIndicatorText = !daemonOnline
+    ? '◐ Daemon offline'
+    : ccActive
+      ? '● CC connected'
+      : '○ CC idle';
 
   $: sessionDropdownOptions = [
     { value: '', label: '(default/current)' },
@@ -415,7 +400,6 @@
 <main class="app">
   <header class="app-header">
     <h1>🌀 Emerge Cockpit</h1>
-    <GoalBar embedded={true} />
     <div class="header-session">
       <span class="session-label" id="cockpit-session-label">Session</span>
       <CockpitDropdown
@@ -446,12 +430,6 @@
       class:no-scroll={activeTab === 'state'}
       aria-label="Active tab placeholder"
     >
-      {#if !connectorMode}
-        <header class="tab-outlet-header">
-          <h2>{activeTabLabel}</h2>
-          <Badge label={shellLoading ? 'Refreshing' : 'Ready'} variant={shellLoading ? 'info' : 'neutral'} />
-        </header>
-      {/if}
       {#if activeTab === 'overview'}
         <OverviewTab
           pipelines={$policyStore.pipelines}
@@ -508,12 +486,7 @@
   </section>
   <div class="status-bar">
     <span class="status-msg">{statusMessage ?? 'Ready'}</span>
-    <span class={`cc-indicator ${sseStatus === 'connected' ? 'online' : 'connecting'}`}>{serverIndicatorText}</span>
-    <span class="refresh-timer">
-      <span class="bar-track"><span class="bar-fill" style={`width:${refreshBarWidth}`}></span></span>
-      <span class="tick">{refreshTickLabel}</span>
-      <span class="last">{refreshLastLabel}</span>
-    </span>
+    <span class={`cc-indicator ${!daemonOnline ? 'connecting' : ccActive ? 'online' : 'idle'}`}>{ccIndicatorText}</span>
   </div>
 
   <SettingsModal
@@ -591,7 +564,7 @@
     min-height: 0;
     border: none;
     border-radius: 0;
-    padding: 0 16px 28px;
+    padding: 12px 16px 28px;
     background: var(--color-bg);
     overflow-x: hidden;
     overflow-y: auto;
@@ -608,10 +581,6 @@
     min-height: 0;
   }
 
-  .tab-outlet.no-scroll .tab-outlet-header {
-    flex-shrink: 0;
-  }
-
   .main-layout {
     display: flex;
     flex: 1;
@@ -621,22 +590,8 @@
     overflow: hidden;
   }
 
-  .tab-outlet-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-    margin: 12px 0 8px;
-  }
-
   .tab-outlet.connector-mode {
     padding-top: 0;
-  }
-
-  .tab-outlet h2 {
-    margin: 0;
-    font-size: 13px;
-    color: var(--color-text);
   }
 
   .tab-outlet p {
@@ -673,64 +628,19 @@
 
   .cc-indicator {
     font-size: 11px;
-    margin-left: 12px;
+    margin-left: auto;
   }
 
   .cc-indicator.online {
     color: #3fb950;
   }
 
-  .cc-indicator.connecting {
-    color: #d29922;
-  }
-
-  .refresh-timer {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    color: #484f58;
-  }
-
-  .refresh-timer .bar-track {
-    width: 48px;
-    height: 4px;
-    background: #21262d;
-    border-radius: 2px;
-    overflow: hidden;
-    display: inline-block;
-  }
-
-  .refresh-timer .bar-fill {
-    display: block;
-    height: 100%;
-    background: linear-gradient(90deg, #1f6feb 0%, #58a6ff 50%, #1f6feb 100%);
-    background-size: 200% 100%;
-    border-radius: 2px;
-    transition: width 1s linear;
-    animation: refresh-shimmer 1.4s linear infinite;
-  }
-
-  .refresh-timer .tick {
-    font-size: 9px;
-    min-width: 32px;
-    text-align: right;
+  .cc-indicator.idle {
     color: #8b949e;
   }
 
-  .refresh-timer .last {
-    font-size: 9px;
-    min-width: 78px;
-    color: #6e7681;
-  }
-
-  @keyframes refresh-shimmer {
-    0% {
-      background-position: 200% 0;
-    }
-    100% {
-      background-position: -200% 0;
-    }
+  .cc-indicator.connecting {
+    color: #d29922;
   }
 
   @media (max-width: 70rem) {

@@ -60,16 +60,12 @@ def test_sse_broadcast_reaches_connected_client(tmp_path, monkeypatch):
 
 def test_sse_broadcast_pending_on_submit(tmp_path, monkeypatch):
     """POST /api/submit must broadcast a pending=true event via SSE."""
-    import scripts.repl_admin as repl_admin
-    start_clients = len(repl_admin._sse_clients)
     url = _start_cockpit_server(tmp_path, monkeypatch)
     resp = urllib.request.urlopen(f"{url}/api/sse/status", timeout=3)
     resp.readline()  # data: {status: online}\n
     resp.readline()  # blank separator
 
-    deadline = time.time() + 2.0
-    while len(repl_admin._sse_clients) <= start_clients and time.time() < deadline:
-        time.sleep(0.01)
+    time.sleep(0.3)
 
     body = json.dumps({"actions": [{"type": "pipeline-delete", "key": "x"}]}).encode()
     req = urllib.request.Request(

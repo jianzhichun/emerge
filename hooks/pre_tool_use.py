@@ -128,12 +128,6 @@ def _validate_icc_span_approve(args: dict, sig: str) -> str | None:
     return None
 
 
-def _validate_icc_goal_rollback(args: dict) -> str | None:
-    if not str(args.get("target_event_id", "")).strip():
-        return "icc_goal_rollback: 'target_event_id' is required"
-    return None
-
-
 # Tools whose intent_signature must be normalized and validated.
 _SIG_TOOLS: frozenset[str] = frozenset({
     "__icc_exec", "__icc_crystallize", "__icc_span_open", "__icc_span_approve",
@@ -148,7 +142,6 @@ _SIG_VALIDATORS: dict[str, Callable[[dict, str], str | None]] = {
 _PLAIN_VALIDATORS: dict[str, Callable[[dict], str | None]] = {
     "__icc_reconcile":     _validate_icc_reconcile,
     "__icc_span_close":    _validate_icc_span_close,
-    "__icc_goal_rollback": _validate_icc_goal_rollback,
 }
 
 
@@ -170,19 +163,6 @@ def _build_output(
                 "permissionDecisionReason": error_msg,
             },
             "systemMessage": f"Tool call blocked by emerge PreToolUse validator: {error_msg}",
-        }
-    if suffix == "__icc_goal_rollback":
-        target_event_id = str(arguments.get("target_event_id", "")).strip()
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "ask",
-            },
-            "systemMessage": (
-                f"emerge: icc_goal_rollback to target_event_id={target_event_id!r}. "
-                "This is irreversible — it will overwrite the active goal state. "
-                "Confirm only if the user explicitly requested this rollback."
-            ),
         }
     if suffix == "__icc_span_approve":
         return {

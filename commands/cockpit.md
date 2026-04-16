@@ -37,8 +37,3 @@ Always invoke the admin CLI via the **Emerge plugin root** (not the user's open 
    ```bash
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" policy-status --pretty
    ```
-
-6. **Close the cockpit**: when operator says close/exit:
-   ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" serve-stop
-   ```

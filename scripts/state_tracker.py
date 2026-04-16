@@ -12,7 +12,6 @@ from scripts.policy_config import atomic_write_json
 LEVEL_CORE_CRITICAL = "core_critical"
 LEVEL_CORE_SECONDARY = "core_secondary"
 LEVEL_PERIPHERAL = "peripheral"
-MAX_GOAL_CHARS = 120
 MAX_DELTAS = 500  # hard cap per session; pre_compact resets on compaction
 
 
@@ -20,8 +19,6 @@ class StateTracker:
     def __init__(self, state: dict[str, Any] | None = None) -> None:
         if state is None:
             self.state = {
-                "goal": "",
-                "goal_source": "unset",
                 "open_risks": [],
                 "deltas": [],
                 "verification_state": "verified",
@@ -29,13 +26,6 @@ class StateTracker:
             }
         else:
             self.state = _normalize_state(state)
-
-    def set_goal(self, goal: str, source: str = "unknown") -> None:
-        sanitized = str(goal).strip()
-        if len(sanitized) > MAX_GOAL_CHARS:
-            sanitized = sanitized[:MAX_GOAL_CHARS]
-        self.state["goal"] = sanitized
-        self.state["goal_source"] = source
 
     def set_consistency_window(self, window_ms: int) -> None:
         try:
@@ -161,8 +151,6 @@ class StateTracker:
     def format_context(
         self,
         budget_chars: int | None = None,
-        goal_override: str | None = None,
-        goal_source_override: str | None = None,
     ) -> dict[str, str]:
         critical, secondary, peripheral = self._partition_deltas()
 
@@ -213,20 +201,7 @@ class StateTracker:
                 total += len(line) + 1
             risks_text = "\n".join(kept) if kept else "- None."
 
-        goal_text = (
-            str(goal_override).strip()
-            if goal_override is not None
-            else str(self.state.get("goal", "") or "").strip()
-        )
-        goal_source = (
-            str(goal_source_override).strip()
-            if goal_source_override is not None
-            else str(self.state.get("goal_source", "unset") or "unset")
-        )
-
         return {
-            "Goal": goal_text or "Not set.",
-            "Goal Source": goal_source or "unset",
             "Delta": delta_text,
             "Open Risks": risks_text,
         }
@@ -234,8 +209,6 @@ class StateTracker:
     def format_recovery_token(
         self,
         budget_chars: int | None = None,
-        goal_override: str | None = None,
-        goal_source_override: str | None = None,
     ) -> dict[str, Any]:
         critical, secondary, peripheral = self._partition_deltas()
         selected: list[dict[str, Any]] = [*critical, *secondary, *peripheral]
@@ -284,21 +257,8 @@ class StateTracker:
                 }
             )
 
-        goal_text = (
-            str(goal_override).strip()
-            if goal_override is not None
-            else str(self.state.get("goal", "") or "").strip()
-        )
-        goal_source = (
-            str(goal_source_override).strip()
-            if goal_source_override is not None
-            else str(self.state.get("goal_source", "unset") or "unset")
-        )
-
         token: dict[str, Any] = {
             "schema_version": "flywheel.v1",
-            "goal": goal_text,
-            "goal_source": goal_source,
             "verification_state": self.state.get("verification_state", "verified"),
             "consistency_window_ms": int(self.state.get("consistency_window_ms", 0) or 0),
             "open_risks": [
@@ -333,46 +293,22 @@ class StateTracker:
     def format_additional_context(
         self,
         budget_chars: int | None = None,
-        goal_override: str | None = None,
-        goal_source_override: str | None = None,
     ) -> str:
-        context = self.format_context(
-            budget_chars=budget_chars,
-            goal_override=goal_override,
-            goal_source_override=goal_source_override,
-        )
-        token = self.format_recovery_token(
-            budget_chars=budget_chars,
-            goal_override=goal_override,
-            goal_source_override=goal_source_override,
-        )
+        context = self.format_context(budget_chars=budget_chars)
+        token = self.format_recovery_token(budget_chars=budget_chars)
         token_json = json.dumps(token, ensure_ascii=True, separators=(",", ":"))
 
-        # When the session is idle (no goal, no deltas, no risks), skip the
-        # human-readable section — it would only add token noise with empty values.
-        goal_text = context["Goal"]
         delta_text = context["Delta"]
         risks_text = context["Open Risks"]
-        # Check idleness directly from state (not formatted strings) to avoid format-drift bugs.
-        # goal_override takes precedence — if caller passed a goal, session is not idle.
-        effective_goal = (
-            str(goal_override).strip() if goal_override is not None
-            else str(self.state.get("goal", "") or "").strip()
-        )
         open_risks = [
             r for r in self.state.get("open_risks", [])
             if (isinstance(r, dict) and r.get("status") == "open") or isinstance(r, str)
         ]
-        is_idle = (
-            not effective_goal
-            and not self.state.get("deltas")
-            and not open_risks
-        )
+        is_idle = not self.state.get("deltas") and not open_risks
         if is_idle:
             return f"FLYWHEEL_TOKEN\n{token_json}"
 
         return (
-            f"Goal\n{goal_text}\n\n"
             f"Delta\n{delta_text}\n\n"
             f"Open Risks\n{risks_text}\n\n"
             f"FLYWHEEL_TOKEN\n{token_json}"
@@ -392,17 +328,11 @@ class StateTracker:
 def _normalize_state(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {
-            "goal": "",
-            "goal_source": "unset",
             "open_risks": [],
             "deltas": [],
             "verification_state": "verified",
             "consistency_window_ms": 0,
         }
-    goal = str(raw.get("goal", ""))
-    goal_source = str(raw.get("goal_source", "unset"))
-    if len(goal) > MAX_GOAL_CHARS:
-        goal = goal[:MAX_GOAL_CHARS]
     verification_state = (
         "degraded" if str(raw.get("verification_state", "verified")) == "degraded" else "verified"
     )
@@ -478,8 +408,6 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
             deltas.append(normalized)
 
     out: dict[str, Any] = {
-        "goal": goal,
-        "goal_source": goal_source,
         "open_risks": open_risks,
         "deltas": deltas,
         "verification_state": verification_state,

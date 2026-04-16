@@ -14,9 +14,6 @@ from typing import Any
 
 _KEEPALIVE_INTERVAL_S = 20.0
 
-_tl = threading.local()  # _tl.session_id: str | None — set per HTTP request
-
-
 def _validate_machine_id(machine_id: str) -> None:
     """Reject machine_id values that could escape the event root via path traversal."""
     if not machine_id or machine_id != machine_id.strip():
@@ -24,11 +21,6 @@ def _validate_machine_id(machine_id: str) -> None:
     p = Path(machine_id)
     if p.name != machine_id or ".." in machine_id or "/" in machine_id or "\\" in machine_id:
         raise ValueError(f"Invalid machine_id: {machine_id!r}")
-
-
-def get_current_session_id() -> str | None:
-    """Return the session_id of the currently-executing HTTP request thread."""
-    return getattr(_tl, "session_id", None)
 
 
 def resolve_daemon_bind(override: str | None = None) -> str:
@@ -92,9 +84,6 @@ class DaemonHTTPServer:
         self._state_root = state_root or (Path.home() / ".emerge" / "repl")
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
-        # session_id → wfile (reserved for future use; CC HTTP client doesn't maintain SSE)
-        self._sse_sessions: dict[str, Any] = {}
-        self._sse_lock = threading.Lock()
         # Connected runners: runner_profile → {connected_at_ms, last_event_ts_ms, machine_id, last_alert}
         self._connected_runners: dict[str, dict] = {}
         self._runners_lock = threading.Lock()
@@ -102,6 +91,8 @@ class DaemonHTTPServer:
         self._runner_sse_clients: dict[str, Any] = {}
         # popup_id → threading.Event
         self._popup_futures: dict[str, threading.Event] = {}
+        # Timestamp of the last POST /mcp request (CC tool call)
+        self._last_mcp_ts: float = 0.0
         self._popup_results: dict[str, dict] = {}
         self._popup_lock = threading.Lock()
         # Pattern detection: per-runner sliding-window event buffers
@@ -175,26 +166,6 @@ class DaemonHTTPServer:
             encoding="utf-8",
         )
 
-    def push_to_session(self, session_id: str, payload: dict) -> bool:
-        """Push a JSON-RPC notification to a connected CC session via SSE.
-
-        NOTE: CC's HTTP MCP client does not maintain a persistent GET SSE channel,
-        so pushes sent here will not be received. Reserved for future compatibility.
-        """
-        with self._sse_lock:
-            wfile = self._sse_sessions.get(session_id)
-        if wfile is None:
-            return False
-        try:
-            line = f"data: {json.dumps(payload)}\n\n"
-            wfile.write(line.encode())
-            wfile.flush()
-            return True
-        except OSError:
-            with self._sse_lock:
-                self._sse_sessions.pop(session_id, None)
-            return False
-
     def handle_post_mcp(self, body: bytes, session_id: str | None) -> dict:
         """Dispatch a JSON-RPC request to the daemon."""
         try:
@@ -209,17 +180,6 @@ class DaemonHTTPServer:
             resp = {"jsonrpc": "2.0", "id": req_id,
                     "error": {"code": -32603, "message": str(exc)}}
         return resp or {"jsonrpc": "2.0", "id": req_id, "result": {}}
-
-    def handle_get_mcp_sse(self, wfile: Any) -> str:
-        """Register an SSE client, return session_id."""
-        session_id = uuid.uuid4().hex
-        with self._sse_lock:
-            self._sse_sessions[session_id] = wfile
-        return session_id
-
-    def remove_sse_session(self, session_id: str) -> None:
-        with self._sse_lock:
-            self._sse_sessions.pop(session_id, None)
 
     def _on_runner_online(self, runner_profile: str, machine_id: str) -> None:
         import re as _re
@@ -598,7 +558,7 @@ def _make_handler(srv: "DaemonHTTPServer"):
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
-            session_id = srv.handle_get_mcp_sse(self.wfile)
+            session_id = uuid.uuid4().hex
             msg = json.dumps({"session_id": session_id})
             self.wfile.write(f"data: {msg}\n\n".encode())
             self.wfile.flush()
@@ -609,8 +569,6 @@ def _make_handler(srv: "DaemonHTTPServer"):
                     self.wfile.flush()
             except OSError:
                 pass
-            finally:
-                srv.remove_sse_session(session_id)
 
         def _handle_runner_sse(self, runner_profile: str):
             import re as _re_sse
@@ -652,10 +610,9 @@ def _make_handler(srv: "DaemonHTTPServer"):
                 return _CockpitHandler.do_POST(self)
             self._cockpit = None
             if path == "/mcp":
+                srv._last_mcp_ts = time.time()
                 session_id = qs.get("session_id", [None])[0]
-                _tl.session_id = session_id
                 resp = srv.handle_post_mcp(body, session_id)
-                _tl.session_id = None
                 self._send_json(200, resp)
             elif path == "/runner/online":
                 try:

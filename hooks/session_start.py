@@ -8,18 +8,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.goal_control_plane import EVENT_HOOK_PAYLOAD, init_goal_control_plane  # noqa: E402
 from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
 from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
 
 
 def _write_connector_rules(cwd: str) -> None:
-    """Generate .claude/rules/connector-<name>.md for each connector with NOTES.md.
-
-    CC lazy-loads these files and fires InstructionsLoaded on each load, which
-    injects the live NOTES.md content and reflection at exactly the right moment
-    (not just once at SessionStart).
-    """
+    """Generate .claude/rules/connector-<name>.md for each connector with NOTES.md."""
     connectors_root = Path.home() / ".emerge" / "connectors"
     if not connectors_root.is_dir():
         return
@@ -57,26 +51,12 @@ def main() -> None:
     state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
     tracker = load_tracker(state_path)
-    goal_cp = init_goal_control_plane(state_root, tracker)
-    if "goal" in payload:
-        goal_cp.ingest(
-            event_type=EVENT_HOOK_PAYLOAD,
-            source="hook_payload",
-            actor="SessionStart",
-            text=str(payload["goal"]),
-            rationale="SessionStart hook payload goal",
-            confidence=0.5,
-        )
     # Always save on SessionStart: clear stale flywheel span from the previous session.
     tracker.state.pop("active_span_id", None)
     tracker.state.pop("active_span_intent", None)
     tracker.state.pop("turn_count", None)
     save_tracker(state_path, tracker)
-    snap = goal_cp.read_snapshot()
-    context_text = tracker.format_additional_context(
-        goal_override=str(snap.get("text", "")),
-        goal_source_override=str(snap.get("source", "unset")),
-    )
+    context_text = tracker.format_additional_context()
 
     _SPAN_PROTOCOL = (
         "Span Protocol\n"
@@ -110,10 +90,8 @@ def main() -> None:
     except (OSError, json.JSONDecodeError, AttributeError):
         pass
 
-    # Generate .claude/rules/connector-*.md for lazy connector context injection
     _write_connector_rules(payload.get("cwd") or str(Path.cwd()))
 
-    # 确保 HTTP daemon 正在运行（幂等，已运行则无操作）
     import subprocess as _sub
     _plugin_root = Path(__file__).resolve().parents[1]
     try:

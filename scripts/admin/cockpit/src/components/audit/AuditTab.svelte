@@ -6,7 +6,7 @@
   interface AuditItem {
     id: string;
     ts: number;
-    type: 'exec' | 'pipeline' | 'span' | 'goal' | 'tool';
+    type: 'exec' | 'pipeline' | 'span' | 'tool';
     detail: string;
     outcome: string;
     severity: 'ok' | 'warn' | 'error';
@@ -98,35 +98,16 @@
     };
   }
 
-  function mapGoal(event: JsonObject, index: number): AuditItem {
-    const ts = toTimestamp(event.ts_ms);
-    const detailText = toText(event.text) || toText(event.goal) || '(goal)';
-    const detail = detailText.slice(0, 60);
-    const outcome =
-      toText(event.type) || toText(event.event_type) || toText(event.source) || '';
-    return {
-      id: `goal-${ts}-${index}`,
-      ts,
-      type: 'goal',
-      detail,
-      outcome,
-      severity: outcome.toLowerCase().includes('rollback') || outcome.toLowerCase().includes('rejected') ? 'warn' : 'ok'
-    };
-  }
-
   async function refreshAudit(): Promise<void> {
     loading = true;
     error = null;
     try {
-      const [execPayload, pipelinePayload, spanPayload, goalPayload, toolPayload] = await Promise.all([
+      const [execPayload, pipelinePayload, spanPayload, toolPayload] = await Promise.all([
         api.getExecEvents({ limit: 50, sessionId }),
         api.getPipelineEvents({ limit: 50, sessionId }),
         api.request<{ spans?: JsonObject[] }>('/api/control-plane/spans', {
           query: { limit: 30 },
           sessionId
-        }),
-        api.request<{ events?: JsonObject[] }>('/api/goal-history', {
-          query: { limit: 30 }
         }),
         api.getToolEvents({ limit: 200, sessionId })
       ]);
@@ -134,10 +115,9 @@
       const execItems = (execPayload.events ?? []).map((event, index) => mapExec(event as JsonObject, index));
       const pipelineItems = (pipelinePayload.events ?? []).map((event, index) => mapPipeline(event as JsonObject, index));
       const spanItems = (spanPayload.spans ?? []).map((event, index) => mapSpan(event as JsonObject, index));
-      const goalItems = (goalPayload.events ?? []).map((event, index) => mapGoal(event as JsonObject, index));
       const toolItems = (toolPayload.events ?? []).map((event, index) => mapTool(event as JsonObject, index));
 
-      items = [...execItems, ...pipelineItems, ...spanItems, ...goalItems, ...toolItems]
+      items = [...execItems, ...pipelineItems, ...spanItems, ...toolItems]
         .sort((a, b) => b.ts - a.ts)
         .slice(0, 100);
     } catch (loadError) {
@@ -205,8 +185,6 @@
                   <span class="source-badge span">pipeline</span>
                 {:else if item.type === 'span'}
                   <span class="source-badge both">span</span>
-                {:else if item.type === 'goal'}
-                  <span class="goal-pill">goal</span>
                 {:else if item.type === 'tool'}
                   <span class="tool-pill">tool</span>
                 {/if}
@@ -240,8 +218,6 @@
                   {:else}
                     <span class="critical">{item.outcome}</span>
                   {/if}
-                {:else if item.type === 'goal'}
-                  {item.outcome}
                 {:else if item.type === 'tool'}
                   {#if item.outcome === 'write'}
                     <span class="tool-write">write</span>
@@ -277,10 +253,6 @@
     font-size: 14px;
     color: #e6edf3;
     font-weight: 600;
-  }
-  .goal-pill {
-    font-size: 10px;
-    color: #79c0ff;
   }
   .tool-pill {
     font-size: 10px;

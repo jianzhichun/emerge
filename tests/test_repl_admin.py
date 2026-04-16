@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.emerge_daemon import EmergeDaemon
 from scripts import repl_admin
+from scripts.admin.api import _enrich_actions
 from scripts.remote_runner import RunnerExecutor, RunnerHTTPHandler, ThreadingHTTPServer
 
 
@@ -214,26 +215,19 @@ def test_repl_admin_policy_status_includes_policy_execution_metrics(tmp_path: Pa
         os.environ.pop("EMERGE_SESSION_ID", None)
 
 
-def test_repl_admin_policy_status_includes_goal_source_from_hook_state(tmp_path: Path):
+def test_repl_admin_policy_status_omits_goal_fields(tmp_path: Path):
     env = os.environ.copy()
     env["EMERGE_STATE_ROOT"] = str(tmp_path / "repl")
-    env["EMERGE_SESSION_ID"] = "goal-source"
-    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path / "hook-state")
-
-    hook_dir = tmp_path / "hook-state"
-    hook_dir.mkdir(parents=True, exist_ok=True)
-    (hook_dir / "state.json").write_text(
-        json.dumps({"goal": "reduce token noise", "goal_source": "hook_payload"}),
-        encoding="utf-8",
-    )
+    env["EMERGE_SESSION_ID"] = "no-goal-policy"
+    (tmp_path / "repl").mkdir(parents=True, exist_ok=True)
 
     out = _run_admin(["policy-status"], env)
-    assert out["goal"] == "reduce token noise"
-    assert out["goal_source"] == "hook_payload"
+    assert "session_id" in out
+    assert "goal" not in out
+    assert "goal_source" not in out
 
     pretty = _run_admin_raw(["policy-status", "--pretty"], env)
-    assert "Goal: reduce token noise" in pretty
-    assert "Goal source: hook_payload" in pretty
+    assert "Goal:" not in pretty
 
 
 def test_repl_admin_status_supports_target_profile_session_dir(tmp_path: Path):
@@ -630,7 +624,7 @@ def test_enrich_actions_injects_notes_content_for_notes_comment(tmp_path):
     old = os.environ.get("EMERGE_CONNECTOR_ROOT")
     os.environ["EMERGE_CONNECTOR_ROOT"] = str(connector_root)
     try:
-        result = repl_admin._enrich_actions(actions)
+        result = _enrich_actions(actions)
     finally:
         if old is None:
             os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
@@ -652,7 +646,7 @@ def test_enrich_actions_passes_through_non_notes_actions(tmp_path):
         {"type": "pipeline-promote", "key": "zwcad.read.state"},
         {"type": "pipeline-demote", "key": "zwcad.write.add-wall"},
     ]
-    result = repl_admin._enrich_actions(actions)
+    result = _enrich_actions(actions)
     assert result == actions
 
 
@@ -666,7 +660,7 @@ def test_enrich_actions_handles_missing_notes_file(tmp_path):
     old = os.environ.get("EMERGE_CONNECTOR_ROOT")
     os.environ["EMERGE_CONNECTOR_ROOT"] = str(connector_root)
     try:
-        result = repl_admin._enrich_actions(actions)
+        result = _enrich_actions(actions)
     finally:
         if old is None:
             os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
@@ -697,7 +691,7 @@ def test_enrich_actions_adds_deterministic_instruction_for_tool_call():
             "flywheel": {"status": "canary", "synthesis_ready": True},
         }
     ]
-    result = repl_admin._enrich_actions(actions)
+    result = _enrich_actions(actions)
     assert len(result) == 1
     assert "instruction" in result[0]
     assert "Deterministic tool call" in result[0]["instruction"]
@@ -705,9 +699,8 @@ def test_enrich_actions_adds_deterministic_instruction_for_tool_call():
 
 
 def test_enrich_actions_marks_invalid_tool_call_payload():
-    # tool name is empty → invalid payload
     actions = [{"type": "tool-call", "scenario": "x", "call": {"tool": "", "arguments": {}}}]
-    result = repl_admin._enrich_actions(actions)
+    result = _enrich_actions(actions)
     assert len(result) == 1
     assert "instruction" in result[0]
     assert "Invalid cockpit tool-call payload" in result[0]["instruction"]
@@ -718,7 +711,7 @@ def test_enrich_actions_marks_invalid_tool_call_payload():
 # ---------------------------------------------------------------------------
 
 def test_hook_state_returns_expected_fields(tmp_path, monkeypatch):
-    """cmd_control_plane_hook_state returns turn_count, active_span_id, goal, context_preview."""
+    """cmd_control_plane_hook_state returns turn_count, active_span_id, context_preview."""
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
 

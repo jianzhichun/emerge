@@ -18,8 +18,8 @@ def test_cmd_assets_returns_connectors_with_notes_and_components(tmp_path: Path,
 
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
 
-    from scripts.repl_admin import cmd_assets
-    result = cmd_assets()
+    from scripts.admin.api import cmd_assets
+    result = cmd_assets(injected_html={})
 
     assert "myfoo" in result["connectors"]
     c = result["connectors"]["myfoo"]
@@ -35,8 +35,8 @@ def test_cmd_assets_connector_without_notes_or_components(tmp_path: Path, monkey
     (connector_root / "bare").mkdir(parents=True)
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
 
-    from scripts.repl_admin import cmd_assets
-    result = cmd_assets()
+    from scripts.admin.api import cmd_assets
+    result = cmd_assets(injected_html={})
 
     assert "bare" in result["connectors"]
     c = result["connectors"]["bare"]
@@ -48,7 +48,7 @@ def test_cmd_assets_connector_without_notes_or_components(tmp_path: Path, monkey
 def test_cmd_submit_actions_writes_pending_file(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
 
-    from scripts.repl_admin import cmd_submit_actions
+    from scripts.admin.api import cmd_submit_actions
     actions = [
         {"type": "pipeline-delete", "key": "mock.read.does-not-exist"},
         {"type": "pipeline-set", "key": "mock.read.layers", "fields": {"status": "canary"}},
@@ -66,7 +66,7 @@ def test_cmd_submit_actions_writes_pending_file(tmp_path: Path, monkeypatch):
 def test_cmd_submit_actions_atomic_write(tmp_path: Path, monkeypatch):
     """Verify tmp file is used (no partial writes)."""
     monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
-    from scripts.repl_admin import cmd_submit_actions
+    from scripts.admin.api import cmd_submit_actions
     cmd_submit_actions([{"type": "pipeline-delete", "key": "x"}])
     # tmp file should not exist after rename
     assert not (tmp_path / "pending-actions.json.tmp").exists()
@@ -109,9 +109,6 @@ def test_serve_get_assets_returns_connectors(tmp_path, monkeypatch):
 
 def test_serve_inject_component_merged_into_assets_and_servable(tmp_path, monkeypatch):
     """POST /api/inject-component must surface in /api/assets and /api/components/... (regression)."""
-    import scripts.repl_admin as ra
-
-    ra._COCKPIT_INJECTED_HTML.clear()
     connector_root = tmp_path / "connectors"
     (connector_root / "acme").mkdir(parents=True)
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
@@ -145,9 +142,10 @@ def test_serve_get_status_returns_ok(tmp_path, monkeypatch):
     with urllib.request.urlopen(f"{url}/api/status") as resp:
         data = json.loads(resp.read())
     assert data["ok"] is True
-    assert "cc_listening" not in data, "cc_listening removed — use server_online"
+    assert "cc_listening" not in data, "cc_listening removed"
     assert data["server_online"] is True
     assert isinstance(data["pending"], bool)
+    assert isinstance(data["cc_active"], bool)
 
 
 def test_serve_get_reflection_cache_endpoint(tmp_path, monkeypatch):

@@ -204,61 +204,6 @@ def get_tool_schemas() -> list[dict[str, Any]]:
         # Use icc_span_open(intent_signature='<connector>.(read|write).<name>')
         # instead — the span bridge executes the pipeline automatically when stable.
         {
-            "name": "icc_goal_ingest",
-            "title": "Submit Goal",
-            "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
-            "description": "Submit a goal event proposal to Goal Control Plane and get the latest decision snapshot.",
-            "_internal": True,
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "event_type": {"type": "string", "enum": ["human_edit", "hook_payload", "system_generate", "system_refine", "rollback_request"]},
-                    "source": {"type": "string"},
-                    "actor": {"type": "string"},
-                    "text": {"type": "string"},
-                    "rationale": {"type": "string"},
-                    "confidence": {"type": "number"},
-                    "context_match_score": {"type": "number", "description": "0..1 context relevance score"},
-                    "recent_failure_risk": {"type": "number", "description": "0..1 risk score from recent failures"},
-                    "ttl_ms": {"type": "integer"},
-                    "lock_window_ms": {"type": "integer"},
-                    "force": {"type": "boolean"},
-                    "target_event_id": {"type": "string"},
-                },
-                "required": ["event_type", "source", "actor", "text"],
-            },
-        },
-        {
-            "name": "icc_goal_read",
-            "title": "Read Goal",
-            "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
-            "description": "Read active goal snapshot and recent goal event ledger.",
-            "_internal": True,
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "limit": {"type": "integer", "description": "Max ledger rows to return", "default": 30},
-                },
-                "required": [],
-            },
-        },
-        {
-            "name": "icc_goal_rollback",
-            "title": "Rollback Goal",
-            "annotations": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": False},
-            "description": "Rollback active goal to a previous goal event id.",
-            "_internal": True,
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "target_event_id": {"type": "string"},
-                    "actor": {"type": "string"},
-                    "rationale": {"type": "string"},
-                },
-                "required": ["target_event_id"],
-            },
-        },
-        {
             "name": "icc_reconcile",
             "title": "Reconcile Delta",
             "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},

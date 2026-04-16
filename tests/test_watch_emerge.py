@@ -73,11 +73,11 @@ def test_watch_emerge_exits_on_sigterm(tmp_path):
 
 
 def test_watch_patterns_shim_delegates_to_watch_emerge(tmp_path):
-    """watch_patterns.py --runner-profile delegates to watch_emerge.py."""
+    """watch_emerge.py --runner-profile tails per-runner events."""
     events_file = tmp_path / "events-mycader-1.jsonl"
 
     proc = subprocess.Popen(
-        [sys.executable, str(ROOT / "scripts" / "watch_patterns.py"),
+        [sys.executable, str(ROOT / "scripts" / "watch_emerge.py"),
          "--runner-profile", "mycader-1",
          "--state-root", str(tmp_path)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,

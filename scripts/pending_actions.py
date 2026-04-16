@@ -4,7 +4,7 @@ from __future__ import annotations
 def format_pending_actions(actions: list) -> str:
     """Format a list of cockpit pending actions into a human-readable string.
 
-    Used by both watch_pending.py (Monitor tool path) and user_prompt_submit.py
+    Used by watch_emerge.py (Monitor tool path) and user_prompt_submit.py
     (UserPromptSubmit hook fallback path) to ensure consistent output.
     """
     lines = ["[Cockpit] The operator submitted the following actions — execute in order:"]
@@ -42,7 +42,7 @@ def format_pending_actions(actions: list) -> str:
 def format_pattern_alert(data: dict) -> str:
     """Format a pattern-alerts.json payload into a human-readable Monitor line.
 
-    Used by watch_patterns.py (operator-monitor alert path).
+    Used by watch_emerge.py (operator-monitor alert path).
     """
     stage = data.get("stage", "?")
     sig = data.get("intent_signature", "?")

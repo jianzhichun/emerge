@@ -9,7 +9,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.goal_control_plane import EVENT_HOOK_PAYLOAD, init_goal_control_plane  # noqa: E402
 from scripts.policy_config import REFLECTION_CACHE_TTL_MS, default_exec_root, default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
 from scripts.span_tracker import SpanTracker  # noqa: E402
 from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
@@ -52,21 +51,9 @@ def main() -> None:
     state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
     tracker = load_tracker(state_path)
-    goal_cp = init_goal_control_plane(state_root, tracker)
-    _mutated = False
-    if "goal" in payload:
-        goal_cp.ingest(
-            event_type=EVENT_HOOK_PAYLOAD,
-            source="hook_payload",
-            actor="UserPromptSubmit",
-            text=str(payload["goal"]),
-            rationale="UserPromptSubmit hook payload goal",
-            confidence=0.5,
-        )
-        _mutated = True
     turn_count = int(tracker.state.get("turn_count", 0) or 0) + 1
     tracker.state["turn_count"] = turn_count
-    _mutated = True
+    save_tracker(state_path, tracker)
 
     raw_budget = payload.get("budget_chars", 0)
     try:
@@ -75,12 +62,7 @@ def main() -> None:
             budget_chars = None
     except Exception:
         budget_chars = None
-    snap = goal_cp.read_snapshot()
-    context_text = tracker.format_additional_context(
-        budget_chars=budget_chars,
-        goal_override=str(snap.get("text", "")),
-        goal_source_override=str(snap.get("source", "unset")),
-    )
+    context_text = tracker.format_additional_context(budget_chars=budget_chars)
     if turn_count == _REFLECTION_TURN_THRESHOLD:
         exec_root = Path(os.environ.get("EMERGE_STATE_ROOT", str(default_exec_root())))
         reflection = SpanTracker(
@@ -90,8 +72,6 @@ def main() -> None:
         if reflection:
             context_text = reflection + "\n\n" + context_text
 
-    # Every N turns: remind CC to open a span if none is active.
-    # Skip turn-5 reminder when tool_audit already sent a one-shot nudge this session.
     active_span_id = str(tracker.state.get("active_span_id", "") or "")
     if not active_span_id and turn_count > 1 and turn_count % _SPAN_REMINDER_INTERVAL == 0:
         _skip_reminder = False
@@ -109,8 +89,6 @@ def main() -> None:
                 "e.g. 'lark.read.get-doc'."
             )
             context_text = reminder + "\n\n" + context_text
-    if _mutated:
-        save_tracker(state_path, tracker)
 
     pending_text = _drain_pending_actions(state_root)
     if pending_text:

@@ -13,7 +13,7 @@ function jsonResponse(payload: unknown, status = 200): Response {
 
 describe('api client', () => {
   it('calls /api/status', async () => {
-    const fetchMock: FetchMock = vi.fn(async () => jsonResponse({ ok: true, pending: false, server_online: true }));
+    const fetchMock: FetchMock = vi.fn(async () => jsonResponse({ ok: true, pending: false, cc_active: false }));
     const api = createApiClient({ baseUrl: 'http://localhost:8789', fetchImpl: fetchMock as typeof fetch });
 
     await api.getStatus();

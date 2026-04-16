@@ -2899,7 +2899,7 @@ def test_concurrent_tool_calls_each_get_correct_response():
     def call(i):
         return daemon.handle_jsonrpc({
             "jsonrpc": "2.0", "id": f"req-{i}", "method": "tools/call",
-            "params": {"name": "icc_goal_read", "arguments": {}}
+            "params": {"name": "icc_hub", "arguments": {"action": "list"}}
         })
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
@@ -3808,21 +3808,20 @@ def test_observer_plugin_emit_event_writes_to_eventbus(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# watch_patterns.py --runner-profile flag
+# watch_emerge.py --runner-profile flag
 # ---------------------------------------------------------------------------
 
 def test_watch_patterns_profile_arg_selects_correct_file(tmp_path):
-    """watch_patterns.py --runner-profile mycader-1 shims to watch_emerge.py, tailing events-mycader-1.jsonl."""
+    """watch_emerge.py --runner-profile mycader-1 tails events-mycader-1.jsonl."""
     import subprocess, time as _time, json as _j
 
-    # After shim, watch_patterns.py delegates to watch_emerge.py which tails events-{profile}.jsonl
     events_file = tmp_path / "events-mycader-1.jsonl"
     env = {
         **os.environ,
         "EMERGE_STATE_ROOT": str(tmp_path),
     }
     proc = subprocess.Popen(
-        [sys.executable, "scripts/watch_patterns.py", "--runner-profile", "mycader-1"],
+        [sys.executable, "scripts/watch_emerge.py", "--runner-profile", "mycader-1"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=env,

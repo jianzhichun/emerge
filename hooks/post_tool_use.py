@@ -17,7 +17,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.goal_control_plane import init_goal_control_plane  # noqa: E402
 from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
 from scripts.span_tracker import is_read_only_tool  # noqa: E402
 from scripts.state_tracker import (  # noqa: E402
@@ -126,7 +125,6 @@ def main() -> None:
         state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
     tracker = load_tracker(state_path)
-    goal_cp = init_goal_control_plane(state_root, tracker)
 
     tool_input = payload.get("tool_input", {}) or {}
     if not isinstance(tool_input, dict):
@@ -177,12 +175,7 @@ def main() -> None:
             budget_chars = None
     except Exception:
         budget_chars = None
-    snap = goal_cp.read_snapshot()
-    context_text = tracker.format_additional_context(
-        budget_chars=budget_chars,
-        goal_override=str(snap.get("text", "")),
-        goal_source_override=str(snap.get("source", "unset")),
-    )
+    context_text = tracker.format_additional_context(budget_chars=budget_chars)
 
     # Detect span skeleton ready — inject reminder so CC reviews it
     _short = _short_tool_name(tool_name)

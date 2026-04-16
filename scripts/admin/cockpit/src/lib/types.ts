@@ -44,8 +44,6 @@ export interface PolicyResponse extends ApiOkResponse {
   state_root?: string;
   registry_exists?: boolean;
   registry_corrupt?: boolean;
-  goal?: string;
-  goal_source?: string;
   pipeline_count?: number;
   thresholds?: PolicyThresholds;
   pipelines?: PolicyPipeline[];
@@ -67,7 +65,7 @@ export interface MonitorsResponse {
 
 export interface StatusResponse extends ApiOkResponse {
   pending?: boolean;
-  server_online?: boolean;
+  cc_active?: boolean;
 }
 
 export interface RunnerEvent extends JsonObject {
@@ -113,8 +111,6 @@ export interface HookFields {
   active_span_id?: string | null;
   active_span_intent?: string | null;
   span_nudge_sent?: boolean;
-  goal?: string;
-  goal_source?: string;
 }
 
 export interface RegisteredHookEntry {
@@ -191,34 +187,4 @@ export interface AssetConnector {
 
 export interface AssetsResponse {
   connectors?: Record<string, AssetConnector>;
-}
-
-export interface GoalResponse extends ApiOkResponse {
-  goal?: string;
-  goal_source?: string;
-  goal_version?: string | number;
-  goal_updated_at_ms?: string | number;
-}
-
-export interface GoalSetRequest {
-  goal: string;
-  lock_window_ms?: number;
-  force?: boolean;
-  [key: string]: unknown;
-}
-
-export interface GoalHistoryEvent extends JsonObject {
-  event_id?: string;
-  event_type?: string;
-  text?: string;
-  goal?: string;
-  ts_ms?: number;
-}
-
-export interface GoalHistoryResponse extends ApiOkResponse {
-  events?: GoalHistoryEvent[];
-}
-
-export interface GoalRollbackResponse extends ApiOkResponse {
-  target_event_id?: string;
 }

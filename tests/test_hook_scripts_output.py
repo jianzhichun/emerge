@@ -30,7 +30,7 @@ def _extract_flywheel_token(additional_context: str) -> dict:
 
 
 def test_session_start_and_user_prompt_submit_output_parseable(tmp_path: Path):
-    s_out = _run("session_start.py", {"goal": "Test goal"}, tmp_path)
+    s_out = _run("session_start.py", {}, tmp_path)
     s_json = json.loads(s_out)
     assert s_json["hookSpecificOutput"]["hookEventName"] == "SessionStart"
     assert "additionalContext" in s_json["hookSpecificOutput"]
@@ -38,7 +38,7 @@ def test_session_start_and_user_prompt_submit_output_parseable(tmp_path: Path):
     u_out = _run("user_prompt_submit.py", {"budget_chars": 120}, tmp_path)
     u_json = json.loads(u_out)
     assert u_json["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
-    assert "Goal" in u_json["hookSpecificOutput"]["additionalContext"]
+    assert "FLYWHEEL_TOKEN" in u_json["hookSpecificOutput"]["additionalContext"]
     token = _extract_flywheel_token(u_json["hookSpecificOutput"]["additionalContext"])
     assert token["schema_version"] == "flywheel.v1"
     assert "deltas" in token
@@ -467,14 +467,13 @@ def test_user_prompt_submit_drains_unprocessed_pending_actions(tmp_path: Path):
 
 
 def test_watch_pending_emits_and_renames(tmp_path: Path):
-    """watch_pending.py shims to watch_emerge.py, tailing events.jsonl for cockpit_action events."""
+    """watch_emerge.py tails events.jsonl for cockpit_action events."""
     import subprocess, time, signal
-    # After shim, watch_pending.py delegates to watch_emerge.py which tails events.jsonl
     events_file = tmp_path / "events.jsonl"
     env = os.environ.copy()
     env["EMERGE_STATE_ROOT"] = str(tmp_path)
     proc = subprocess.Popen(
-        ["python3", str(ROOT / "scripts" / "watch_pending.py")],
+        ["python3", str(ROOT / "scripts" / "watch_emerge.py")],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
     )
     time.sleep(0.3)

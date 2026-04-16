@@ -2,7 +2,7 @@
 
 All business logic lives in the sub-packages:
   scripts/admin/shared.py    — path resolvers, _local_plugin_version
-  scripts/admin/api.py       — SSE, cockpit HTML, goal, settings, status
+  scripts/admin/api.py       — SSE, cockpit HTML, settings, status
   scripts/admin/control_plane.py — all cmd_control_plane_* functions
   scripts/admin/pipeline.py  — pipeline/connector operations
   scripts/admin/cockpit.py   — CockpitHTTPServer and HTTP handlers
@@ -26,31 +26,13 @@ from scripts.admin.shared import (  # noqa: E402
     _resolve_connector_root,
 )
 from scripts.admin.api import (  # noqa: E402
-    _sse_clients,
-    _sse_lock,
-    _sse_broadcast,
-    _COCKPIT_INJECTED_HTML,
-    _COCKPIT_INJECT_LOCK,
-    _MAX_INJECTED_PER_CONNECTOR,
-    _injected_runtime_basename,
-    _cockpit_inject_html,
-    _cockpit_list_injected_html,
-    _validate_action,
-    _enrich_actions,
-    _cmd_set_goal,
-    _cmd_goal_history,
-    _cmd_goal_rollback,
-    _cmd_save_settings,
     cmd_status,
     cmd_clear,
-    cmd_assets,
-    cmd_submit_actions,
     render_policy_status_pretty,
 )
 from scripts.admin.control_plane import (  # noqa: E402
     _resolve_session_id,
     _session_paths,
-    _load_hook_state_summary,
     _span_policy_label,
     cmd_control_plane_state,
     cmd_control_plane_intents,
@@ -85,11 +67,8 @@ from scripts.admin.pipeline import (  # noqa: E402
 )
 from scripts.admin.cockpit import (  # noqa: E402
     _make_cockpit_handler,
-    _ReuseAddrTCPServer,
-    _CockpitHandler,
     _StandaloneDaemonStub,
     CockpitHTTPServer,
-    _cockpit_pid_path,
     cmd_serve,
     cmd_serve_stop,
 )

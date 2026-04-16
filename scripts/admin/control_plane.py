@@ -33,7 +33,6 @@ from scripts.policy_config import (  # noqa: E402
     derive_session_id,
     pin_plugin_data_path_if_present,
 )
-from scripts.goal_control_plane import GoalControlPlane  # noqa: E402
 from scripts.state_tracker import StateTracker, load_tracker, save_tracker  # noqa: E402
 
 
@@ -113,30 +112,6 @@ def cmd_control_plane_sessions(
         "ok": True,
         "current_session_id": current,
         "sessions": sessions[: max(1, int(limit or 200))],
-    }
-
-
-def _load_hook_state_summary() -> dict[str, str]:
-    pin_plugin_data_path_if_present()
-    root = Path(default_hook_state_root())
-    cp = GoalControlPlane(root)
-    legacy_state = root / "state.json"
-    if legacy_state.exists():
-        try:
-            raw = json.loads(legacy_state.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                cp.migrate_legacy_goal(
-                    legacy_goal=str(raw.get("goal", "")),
-                    legacy_source=str(raw.get("goal_source", "legacy")),
-                )
-        except Exception:
-            pass
-    snap = cp.read_snapshot()
-    return {
-        "goal": str(snap.get("text", "") or ""),
-        "goal_source": str(snap.get("source", "unset") or "unset"),
-        "goal_version": str(snap.get("version", 0)),
-        "goal_updated_at_ms": str(snap.get("updated_at_ms", 0)),
     }
 
 
@@ -264,14 +239,11 @@ def cmd_control_plane_session(session_id: str | None = None) -> dict:
 
 
 def cmd_control_plane_hook_state() -> dict:
-    """Hook state: fields tracked by hooks in state.json + goal snapshot + context injection preview."""
+    """Hook state: fields tracked by hooks in state.json + context injection preview."""
     hook_state_root = Path(default_hook_state_root())
     state_path = hook_state_root / "state.json"
     from scripts.span_tracker import SpanTracker
     tracker = load_tracker(state_path)
-    from scripts.goal_control_plane import init_goal_control_plane
-    goal_cp = init_goal_control_plane(hook_state_root, tracker)
-    snap = goal_cp.read_snapshot()
 
     raw_state: dict = {}
     if state_path.exists():
@@ -286,8 +258,6 @@ def cmd_control_plane_hook_state() -> dict:
         "active_span_id": state.get("active_span_id") or None,
         "active_span_intent": state.get("active_span_intent") or None,
         "span_nudge_sent": bool(raw_state.get("_span_nudge_sent")),
-        "goal": str(snap.get("text", "") or ""),
-        "goal_source": str(snap.get("source", "unset")),
     }
 
     try:
@@ -296,10 +266,7 @@ def cmd_control_plane_hook_state() -> dict:
             state_root=exec_root,
             hook_state_root=hook_state_root,
         ).format_reflection_with_cache(cache_ttl_ms=15 * 60 * 1000)
-        context_preview = tracker.format_additional_context(
-            goal_override=hook_fields["goal"],
-            goal_source_override=hook_fields["goal_source"],
-        )
+        context_preview = tracker.format_additional_context()
         if reflection:
             context_preview = reflection + "\n\n" + context_preview
         active_span = hook_fields["active_span_id"]

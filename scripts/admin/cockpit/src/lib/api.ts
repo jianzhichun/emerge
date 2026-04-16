@@ -3,10 +3,6 @@ import type {
   AssetsResponse,
   EventListResponse,
   EventQuery,
-  GoalResponse,
-  GoalHistoryResponse,
-  GoalSetRequest,
-  GoalRollbackResponse,
   MonitorsResponse,
   PolicyResponse,
   RunnerEventsRequest,
@@ -207,22 +203,10 @@ export function createApiClient(options: ApiClientOptions = {}) {
       }),
     getAssets: () =>
       request<AssetsResponse>('/api/assets'),
-    getGoal: () =>
-      request<GoalResponse>('/api/goal'),
-    getGoalHistory: (limit = 30) =>
-      request<GoalHistoryResponse>('/api/goal-history', {
-        query: { limit }
-      }),
-    rollbackGoal: (targetEventId: string) =>
-      request<GoalRollbackResponse>('/api/goal/rollback', {
-        method: 'POST',
-        body: { target_event_id: targetEventId }
-      }),
-    postGoal: (payload: GoalSetRequest, endpoint = '/api/goal') =>
-      request<GoalResponse>(endpoint, {
-        method: 'POST',
-        body: payload
-      })
+    getRunnerInstallUrl: () =>
+      request<{ ok: boolean; bash?: string; powershell?: string; team_lead_url?: string; error?: string }>(
+        '/api/control-plane/runner-install-url'
+      )
   };
 }
 

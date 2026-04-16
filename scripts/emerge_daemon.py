@@ -25,11 +25,6 @@ from scripts.policy_config import (  # noqa: E402
 from scripts.crystallizer import PipelineCrystallizer  # noqa: E402
 from scripts.runner_client import RunnerRouter  # noqa: E402
 from scripts.exec_session import ExecSession  # noqa: E402
-from scripts.goal_control_plane import (  # noqa: E402
-    EVENT_SYSTEM_REFINE,
-    GoalControlPlane,
-)
-
 _stdout_lock = threading.Lock()
 
 
@@ -81,9 +76,6 @@ class EmergeDaemon:
         self._last_seen_pending_ts: int = 0
         self._elicit_events: dict[str, threading.Event] = {}
         self._elicit_results: dict[str, dict] = {}
-        self._goal_control = GoalControlPlane(Path(default_hook_state_root()))
-        self._goal_control.ensure_initialized()
-        self._migrate_legacy_goal_once()
         from scripts.span_tracker import SpanTracker
         _hook_state_root = Path(default_hook_state_root())
         self._span_tracker = SpanTracker(
@@ -106,7 +98,6 @@ class EmergeDaemon:
         self._resource_handler = McpResourceHandler(
             state_root=lambda: self._state_root,
             pipeline=lambda: self.pipeline,
-            goal_control=self._goal_control,
             span_tracker=self._span_tracker,
             hook_state_path=self._hook_state_path,
         )
@@ -125,6 +116,13 @@ class EmergeDaemon:
             elicit=lambda *a, **kw: self._elicit(*a, **kw),
             is_http_mode=lambda: getattr(self, "_http_mode", False),
         )
+
+    def _cockpit_broadcast(self, event: dict) -> None:
+        """Forward event to cockpit SSE clients (no-op if not in HTTP mode)."""
+        http_srv = getattr(self, "_http_server", None)
+        if http_srv is None:
+            return
+        http_srv._notify_cockpit_broadcast(event)
 
     def _hook_state_path(self) -> Path:
         return Path(default_hook_state_root()) / "state.json"
@@ -147,25 +145,6 @@ class EmergeDaemon:
             atomic_write_json(self._intent_gate_path(), sorted(self._intent_gate))
         except Exception:
             pass
-
-    def _migrate_legacy_goal_once(self) -> None:
-        state_path = self._hook_state_path()
-        if not state_path.exists():
-            return
-        try:
-            data = json.loads(state_path.read_text(encoding="utf-8"))
-        except Exception:
-            return
-        if not isinstance(data, dict):
-            return
-        goal_text = str(data.get("goal", "") or "").strip()
-        goal_source = str(data.get("goal_source", "legacy") or "legacy")
-        if not goal_text:
-            return
-        try:
-            self._goal_control.migrate_legacy_goal(legacy_goal=goal_text, legacy_source=goal_source)
-        except Exception:
-            return
 
     def _read_runner_config_mtime(self) -> float:
         """Return mtime of runner-map.json, or 0.0 if file doesn't exist."""
@@ -381,9 +360,6 @@ class EmergeDaemon:
             }
 
     _TOOL_DISPATCH: dict[str, str] = {
-        "icc_goal_ingest":  "_handle_icc_goal_ingest",
-        "icc_goal_read":    "_handle_icc_goal_read",
-        "icc_goal_rollback": "_handle_icc_goal_rollback",
         "icc_span_open":    "_handle_icc_span_open",
         "icc_span_close":   "_handle_icc_span_close",
         "icc_span_approve": "_handle_icc_span_approve",
@@ -394,55 +370,23 @@ class EmergeDaemon:
         "runner_notify":    "_handle_runner_notify",
     }
 
+    _WRITE_TOOLS = frozenset({
+        "icc_exec", "icc_span_open", "icc_span_close", "icc_span_approve",
+        "icc_crystallize", "icc_reconcile", "icc_hub",
+    })
+
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         handler_name = self._TOOL_DISPATCH.get(name)
         if handler_name is None:
             return self._tool_error(f"Unknown tool: {name}")
-        return getattr(self, handler_name)(arguments)
+        result = getattr(self, handler_name)(arguments)
+        if name in self._WRITE_TOOLS:
+            self._cockpit_broadcast({"data_updated": True})
+        return result
 
     # ------------------------------------------------------------------
     # Per-tool handlers (one method per tool — no if/elif chain)
     # ------------------------------------------------------------------
-
-    def _handle_icc_goal_ingest(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        try:
-            result = self._goal_control.ingest(
-                event_type=str(arguments.get("event_type", EVENT_SYSTEM_REFINE)).strip(),
-                source=str(arguments.get("source", "system")).strip() or "system",
-                actor=str(arguments.get("actor", "daemon")).strip() or "daemon",
-                text=str(arguments.get("text", "")).strip(),
-                rationale=str(arguments.get("rationale", "")).strip(),
-                confidence=self._as_float(arguments.get("confidence", 0.8), 0.8),
-                context_match_score=self._as_float(arguments.get("context_match_score", 0.5), 0.5),
-                recent_failure_risk=self._as_float(arguments.get("recent_failure_risk", 0.0), 0.0),
-                ttl_ms=int(arguments.get("ttl_ms", 0) or 0),
-                lock_window_ms=int(arguments.get("lock_window_ms", 0) or 0),
-                force=bool(arguments.get("force", False)),
-                target_event_id=str(arguments.get("target_event_id", "")).strip(),
-            )
-        except Exception as exc:
-            return self._tool_error(f"icc_goal_ingest failed: {exc}")
-        return self._tool_ok_json(result)
-
-    def _handle_icc_goal_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        snapshot = self._goal_control.read_snapshot()
-        limit = int(arguments.get("limit", 30) or 30)
-        ledger = self._goal_control.read_ledger(limit=max(1, min(500, limit)))
-        return self._tool_ok_json({"snapshot": snapshot, "events": ledger})
-
-    def _handle_icc_goal_rollback(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        target_event_id = str(arguments.get("target_event_id", "")).strip()
-        if not target_event_id:
-            return self._tool_error("icc_goal_rollback: target_event_id is required")
-        try:
-            result = self._goal_control.rollback(
-                target_event_id=target_event_id,
-                actor=str(arguments.get("actor", "daemon") or "daemon"),
-                rationale=str(arguments.get("rationale", "") or ""),
-            )
-        except Exception as exc:
-            return self._tool_error(f"icc_goal_rollback failed: {exc}")
-        return self._tool_ok_json(result)
 
     def _handle_icc_span_open(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return self._span_handlers.handle_span_open(arguments)
@@ -576,7 +520,6 @@ class EmergeDaemon:
         tracker.reconcile_delta(delta_id, outcome)
         save_tracker(state_path, tracker)
         td = tracker.to_dict()
-        goal_snapshot = self._goal_control.read_snapshot()
         if outcome == "correct" and intent_signature:
             self._flywheel.increment_human_fix(intent_signature)
         return self._tool_ok_json({
@@ -584,9 +527,6 @@ class EmergeDaemon:
             "outcome": outcome,
             "intent_signature": intent_signature or None,
             "verification_state": td.get("verification_state", "unverified"),
-            "goal": goal_snapshot.get("text", ""),
-            "goal_source": goal_snapshot.get("source", "unset"),
-            "goal_version": goal_snapshot.get("version", 0),
         })
 
     def _handle_runner_notify(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -715,19 +655,7 @@ class EmergeDaemon:
                         {
                             "uriTemplate": "state://deltas",
                             "name": "State deltas",
-                            "description": "StateTracker goal, deltas, and risks",
-                            "mimeType": "application/json",
-                        },
-                        {
-                            "uriTemplate": "state://goal",
-                            "name": "Active goal snapshot",
-                            "description": "Goal Control Plane active goal decision snapshot",
-                            "mimeType": "application/json",
-                        },
-                        {
-                            "uriTemplate": "state://goal-ledger",
-                            "name": "Goal event ledger",
-                            "description": "Append-only goal event and decision audit log",
+                            "description": "StateTracker deltas and risks",
                             "mimeType": "application/json",
                         },
                     ]
@@ -917,13 +845,8 @@ class EmergeDaemon:
     def _on_pending_actions(self) -> None:
         """Called by EventRouter when pending-actions.json is created/modified.
 
-        Primary delivery: watch_pending.py (Monitor tool) prints actions to
-        stdout → CC conversation.  Fallback: UserPromptSubmit hook drains
-        .processed.json into additionalContext on the next user message.
-
-        This handler only renames the file so the fallback path can find it.
-        watch_pending.py may have already consumed the file; in that case
-        this is a no-op.
+        Renames to .processed.json so the UserPromptSubmit hook fallback can
+        drain it into additionalContext on the next user message.
         """
         pending_path = self._state_root / "pending-actions.json"
         if not pending_path.exists():

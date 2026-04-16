@@ -9,7 +9,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.goal_control_plane import init_goal_control_plane  # noqa: E402
 from scripts.policy_config import REFLECTION_CACHE_TTL_MS, default_exec_root, default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
 from scripts.span_tracker import SpanTracker  # noqa: E402
 from scripts.state_tracker import StateTracker, load_tracker, save_tracker  # noqa: E402
@@ -24,14 +23,8 @@ def main() -> None:
     state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
     tracker = load_tracker(state_path)
-    goal_cp = init_goal_control_plane(state_root, tracker)
-    snap = goal_cp.read_snapshot()
 
-    token = tracker.format_recovery_token(
-        budget_chars=_BUDGET_CHARS,
-        goal_override=str(snap.get("text", "")),
-        goal_source_override=str(snap.get("source", "unset")),
-    )
+    token = tracker.format_recovery_token(budget_chars=_BUDGET_CHARS)
     token_json = json.dumps(token, ensure_ascii=True, separators=(",", ":"))
     _SPAN_PROTOCOL = (
         "Span Protocol\n"
@@ -56,19 +49,15 @@ def main() -> None:
 
     context_text = (
         _SPAN_PROTOCOL + span_line + "\n\n" + reflection_block
-        + f"Goal\n{str(snap.get('text', '')) or 'Not set.'}\n\n"
-        f"Open Risks\n"
+        + f"Open Risks\n"
         + ("\n".join(f"- {r}" for r in token.get("open_risks", [])) or "- None.")
         + f"\n\nFLYWHEEL_TOKEN\n{token_json}"
     )
 
-    # Reset tracker so the next session starts fresh — stale deltas/risks are cleared.
+    # Reset tracker so the next session starts fresh.
     fresh = StateTracker()
     save_tracker(state_path, fresh)
 
-    # PreCompact does not accept `hookSpecificOutput` —
-    # use top-level `systemMessage` so the recovery token survives compaction.
-    # The next UserPromptSubmit hook will re-inject the FLYWHEEL_TOKEN as a safety net.
     out = {"systemMessage": context_text}
     print(json.dumps(out))
 

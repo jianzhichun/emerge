@@ -70,8 +70,9 @@
     pipelineEvents: JsonObject[];
   }): StateRow[] {
     const out: StateRow[] = [];
+    let seq = 0;
     (payload.deltas || []).forEach((d) => {
-      const key = `delta:${toText(d.id)}`;
+      const key = `delta:${toText(d.id) || ++seq}`;
       out.push({
         key,
         kind: 'delta',
@@ -83,7 +84,7 @@
       });
     });
     (payload.risks || []).forEach((r) => {
-      const key = `risk:${toText(r.risk_id)}`;
+      const key = `risk:${toText(r.risk_id) || ++seq}`;
       out.push({
         key,
         kind: 'risk',
@@ -95,7 +96,7 @@
       });
     });
     (payload.spans || []).forEach((s) => {
-      const key = `span:${toText(s.span_id) || `${s.closed_at_ms || 0}:${toText(s.intent_signature)}`}`;
+      const key = `span:${toText(s.span_id) || `${s.closed_at_ms || 0}:${toText(s.intent_signature)}:${++seq}`}`;
       out.push({
         key,
         kind: 'span',
@@ -106,8 +107,8 @@
         data: s
       });
     });
-    (payload.execEvents || []).forEach((e) => {
-      const key = `exec-event:${e.ts_ms || 0}:${toText(e.intent_signature)}`;
+    (payload.execEvents || []).forEach((e, i) => {
+      const key = `exec-event:${i}:${e.ts_ms || 0}:${toText(e.intent_signature)}`;
       out.push({
         key,
         kind: 'exec-event',
@@ -118,9 +119,9 @@
         data: e
       });
     });
-    (payload.pipelineEvents || []).forEach((e) => {
+    (payload.pipelineEvents || []).forEach((e, i) => {
       const pipeId = toText(e.pipeline_id) || toText(e.intent_signature) || '';
-      const key = `pipeline-event:${e.ts_ms || 0}:${pipeId}`;
+      const key = `pipeline-event:${i}:${e.ts_ms || 0}:${pipeId}`;
       out.push({
         key,
         kind: 'pipeline-event',

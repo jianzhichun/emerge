@@ -27,8 +27,6 @@ def test_add_delta_without_intent_defaults_to_none():
 
 def test_normalize_state_fills_missing_delta_fields():
     raw = {
-        "goal": "",
-        "goal_source": "unset",
         "open_risks": [],
         "deltas": [
             {
@@ -70,8 +68,6 @@ def test_add_risk_dedup_by_text():
 
 def test_normalize_state_migrates_bare_string_risks():
     raw = {
-        "goal": "",
-        "goal_source": "unset",
         "open_risks": ["bare risk string", "another risk"],
         "deltas": [],
         "verification_state": "verified",

@@ -5,18 +5,15 @@ import type { HookStateResponse, SessionResponse, SessionSummary, SessionsRespon
 export interface SessionStoreState {
   loading: boolean;
   error: string | null;
-  lastUpdatedMs: number | null;
   currentSessionId: string | null;
   sessions: SessionSummary[];
   session: SessionResponse | null;
-  /** From `GET /api/control-plane/hook-state` (same as legacy cockpit shell). */
   hookPlane: HookStateResponse | null;
 }
 
 const initialState: SessionStoreState = {
   loading: false,
   error: null,
-  lastUpdatedMs: null,
   currentSessionId: null,
   sessions: [],
   session: null,
@@ -34,11 +31,10 @@ function toErrorMessage(error: unknown): string {
 }
 
 function createSessionStore() {
-  const { subscribe, update, set } = writable<SessionStoreState>(initialState);
+  const { subscribe, update } = writable<SessionStoreState>(initialState);
 
   return {
     subscribe,
-    reset: () => set(initialState),
     refresh: async (sessionId?: string): Promise<{ sessions: SessionsResponse; session: SessionResponse }> => {
       update((state) => ({ ...state, loading: true, error: null }));
       try {
@@ -55,7 +51,6 @@ function createSessionStore() {
           ...state,
           loading: false,
           error: null,
-          lastUpdatedMs: Date.now(),
           currentSessionId: sessionsPayload.current_session_id ?? null,
           sessions: sessionsPayload.sessions ?? [],
           session: sessionPayload,

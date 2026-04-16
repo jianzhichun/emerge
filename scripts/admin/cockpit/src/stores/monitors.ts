@@ -5,7 +5,6 @@ import type { MonitorRunner, MonitorsResponse, RunnerEventsResponse } from '../l
 export interface MonitorsStoreState {
   loading: boolean;
   error: string | null;
-  lastUpdatedMs: number | null;
   runners: MonitorRunner[];
   teamActive: boolean;
   expandedFeeds: Record<string, boolean>;
@@ -16,7 +15,6 @@ export interface MonitorsStoreState {
 const initialState: MonitorsStoreState = {
   loading: false,
   error: null,
-  lastUpdatedMs: null,
   runners: [],
   teamActive: false,
   expandedFeeds: {},
@@ -35,11 +33,10 @@ function toErrorMessage(error: unknown): string {
 }
 
 function createMonitorsStore() {
-  const { subscribe, update, set } = writable<MonitorsStoreState>(initialState);
+  const { subscribe, update } = writable<MonitorsStoreState>(initialState);
 
   return {
     subscribe,
-    reset: () => set(initialState),
     refresh: async (): Promise<MonitorsResponse> => {
       update((state) => ({ ...state, loading: true, error: null }));
       try {
@@ -48,7 +45,6 @@ function createMonitorsStore() {
           ...state,
           loading: false,
           error: null,
-          lastUpdatedMs: Date.now(),
           runners: payload.runners ?? [],
           teamActive: Boolean(payload.team_active)
         }));

@@ -141,12 +141,12 @@ def test_permission_denied_no_retry_for_bash(tmp_path):
     assert json.loads(out).get("retry") is not True
 
 
-def test_permission_denied_retry_for_icc_goal_read(tmp_path):
-    """icc_goal_read IS an icc_ tool — expect retry: true."""
+def test_permission_denied_retry_for_icc_hub(tmp_path):
+    """icc_hub IS an icc_ tool — expect retry: true."""
     rc, out, err = _run(
         PERMISSION_DENIED_HOOK,
         {"hook_event_name": "PermissionDenied",
-         "tool_name": "mcp__plugin_emerge_emerge__icc_goal_read"},
+         "tool_name": "mcp__plugin_emerge_emerge__icc_hub"},
         tmp_path,
     )
     assert rc == 0

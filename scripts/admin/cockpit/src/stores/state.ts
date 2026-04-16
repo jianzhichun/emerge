@@ -3,9 +3,7 @@ import { api, ApiRequestError } from '../lib/api';
 import type { DeltaItem, RiskItem, StateResponse } from '../lib/types';
 
 export interface StateStoreState {
-  loading: boolean;
   error: string | null;
-  lastUpdatedMs: number | null;
   verificationState: string | null;
   deltas: DeltaItem[];
   risks: RiskItem[];
@@ -14,9 +12,7 @@ export interface StateStoreState {
 }
 
 const initialState: StateStoreState = {
-  loading: false,
   error: null,
-  lastUpdatedMs: null,
   verificationState: null,
   deltas: [],
   risks: [],
@@ -35,20 +31,16 @@ function toErrorMessage(error: unknown): string {
 }
 
 function createStateStore() {
-  const { subscribe, update, set } = writable<StateStoreState>(initialState);
+  const { subscribe, update } = writable<StateStoreState>(initialState);
 
   return {
     subscribe,
-    reset: () => set(initialState),
     refresh: async (): Promise<StateResponse> => {
-      update((state) => ({ ...state, loading: true, error: null }));
       try {
         const payload = await api.getState();
         update((state) => ({
           ...state,
-          loading: false,
           error: null,
-          lastUpdatedMs: Date.now(),
           verificationState: payload.verification_state ?? null,
           deltas: payload.deltas ?? [],
           risks: payload.risks ?? [],
@@ -59,7 +51,6 @@ function createStateStore() {
       } catch (error) {
         update((state) => ({
           ...state,
-          loading: false,
           error: toErrorMessage(error)
         }));
         throw error;

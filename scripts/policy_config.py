@@ -70,14 +70,6 @@ def default_hook_state_root() -> Path:
     return resolve_plugin_data_root()
 
 
-def default_goal_snapshot_path() -> Path:
-    return default_hook_state_root() / "goal-snapshot.json"
-
-
-def default_goal_ledger_path() -> Path:
-    return default_hook_state_root() / "goal-ledger.jsonl"
-
-
 def pin_plugin_data_path_if_present() -> None:
     """Keep ~/.emerge/plugin_data_path in sync with current hook env when available."""
     plugin_data = _os.environ.get("CLAUDE_PLUGIN_DATA", "").strip()

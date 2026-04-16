@@ -1,6 +1,7 @@
 <script lang="ts">
   import { get } from 'svelte/store';
   import { onMount } from 'svelte';
+  import { api } from '../../lib/api';
   import type { MonitorRunner } from '../../lib/types';
   import { monitorsStore } from '../../stores/monitors';
   import RunnerCard from './RunnerCard.svelte';
@@ -14,6 +15,12 @@
   let refreshInFlight = false;
   let pendingRefresh = false;
   let observedRefreshSignal = refreshSignal;
+
+  let installBash = '';
+  let installPs = '';
+  let installError = '';
+  let installLoading = false;
+  let copiedField: string | null = null;
 
   function profileOf(runner: MonitorRunner): string {
     return typeof runner.runner_profile === 'string' ? runner.runner_profile : '';
@@ -91,9 +98,36 @@
     void queueRefresh();
   }
 
+  async function loadInstallUrl(): Promise<void> {
+    installLoading = true;
+    installError = '';
+    try {
+      const data = await api.getRunnerInstallUrl();
+      if (data.ok) {
+        installBash = data.bash ?? '';
+        installPs = data.powershell ?? '';
+      } else {
+        installError = data.error ?? 'Failed to generate install URL';
+      }
+    } catch (e) {
+      installError = e instanceof Error ? e.message : String(e);
+    } finally {
+      installLoading = false;
+    }
+  }
+
+  function copyToClipboard(text: string, field: string): void {
+    void navigator.clipboard.writeText(text);
+    copiedField = field;
+    setTimeout(() => {
+      if (copiedField === field) copiedField = null;
+    }, 1500);
+  }
+
   onMount(() => {
     startPolling();
     void queueRefresh();
+    void loadInstallUrl();
     return () => {
       stopPolling();
     };
@@ -118,10 +152,36 @@
     <p class="error-text">Error loading monitors: {$monitorsStore.error}</p>
   {/if}
 
+  <div class="install-panel">
+    <div class="install-head">Add Runner</div>
+    {#if installLoading}
+      <p class="install-hint">Loading install commands…</p>
+    {:else if installError}
+      <p class="install-hint install-err">{installError}</p>
+    {:else if installBash}
+      <div class="install-row">
+        <span class="install-label">Linux / macOS</span>
+        <code class="install-cmd">{installBash}</code>
+        <button type="button" class="cp-btn-sm" on:click={() => copyToClipboard(installBash, 'bash')}>
+          {copiedField === 'bash' ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      {#if installPs}
+        <div class="install-row">
+          <span class="install-label">Windows</span>
+          <code class="install-cmd">{installPs}</code>
+          <button type="button" class="cp-btn-sm" on:click={() => copyToClipboard(installPs, 'ps')}>
+            {copiedField === 'ps' ? 'Copied' : 'Copy'}
+          </button>
+        </div>
+      {/if}
+      <p class="install-hint">Paste in the target machine's terminal. The runner connects automatically.</p>
+    {/if}
+  </div>
+
   {#if !runnerCount && !$monitorsStore.loading}
     <div class="empty-state">
-      <div>No runners connected.</div>
-      <div class="empty-hint">Run the install script on the target machine - it connects automatically.</div>
+      <div>No runners connected yet.</div>
     </div>
   {:else}
     <div class="card-grid">
@@ -193,16 +253,62 @@
     gap: 1rem;
   }
 
+  .install-panel {
+    border: 1px solid #21262d;
+    border-radius: 0.4rem;
+    background: #161b22;
+    padding: 0.6rem 0.75rem;
+  }
+
+  .install-head {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #e6edf3;
+    margin-bottom: 0.5rem;
+  }
+
+  .install-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+  }
+
+  .install-label {
+    font-size: 0.64rem;
+    color: #8b949e;
+    min-width: 6.5rem;
+    flex-shrink: 0;
+  }
+
+  .install-cmd {
+    flex: 1;
+    font-size: 0.64rem;
+    color: #79c0ff;
+    background: #0d1117;
+    border: 1px solid #21262d;
+    border-radius: 4px;
+    padding: 0.3rem 0.5rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .install-hint {
+    font-size: 0.62rem;
+    color: #484f58;
+    margin: 0.3rem 0 0;
+  }
+
+  .install-err {
+    color: #f85149;
+  }
+
   .empty-state {
     text-align: center;
     color: #484f58;
     padding: 2.5rem 1rem;
-  }
-
-  .empty-hint {
-    margin-top: 0.45rem;
-    font-size: 11px;
-    color: #484f58;
   }
 
   .error-text {

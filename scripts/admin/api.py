@@ -6,11 +6,10 @@ without a running server.
 
 Control-plane functions live in admin.control_plane; pipeline/connector
 operations in admin.pipeline; shared resolvers in admin.shared.
-This module keeps SSE, cockpit HTML, goal, settings, and status commands.
+This module keeps SSE, cockpit HTML, settings, and status commands.
 """
 from __future__ import annotations
 
-import io as _io
 import json
 import shutil
 import threading
@@ -33,42 +32,14 @@ from scripts.policy_config import (  # noqa: E402
     STABLE_MIN_SUCCESS_RATE,
     STABLE_MIN_VERIFY_RATE,
     atomic_write_json,
-    default_hook_state_root,
 )
 from scripts.admin.shared import _resolve_state_root, _resolve_repl_root, _resolve_connector_root, _local_plugin_version  # noqa: E402
 from scripts.admin.control_plane import _session_paths, _resolve_session_id  # noqa: E402
-from scripts.goal_control_plane import EVENT_HUMAN_EDIT, GoalControlPlane  # noqa: E402
 from scripts.state_tracker import StateTracker, load_tracker, save_tracker  # noqa: E402
-
-# ---------------------------------------------------------------------------
-# SSE client registry (for standalone cockpit HTTP server)
-# ---------------------------------------------------------------------------
-
-_sse_clients: list[_io.RawIOBase] = []
-_sse_lock = threading.Lock()
-
-
-def _sse_broadcast(event: dict) -> None:
-    """Push event to all connected SSE clients; silently drop dead connections."""
-    data = f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
-    with _sse_lock:
-        dead = []
-        for wfile in _sse_clients:
-            try:
-                wfile.write(data)
-                wfile.flush()
-            except OSError:
-                dead.append(wfile)
-        for d in dead:
-            _sse_clients.remove(d)
-
 
 # ---------------------------------------------------------------------------
 # Cockpit HTML injection helpers
 # ---------------------------------------------------------------------------
-
-_COCKPIT_INJECTED_HTML: dict[str, list[dict]] = {}
-_COCKPIT_INJECT_LOCK = threading.Lock()
 
 _MAX_INJECTED_PER_CONNECTOR = 50
 
@@ -78,12 +49,10 @@ def _injected_runtime_basename(i: int) -> str:
 
 
 def _cockpit_inject_html(connector: str, html: str, slot_id: str | None = None,
-                         *, store: dict | None = None, lock: threading.Lock | None = None) -> None:
+                         *, store: dict, lock: threading.Lock) -> None:
     """Inject or update an HTML component slot."""
-    d = store if store is not None else _COCKPIT_INJECTED_HTML
-    lk = lock if lock is not None else _COCKPIT_INJECT_LOCK
-    with lk:
-        slots = d.setdefault(connector, [])
+    with lock:
+        slots = store.setdefault(connector, [])
         if slot_id is not None:
             for i, s in enumerate(slots):
                 if s.get("id") == slot_id:
@@ -93,12 +62,11 @@ def _cockpit_inject_html(connector: str, html: str, slot_id: str | None = None,
         else:
             slots.append({"id": None, "html": html})
         if len(slots) > _MAX_INJECTED_PER_CONNECTOR:
-            d[connector] = slots[-_MAX_INJECTED_PER_CONNECTOR:]
+            store[connector] = slots[-_MAX_INJECTED_PER_CONNECTOR:]
 
 
-def _cockpit_list_injected_html(connector: str, store: dict | None = None) -> list[str]:
-    d = store if store is not None else _COCKPIT_INJECTED_HTML
-    return [s["html"] for s in d.get(connector, [])]
+def _cockpit_list_injected_html(connector: str, store: dict) -> list[str]:
+    return [s["html"] for s in store.get(connector, [])]
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +102,7 @@ def cmd_clear() -> dict:
     }
 
 
-def cmd_assets(injected_html: dict | None = None) -> dict:
+def cmd_assets(injected_html: dict) -> dict:
     """Return per-connector assets: notes content and crystallized components."""
     try:
         connector_root = _resolve_connector_root()
@@ -304,72 +272,6 @@ def _enrich_actions(actions: list) -> list:
     return enriched
 
 
-# ---------------------------------------------------------------------------
-# Goal management helpers (cockpit internal)
-# ---------------------------------------------------------------------------
-
-def _cmd_set_goal(body: dict) -> dict:
-    """Submit a human_edit goal event and return the active snapshot."""
-    goal = str(body.get("goal", "")).strip()
-    if len(goal) > 120:
-        return {"ok": False, "error": "goal must be ≤ 120 characters"}
-    lock_window_ms = int(body.get("lock_window_ms", 10 * 60 * 1000) or 0)
-    force = bool(body.get("force", False))
-    cp = GoalControlPlane(Path(default_hook_state_root()))
-    outcome = cp.ingest(
-        event_type=EVENT_HUMAN_EDIT,
-        source="cockpit",
-        actor="cockpit",
-        text=goal,
-        rationale="cockpit manual goal update",
-        confidence=1.0,
-        lock_window_ms=lock_window_ms,
-        force=force,
-    )
-    snap = outcome.get("snapshot", {})
-    return {
-        "ok": True,
-        "accepted": bool(outcome.get("accepted", False)),
-        "reason": str(outcome.get("reason", "")),
-        "goal": str(snap.get("text", "")),
-        "goal_source": str(snap.get("source", "unset")),
-        "goal_version": int(snap.get("version", 0)),
-        "goal_updated_at_ms": int(snap.get("updated_at_ms", 0)),
-        "event_id": str(outcome.get("event_id", "")),
-    }
-
-
-def _cmd_goal_history(limit: int = 50) -> dict:
-    cp = GoalControlPlane(Path(default_hook_state_root()))
-    return {"ok": True, "events": cp.read_ledger(limit=limit)}
-
-
-def _cmd_goal_rollback(body: dict) -> dict:
-    target_event_id = str(body.get("target_event_id", "")).strip()
-    if not target_event_id:
-        return {"ok": False, "error": "target_event_id is required"}
-    cp = GoalControlPlane(Path(default_hook_state_root()))
-    try:
-        result = cp.rollback(
-            target_event_id=target_event_id,
-            actor="cockpit",
-            rationale="cockpit rollback request",
-        )
-    except ValueError as exc:
-        return {"ok": False, "error": str(exc)}
-    snap = result.get("snapshot", {})
-    return {
-        "ok": True,
-        "accepted": bool(result.get("accepted", False)),
-        "reason": str(result.get("reason", "")),
-        "goal": str(snap.get("text", "")),
-        "goal_source": str(snap.get("source", "unset")),
-        "goal_version": int(snap.get("version", 0)),
-        "goal_updated_at_ms": int(snap.get("updated_at_ms", 0)),
-        "event_id": str(result.get("event_id", "")),
-    }
-
-
 def _cmd_save_settings(patch: dict) -> dict:
     """Merge *patch* into ~/.emerge/settings.json and reset the settings cache."""
     from scripts.policy_config import (
@@ -439,8 +341,6 @@ def render_policy_status_pretty(data: dict) -> str:
     lines: list[str] = []
     lines.append(f"Session: {data.get('session_id', '')}")
     lines.append(f"State root: {data.get('state_root', '')}")
-    lines.append(f"Goal: {data.get('goal', '')}")
-    lines.append(f"Goal source: {data.get('goal_source', 'unset')}")
     lines.append("")
     lines.append("Thresholds:")
     thresholds = data.get("thresholds", {})

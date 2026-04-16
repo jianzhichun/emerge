@@ -11,7 +11,7 @@ Behaviour:
   crystallization review.
 - Always (when span active): append to active-span-actions.jsonl (span WAL)
 
-Intentionally avoids importing GoalControlPlane / StateTracker to keep the
+Intentionally avoids importing StateTracker to keep the
 no-span path lightweight. The span-delta path does a single raw JSON read+write.
 """
 from __future__ import annotations

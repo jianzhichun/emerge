@@ -25,13 +25,11 @@ class McpResourceHandler:
         *,
         state_root: "Callable[[], Path]",  # callable so tests can update daemon._state_root after init
         pipeline: "Callable[[], Any]",   # callable returning PipelineEngine
-        goal_control: Any,      # GoalControlPlane
         span_tracker: Any,      # SpanTracker
         hook_state_path: Callable[[], Path],
     ) -> None:
         self._get_state_root = state_root
         self._get_pipeline = pipeline
-        self._goal_control = goal_control
         self._span_tracker = span_tracker
         self._hook_state_path = hook_state_path
 
@@ -60,19 +58,7 @@ class McpResourceHandler:
                 "uri": "state://deltas",
                 "name": "State tracker deltas",
                 "mimeType": "application/json",
-                "description": "Session goal, recorded deltas, and open risks",
-            },
-            {
-                "uri": "state://goal",
-                "name": "Goal control snapshot",
-                "mimeType": "application/json",
-                "description": "Current active goal and decision metadata",
-            },
-            {
-                "uri": "state://goal-ledger",
-                "name": "Goal control ledger",
-                "mimeType": "application/json",
-                "description": "Recent goal events and decision outcomes",
+                "description": "Recorded deltas and open risks for the current session",
             },
         ]
 
@@ -174,19 +160,7 @@ class McpResourceHandler:
             from scripts.state_tracker import load_tracker
             tracker = load_tracker(self._hook_state_path())
             data = tracker.to_dict()
-            snapshot = self._goal_control.read_snapshot()
-            data["goal"] = snapshot.get("text", "")
-            data["goal_source"] = snapshot.get("source", "unset")
-            data["goal_version"] = snapshot.get("version", 0)
             return {"uri": uri, "mimeType": "application/json", "text": json.dumps(data)}
-
-        if uri == "state://goal":
-            snapshot = self._goal_control.read_snapshot()
-            return {"uri": uri, "mimeType": "application/json", "text": json.dumps(snapshot)}
-
-        if uri == "state://goal-ledger":
-            rows = self._goal_control.read_ledger(limit=500)
-            return {"uri": uri, "mimeType": "application/json", "text": json.dumps({"events": rows})}
 
         if uri.startswith("pipeline://"):
             rest = uri[len("pipeline://"):]
