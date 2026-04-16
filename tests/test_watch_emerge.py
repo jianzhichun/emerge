@@ -72,6 +72,33 @@ def test_watch_emerge_exits_on_sigterm(tmp_path):
     assert proc.returncode is not None
 
 
+def test_watch_emerge_global_writes_cockpit_ack(tmp_path):
+    events_file = tmp_path / "events.jsonl"
+    event_id = "cockpit-watch-test-1"
+
+    proc = subprocess.Popen(
+        [sys.executable, str(ROOT / "scripts" / "watch_emerge.py"),
+         "--state-root", str(tmp_path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    time.sleep(0.3)
+
+    _write_event(events_file, {
+        "type": "cockpit_action",
+        "event_id": event_id,
+        "ts_ms": 1000,
+        "actions": [{"type": "pipeline-delete", "key": "x"}],
+    })
+    time.sleep(0.7)
+    proc.terminate()
+    proc.wait(timeout=3)
+
+    ack_file = tmp_path / "cockpit-action-acks.jsonl"
+    assert ack_file.exists()
+    ack = json.loads(ack_file.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert ack["event_id"] == event_id
+
+
 def test_watch_patterns_shim_delegates_to_watch_emerge(tmp_path):
     """watch_emerge.py --runner-profile tails per-runner events."""
     events_file = tmp_path / "events-mycader-1.jsonl"

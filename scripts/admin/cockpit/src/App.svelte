@@ -51,6 +51,9 @@
   let stateRefreshSignal = 0;
   let serverPending = false;
   let ccActive = false;
+  let hasCockpitSubmission = false;
+  let cockpitAckPending = false;
+  let cockpitAckLagMs: number | null = null;
   let queueSubmitting = false;
   let statusMessage: string | null = null;
   let sseStatus = 'idle';
@@ -155,9 +158,16 @@
       const response = await api.getStatus();
       serverPending = Boolean(response.pending);
       ccActive = Boolean(response.cc_active);
+      hasCockpitSubmission = Boolean(response.last_cockpit_event_id);
+      cockpitAckPending = Boolean(response.cockpit_ack_pending);
+      cockpitAckLagMs =
+        typeof response.cockpit_ack_lag_ms === 'number' ? response.cockpit_ack_lag_ms : null;
     } catch {
       serverPending = false;
       ccActive = false;
+      hasCockpitSubmission = false;
+      cockpitAckPending = false;
+      cockpitAckLagMs = null;
     }
   }
 
@@ -354,6 +364,15 @@
     : ccActive
       ? '● CC connected'
       : '○ CC idle';
+  $: cockpitDeliveryText = !daemonOnline
+    ? '· dispatch unknown'
+    : !hasCockpitSubmission
+      ? '· no cockpit actions'
+      : cockpitAckPending
+        ? '⏳ cockpit pending consumption'
+        : cockpitAckLagMs == null
+          ? '✓ cockpit consumed'
+          : `✓ cockpit consumed (${cockpitAckLagMs}ms)`;
 
   $: sessionDropdownOptions = [
     { value: '', label: '(default/current)' },
@@ -453,6 +472,7 @@
   </section>
   <div class="status-bar">
     <span class="status-msg">{statusMessage ?? 'Ready'}</span>
+    <span class={`delivery-indicator ${cockpitAckPending ? 'pending' : 'ok'}`}>{cockpitDeliveryText}</span>
     <span class={`cc-indicator ${!daemonOnline ? 'connecting' : ccActive ? 'online' : 'idle'}`}>{ccIndicatorText}</span>
   </div>
 
@@ -607,6 +627,19 @@
   }
 
   .cc-indicator.connecting {
+    color: #d29922;
+  }
+
+  .delivery-indicator {
+    font-size: 11px;
+    color: #8b949e;
+  }
+
+  .delivery-indicator.ok {
+    color: #3fb950;
+  }
+
+  .delivery-indicator.pending {
     color: #d29922;
   }
 

@@ -126,6 +126,9 @@ def test_serve_get_status_returns_ok(tmp_path, monkeypatch):
     assert data["server_online"] is True
     assert isinstance(data["pending"], bool)
     assert isinstance(data["cc_active"], bool)
+    assert "cockpit_ack_pending" in data
+    assert "last_cockpit_event_id" in data
+    assert "last_cockpit_ack_event_id" in data
 
 
 def test_serve_get_reflection_cache_endpoint(tmp_path, monkeypatch):
@@ -157,14 +160,59 @@ def test_serve_submit_writes_events_jsonl(tmp_path, monkeypatch):
     with urllib.request.urlopen(req) as resp:
         submit = json.loads(resp.read())
     assert submit["ok"] is True
+    assert str(submit.get("event_id", "")).startswith("cockpit-")
 
     events_path = repl_root / "events.jsonl"
     assert events_path.exists()
     lines = events_path.read_text(encoding="utf-8").strip().splitlines()
     event = json.loads(lines[-1])
     assert event["type"] == "cockpit_action"
+    assert event.get("event_id") == submit.get("event_id")
     assert len(event["actions"]) == 1
     assert event["actions"][0]["type"] == "pipeline-delete"
+
+
+def test_serve_status_reports_ack_progress(tmp_path, monkeypatch):
+    """Status should expose cockpit ack progress fields."""
+    repl_root = tmp_path / "repl-root"
+    monkeypatch.setenv("EMERGE_REPL_ROOT", str(repl_root))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(repl_root))
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
+    (tmp_path / "connectors").mkdir(exist_ok=True)
+
+    from scripts.repl_admin import cmd_serve
+    base = cmd_serve(port=0, open_browser=False)["url"]
+
+    event_id = "cockpit-test-event"
+    (repl_root / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "cockpit_action",
+                "event_id": event_id,
+                "ts_ms": 1000,
+                "actions": [{"type": "pipeline-delete", "key": "x"}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with urllib.request.urlopen(f"{base}/api/status") as resp:
+        pending = json.loads(resp.read())
+    assert pending["cockpit_ack_pending"] is True
+    assert pending["pending"] is True
+    assert pending["last_cockpit_event_id"] == event_id
+
+    (repl_root / "cockpit-action-acks.jsonl").write_text(
+        json.dumps({"event_id": event_id, "event_ts_ms": 1000, "ack_ts_ms": 1200}) + "\n",
+        encoding="utf-8",
+    )
+    with urllib.request.urlopen(f"{base}/api/status") as resp:
+        acked = json.loads(resp.read())
+    assert acked["cockpit_ack_pending"] is False
+    assert acked["pending"] is False
+    assert acked["last_cockpit_ack_event_id"] == event_id
+    assert acked["cockpit_ack_lag_ms"] == 200
 
 
 def test_serve_get_root_returns_html(tmp_path, monkeypatch):

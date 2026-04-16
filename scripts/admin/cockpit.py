@@ -14,6 +14,7 @@ import socketserver
 import threading
 import time
 import urllib.parse
+import uuid
 import webbrowser
 from pathlib import Path
 
@@ -59,6 +60,66 @@ from scripts.admin.runner import cmd_runner_install_url
 _SESSION_ID_PARAM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_STATUS_TAIL_BYTES = 256 * 1024
+
+
+def _load_recent_jsonl(path: Path, max_tail_bytes: int = _STATUS_TAIL_BYTES) -> list[dict]:
+    """Load recent JSON lines from file tail (best-effort)."""
+    if not path.exists():
+        return []
+    try:
+        size = path.stat().st_size
+        start = max(0, size - max_tail_bytes)
+        with path.open("rb") as f:
+            f.seek(start)
+            data = f.read().decode("utf-8", errors="ignore")
+        rows = []
+        for line in data.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                rows.append(value)
+        return rows
+    except OSError:
+        return []
+
+
+def _latest_cockpit_dispatch_status(state_root: Path) -> dict:
+    events = _load_recent_jsonl(state_root / "events.jsonl")
+    acks = _load_recent_jsonl(state_root / "cockpit-action-acks.jsonl")
+    last_event = None
+    for row in reversed(events):
+        if row.get("type") == "cockpit_action":
+            last_event = row
+            break
+    last_ack = acks[-1] if acks else None
+    event_id = str((last_event or {}).get("event_id", "")).strip() or None
+    event_ts = int((last_event or {}).get("ts_ms", 0) or 0) or None
+    ack_event_id = str((last_ack or {}).get("event_id", "")).strip() or None
+    ack_ts = int((last_ack or {}).get("ack_ts_ms", 0) or 0) or None
+    ack_pending = bool(event_id and event_id != ack_event_id)
+    ack_lag_ms = None
+    if (
+        event_id
+        and ack_event_id
+        and event_id == ack_event_id
+        and event_ts is not None
+        and ack_ts is not None
+    ):
+        ack_lag_ms = max(0, ack_ts - event_ts)
+    return {
+        "last_cockpit_event_id": event_id,
+        "last_cockpit_event_ts_ms": event_ts,
+        "last_cockpit_ack_event_id": ack_event_id,
+        "last_cockpit_ack_ts_ms": ack_ts,
+        "cockpit_ack_pending": ack_pending,
+        "cockpit_ack_lag_ms": ack_lag_ms,
+    }
 
 
 def _parse_netloc_host_port(netloc: str) -> tuple[str, int | None]:
@@ -162,13 +223,23 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/status":
             import time as _t_status
             _CC_ACTIVE_WINDOW_S = 120
+            state_root = _resolve_repl_root()
             last_mcp_ts = 0.0
             if self._cockpit is not None:
                 hsrv = getattr(self._cockpit, "_http_srv", None)
                 if hsrv is not None:
                     last_mcp_ts = getattr(hsrv, "_last_mcp_ts", 0.0)
             cc_active = (_t_status.time() - last_mcp_ts) < _CC_ACTIVE_WINDOW_S if last_mcp_ts else False
-            self._json({"ok": True, "pending": False, "server_online": True, "cc_active": cc_active})
+            dispatch = _latest_cockpit_dispatch_status(state_root)
+            self._json(
+                {
+                    "ok": True,
+                    "pending": bool(dispatch["cockpit_ack_pending"]),
+                    "server_online": True,
+                    "cc_active": cc_active,
+                    **dispatch,
+                }
+            )
         elif path == "/api/settings":
             from scripts.policy_config import load_settings, default_settings_path
             s = load_settings()
@@ -325,18 +396,24 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                     self._json(result)
                     return
             enriched_actions = _enrich_actions(actions)
+            event_id = f"cockpit-{uuid.uuid4().hex}"
             self._cockpit.write_event(
                 {
                     "type": "cockpit_action",
+                    "event_id": event_id,
                     "ts_ms": int(time.time() * 1000),
                     "actions": enriched_actions,
                 }
             )
-            result = {"ok": True, "action_count": len(enriched_actions)}
+            result = {"ok": True, "action_count": len(enriched_actions), "event_id": event_id}
             self._json(result)
             if result.get("ok"):
-                _ev = {"pending": True, "action_count": result.get("action_count", 0),
-                       "ts_ms": int(time.time() * 1000)}
+                _ev = {
+                    "pending": True,
+                    "action_count": result.get("action_count", 0),
+                    "event_id": event_id,
+                    "ts_ms": int(time.time() * 1000),
+                }
                 self._cockpit.broadcast(_ev)
         elif path == "/api/settings":
             self._json(_cmd_save_settings(body))

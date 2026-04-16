@@ -16,6 +16,7 @@ import os
 import signal
 import sys
 import time
+from typing import Any
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -30,6 +31,22 @@ from scripts.pending_actions import (  # noqa: E402
 )
 
 _stop = False
+
+
+def _append_cockpit_ack(state_root: Path, event: dict[str, Any]) -> None:
+    """Persist monitor-delivery ack for a cockpit_action event."""
+    event_id = str(event.get("event_id", "")).strip()
+    if not event_id:
+        return
+    ack = {
+        "event_id": event_id,
+        "event_ts_ms": int(event.get("ts_ms", 0) or 0),
+        "ack_ts_ms": int(time.time() * 1000),
+        "pid": os.getpid(),
+    }
+    ack_path = state_root / "cockpit-action-acks.jsonl"
+    with ack_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(ack, ensure_ascii=False) + "\n")
 
 
 def _on_signal(signum, frame) -> None:
@@ -121,6 +138,11 @@ def run_tail(path: Path, sleep_s: float = 0.5) -> None:
                     formatted = _format_event(event)
                     if formatted is not None:
                         print(formatted, flush=True)
+                        if path.name == "events.jsonl" and event.get("type") == "cockpit_action":
+                            try:
+                                _append_cockpit_ack(path.parent, event)
+                            except OSError:
+                                pass
         except OSError:
             pass
         time.sleep(sleep_s)

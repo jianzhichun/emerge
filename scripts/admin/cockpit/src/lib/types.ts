@@ -66,6 +66,12 @@ export interface MonitorsResponse {
 export interface StatusResponse extends ApiOkResponse {
   pending?: boolean;
   cc_active?: boolean;
+  last_cockpit_event_id?: string | null;
+  last_cockpit_event_ts_ms?: number | null;
+  last_cockpit_ack_event_id?: string | null;
+  last_cockpit_ack_ts_ms?: number | null;
+  cockpit_ack_pending?: boolean;
+  cockpit_ack_lag_ms?: number | null;
 }
 
 export interface RunnerEvent extends JsonObject {

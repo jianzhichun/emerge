@@ -449,9 +449,10 @@ def test_user_prompt_submit_no_longer_drains_pending_actions(tmp_path: Path):
 
 
 def test_watch_pending_emits_and_renames(tmp_path: Path):
-    """watch_emerge.py tails events.jsonl for cockpit_action events."""
+    """watch_emerge.py tails events.jsonl and writes ack for cockpit_action events."""
     import subprocess, time, signal
     events_file = tmp_path / "events.jsonl"
+    event_id = "cockpit-test-ack-1"
     env = os.environ.copy()
     env["EMERGE_STATE_ROOT"] = str(tmp_path)
     proc = subprocess.Popen(
@@ -463,6 +464,7 @@ def test_watch_pending_emits_and_renames(tmp_path: Path):
     with events_file.open("a", encoding="utf-8") as f:
         f.write(json.dumps({
             "type": "cockpit_action",
+            "event_id": event_id,
             "ts_ms": int(time.time() * 1000),
             "actions": [{"type": "tool-call", "call": {"tool": "icc_exec", "arguments": {"intent_signature": "a.read.b"}}, "meta": {}}],
         }) + "\n")
@@ -471,6 +473,10 @@ def test_watch_pending_emits_and_renames(tmp_path: Path):
     stdout, _ = proc.communicate(timeout=3)
     assert "[Cockpit]" in stdout
     assert "icc_exec" in stdout
+    ack_path = tmp_path / "cockpit-action-acks.jsonl"
+    assert ack_path.exists()
+    ack = json.loads(ack_path.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert ack["event_id"] == event_id
 
 
 def test_save_tracker_preserves_span_fields(tmp_path):
