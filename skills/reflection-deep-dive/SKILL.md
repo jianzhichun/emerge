@@ -8,8 +8,9 @@ description: Use when connector flywheel history is large/noisy and lightweight 
 ## Overview
 
 Use this skill to generate a deeper, cached muscle-memory summary for long-running
-or noisy connectors. The cache is consumed by `PreCompact` and `UserPromptSubmit`
-hooks when fresh, with automatic fallback to lightweight reflection when stale.
+or noisy connectors. The cache is consumed by `PreCompact`, `PostCompact`, and
+`UserPromptSubmit` hooks when fresh, with automatic fallback to lightweight
+reflection when stale.
 
 ## When to Use
 

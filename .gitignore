@@ -69,3 +69,6 @@ secrets.json
 scripts/admin/cockpit/node_modules/
 !scripts/admin/cockpit/dist/
 !scripts/admin/cockpit/dist/**
+
+# Generated connector rule stubs
+.claude/rules/connector-*.md

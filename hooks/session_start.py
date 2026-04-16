@@ -12,41 +12,60 @@ from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_
 from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
 
 
-def _write_connector_rules(cwd: str) -> None:
-    """Generate .claude/rules/connector-<name>.md for each connector with NOTES.md."""
+def _compact_connector_index(max_chars: int = 200) -> str:
+    """Return a compact one-line connector index for startup context."""
     connectors_root = Path.home() / ".emerge" / "connectors"
     if not connectors_root.is_dir():
-        return
-    try:
-        rules_dir = Path(cwd) / ".claude" / "rules"
-        rules_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return
+        return ""
+
+    items: list[str] = []
     for connector_dir in sorted(connectors_root.iterdir()):
         if not connector_dir.is_dir():
             continue
+        name = connector_dir.name
         notes_path = connector_dir / "NOTES.md"
         if not notes_path.exists():
+            items.append(name)
             continue
-        name = connector_dir.name
         try:
-            excerpt = notes_path.read_text(encoding="utf-8").strip()[:400]
-            content = (
-                f"<!-- emerge:connector:{name} — auto-generated at SessionStart -->\n"
-                f"# Connector: {name}\n\n"
-                f"{excerpt}\n"
-            )
-            (rules_dir / f"connector-{name}.md").write_text(content, encoding="utf-8")
+            raw = " ".join(notes_path.read_text(encoding="utf-8").split())
         except OSError:
+            items.append(name)
             continue
+        preview = raw[:60].strip()
+        items.append(f"{name} ({preview})" if preview else name)
+
+    if not items:
+        return ""
+
+    prefix = "Available connectors: "
+    remaining = max_chars - len(prefix)
+    if remaining <= 0:
+        return ""
+
+    compact: list[str] = []
+    used = 0
+    for item in items:
+        add_len = len(item) + (2 if compact else 0)
+        if used + add_len > remaining:
+            break
+        compact.append(item)
+        used += add_len
+
+    if not compact:
+        return ""
+
+    hidden = len(items) - len(compact)
+    suffix = f", +{hidden} more" if hidden > 0 else ""
+    return prefix + ", ".join(compact) + suffix
 
 
 def main() -> None:
     payload_text = sys.stdin.read().strip()
     try:
-        payload = json.loads(payload_text) if payload_text else {}
+        json.loads(payload_text) if payload_text else {}
     except Exception:
-        payload = {}
+        pass
     pin_plugin_data_path_if_present()
     state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
@@ -69,6 +88,10 @@ def main() -> None:
     )
     context_text = _SPAN_PROTOCOL + "\n\n" + context_text
 
+    connector_index = _compact_connector_index(max_chars=200)
+    if connector_index:
+        context_text += "\n\n" + connector_index
+
     conflicts_path = Path.home() / ".emerge" / "pending-conflicts.json"
     try:
         conflicts_data = json.loads(conflicts_path.read_text(encoding="utf-8"))
@@ -89,8 +112,6 @@ def main() -> None:
             )
     except (OSError, json.JSONDecodeError, AttributeError):
         pass
-
-    _write_connector_rules(payload.get("cwd") or str(Path.cwd()))
 
     import subprocess as _sub
     _plugin_root = Path(__file__).resolve().parents[1]

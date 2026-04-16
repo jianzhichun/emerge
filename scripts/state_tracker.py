@@ -407,11 +407,23 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
                 normalized["args_summary"] = str(item["args_summary"])[:200]
             deltas.append(normalized)
 
+    notes_injected_raw = raw.get("notes_injected", [])
+    notes_injected: list[str] = []
+    if isinstance(notes_injected_raw, list):
+        seen: set[str] = set()
+        for item in notes_injected_raw:
+            name = str(item).strip().lower()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            notes_injected.append(name)
+
     out: dict[str, Any] = {
         "open_risks": open_risks,
         "deltas": deltas,
         "verification_state": verification_state,
         "consistency_window_ms": consistency_window_ms,
+        "notes_injected": notes_injected,
     }
     # Preserve flywheel span/session fields (written by SpanTracker / hooks as raw JSON keys).
     for _k in ("active_span_id", "active_span_intent", "turn_count"):

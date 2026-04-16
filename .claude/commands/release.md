@@ -48,12 +48,13 @@ Steps:
 
 5. **Run documentation consistency gate** using `docs/doc-consistency-checklist.md`:
    - Verify architecture/data-flow docs are current (`README.md` canonical diagrams, `CLAUDE.md` invariants aligned).
+   - Verify command/skill docs are current (`commands/*.md`, `skills/*/SKILL.md`) and do not describe deprecated connector stub loading behavior.
    - Verify MCP surface docs match `scripts/emerge_daemon.py`.
    - Verify hook semantics docs match `hooks/*.py` + `hooks/hooks.json`.
    - Verify test baseline numbers in `README.md` (badge + quick verification baseline) are current.
    - Run a targeted stale-token scan and fix any hits that are genuinely stale:
      ```bash
-     rg "377|2025-03-26" README.md CLAUDE.md
+     rg "377|2025-03-26|_write_connector_rules|InstructionsLoaded" README.md CLAUDE.md commands skills
      ```
      (Keep legitimate historical/compatibility mentions; only fix stale/incorrect claims.)
 

@@ -25,6 +25,10 @@ Execution rules:
   - created/updated assets
   - verification evidence
   - next recommended action
+7. Connector notes handling (must match current architecture):
+  - keep `~/.emerge/connectors/<connector>/NOTES.md` concise and operational (no long dumps)
+  - SessionStart only exposes a compact connector index
+  - full NOTES are injected on-demand by `PreToolUse` on the first approved `icc_exec` / `icc_span_open` / `icc_crystallize` call per connector
 
 Status rules:
 - `init_ok`: runner reachable (if needed), assets created, `icc_exec` smoke checks pass.

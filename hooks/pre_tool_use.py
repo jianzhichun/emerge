@@ -10,6 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
+from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
+
 # Compiled once at module load — shared across all validator functions.
 _SIG_RE = re.compile(r'^[a-z][a-z0-9_-]*\.(read|write)\.[a-z][a-z0-9_./-]*$')
 _SAFE_SEG_RE = re.compile(r'^[a-z0-9][a-z0-9_-]*$')
@@ -117,6 +120,61 @@ def _validate_icc_span_close(args: dict) -> str | None:
     return None
 
 
+
+
+def _extract_connector(sig: str) -> str:
+    """Extract connector segment from intent_signature."""
+    if not sig or "." not in sig:
+        return ""
+    connector = sig.split(".", 1)[0].strip().lower()
+    if not _SAFE_SEG_RE.match(connector):
+        return ""
+    return connector
+
+
+def _connector_notes_context(sig: str, max_chars: int = 1200) -> str:
+    """Inject connector NOTES once per session using hook state."""
+    connector = _extract_connector(sig)
+    if not connector:
+        return ""
+
+    pin_plugin_data_path_if_present()
+    state_root = Path(default_hook_state_root())
+    state_path = state_root / "state.json"
+
+    try:
+        tracker = load_tracker(state_path)
+    except Exception:
+        return ""
+
+    raw = tracker.state.get("notes_injected", [])
+    seen = {str(item).strip() for item in raw if str(item).strip()} if isinstance(raw, list) else set()
+    if connector in seen:
+        return ""
+
+    notes_path = Path.home() / ".emerge" / "connectors" / connector / "NOTES.md"
+    notes_text = ""
+    try:
+        if notes_path.exists():
+            notes_text = notes_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        notes_text = ""
+
+    seen.add(connector)
+    tracker.state["notes_injected"] = sorted(seen)
+    try:
+        save_tracker(state_path, tracker)
+    except Exception:
+        pass
+
+    if not notes_text:
+        return ""
+    if len(notes_text) > max_chars:
+        notes_text = notes_text[:max_chars]
+        return f"[Connector:{connector} NOTES (truncated)]\n{notes_text}"
+    return f"[Connector:{connector} NOTES]\n{notes_text}"
+
+
 def _validate_icc_span_approve(args: dict, sig: str) -> str | None:
     if not sig:
         return "icc_span_approve: 'intent_signature' is required"
@@ -153,6 +211,7 @@ def _build_output(
     sig_from: str | None,
     sig_to: str | None,
     error_msg: str | None,
+    notes_context: str,
 ) -> dict:
     """Build the hook JSON output given validation results."""
     if error_msg:
@@ -184,7 +243,7 @@ def _build_output(
             "systemMessage": "icc_hub resolve 将应用冲突解决方案，此操作不可撤销。请确认继续？",
         }
     if sig_to is not None:
-        return {
+        output = {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "allow",
@@ -195,10 +254,17 @@ def _build_output(
                 f"from {sig_from!r} to {sig_to!r}"
             ),
         }
+        if notes_context:
+            output["hookSpecificOutput"]["additionalContext"] = notes_context
+        return output
+
+    approved = f"pre_tool_use: {tool_name} approved"
+    if notes_context:
+        approved = approved + "\n\n" + notes_context
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "additionalContext": f"pre_tool_use: {tool_name} approved",
+            "additionalContext": approved,
         }
     }
 
@@ -233,7 +299,12 @@ def main() -> None:
     if error_msg is not None:
         sig_to = None
 
-    print(json.dumps(_build_output(tool_name, suffix, arguments, sig, sig_from, sig_to, error_msg)))
+    notes_context = ""
+    if error_msg is None and suffix in {"__icc_exec", "__icc_span_open", "__icc_crystallize"}:
+        target_sig = sig_to if sig_to is not None else sig
+        notes_context = _connector_notes_context(target_sig)
+
+    print(json.dumps(_build_output(tool_name, suffix, arguments, sig, sig_from, sig_to, error_msg, notes_context)))
 
 
 if __name__ == "__main__":

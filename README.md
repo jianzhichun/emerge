@@ -59,7 +59,7 @@ flowchart TB
 | **StateTracker**    | Maintains `Delta` / `Open Risks` session state and recovery token budgeting.                                                                                                                                                |
 | **RunnerRouter**    | Selects a `RunnerClient` by `target_profile` / `runner_id` (map), consistent hash (pool), or default URL. Returns `None` when no runner is configured → local execution.                                                                                                             |
 | **Flywheel bridge** | Short-circuit inside `icc_exec`: when the matching candidate is `stable`, execution is redirected to the pipeline result without LLM inference. Zero overhead path once a pattern is trusted.                                                                                        |
-| **Hooks**           | Inject minimal context at session/prompt boundaries (including Span Protocol plus bounded muscle-memory reflection with cache fallback); record `Delta` after each `icc_`* call; preserve critical state across **PreCompact**; guard stop/exit with active-span safety checks. `PreToolUse` enforces `intent_signature` conventions, auto-normalizes uppercase signatures via `updatedInput`, and returns `ask` for `icc_span_approve` and destructive `icc_hub` resolve. Not a second MCP server. |
+| **Hooks**           | Inject minimal context at session/prompt boundaries (Span Protocol + compact connector index at SessionStart, bounded muscle-memory reflection on turn 1 / compact boundaries), record `Delta` after each `icc_`* call, preserve recovery state across **PreCompact**, and guard stop/exit with active-span safety checks. `PreToolUse` enforces `intent_signature` conventions, auto-normalizes uppercase signatures via `updatedInput`, injects connector `NOTES.md` on first approved tool call per connector (session-scoped de-dup), and returns `ask` for `icc_span_approve` and destructive `icc_hub` resolve. Not a second MCP server. |
 | **`emerge_sync.py`** | Memory Hub sync agent. Bidirectional connector asset sync via orphan-branch git repo; event-driven push on stable promotion, periodic pull, AI-assisted conflict resolution via `icc_hub` MCP tool. |
 
 
@@ -232,7 +232,7 @@ flowchart LR
   end
 
   subgraph percall [Per tool call]
-    PTU[PreToolUse — enforce conventions + normalize args]
+    PTU[PreToolUse — enforce conventions + normalize args + first-touch NOTES injection]
     EX[Tool executes]
     POTU[PostToolUse — record Delta]
     PTF[PostToolUseFailure — mark degraded on real failures]
@@ -257,10 +257,11 @@ Hook injections are bounded and on-demand. Actual overhead per turn:
 
 | Trigger | Payload | Size |
 |---|---|---|
+| SessionStart | Compact connector index (`Available connectors: ...`) | ~0–200 chars |
 | Every turn (UserPromptSubmit) | FLYWHEEL_TOKEN recovery token | ~213 chars (empty), scales with active deltas/risks |
 | Turn 1 only | Reflection summary (stable ≤ 8, canary ≤ 3, recent ≤ 5) | 0 if no intents, ~300–500 chars when active |
 | Every 5 turns, no active span | Span reminder | ~110 chars |
-| First encounter per connector (InstructionsLoaded) | Full NOTES.md content | ≤ 1200 chars, once per connector per session |
+| First approved call per connector (PreToolUse) | Full `NOTES.md` content | ≤ 1200 chars, once per connector per session |
 | PreCompact / PostCompact | Reflection + FLYWHEEL_TOKEN | Same as above, triggered by context pressure |
 
 Delta/Risk context is budget-capped: `format_additional_context(budget_chars=N)` allocates at most 1/3 of the budget to risks, newest-first. Content beyond the budget is collapsed to a count with a pointer to `state://deltas`.
