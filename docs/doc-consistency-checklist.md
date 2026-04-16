@@ -7,6 +7,7 @@ Use this checklist before merge/release to keep `README.md`, `CLAUDE.md`, `comma
 - `README.md` version badge matches `.claude-plugin/plugin.json` version.
 - `README.md` test badge and "Quick verification baseline" match latest full-suite result.
 - Commands in `CLAUDE.md` "Commands" section are executable and still valid.
+- Cockpit release assets are present: `scripts/admin/cockpit/dist/index.html` exists and is rebuilt before release.
 
 ## 2) MCP Surface Consistency
 

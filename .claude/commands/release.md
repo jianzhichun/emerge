@@ -30,13 +30,23 @@ Steps:
    - Note: `git add -u` stages tracked-file changes only. Untracked files are left untouched unless explicitly added.
    - Skip if working tree is already clean.
 
-3. **Bump all version files** using the version-bump script:
+3. **Build cockpit frontend** (hard gate, fail release if build fails):
+   ```bash
+   cd scripts/admin/cockpit
+   npm ci
+   npm run build
+   cd ../../..
+   test -f scripts/admin/cockpit/dist/index.html
+   ```
+   The release is invalid without `scripts/admin/cockpit/dist/index.html`.
+
+4. **Bump all version files** using the version-bump script:
    ```bash
    bash scripts/bump-version.sh {NEW}
    ```
    This updates `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` (both version fields) atomically.
 
-4. **Run documentation consistency gate** using `docs/doc-consistency-checklist.md`:
+5. **Run documentation consistency gate** using `docs/doc-consistency-checklist.md`:
    - Verify architecture/data-flow docs are current (`README.md` canonical diagrams, `CLAUDE.md` invariants aligned).
    - Verify MCP surface docs match `scripts/emerge_daemon.py`.
    - Verify hook semantics docs match `hooks/*.py` + `hooks/hooks.json`.
@@ -47,7 +57,7 @@ Steps:
      ```
      (Keep legitimate historical/compatibility mentions; only fix stale/incorrect claims.)
 
-5. **Update README.md** — replace the version badge:
+6. **Update README.md** — replace the version badge:
    ```
    ![Version](https://img.shields.io/badge/version-v{OLD}-blue)
    ```
@@ -56,21 +66,21 @@ Steps:
    ![Version](https://img.shields.io/badge/version-v{NEW}-blue)
    ```
 
-6. **Commit** the version bump:
+7. **Commit** the version bump and built cockpit assets:
    ```bash
-   git add .claude-plugin/plugin.json .claude-plugin/marketplace.json README.md
+   git add .claude-plugin/plugin.json .claude-plugin/marketplace.json README.md scripts/admin/cockpit/dist
    git commit -m "chore: bump version to {NEW}"
    ```
 
-7. **Tag** the release:
+8. **Tag** the release:
    ```bash
    git tag v{NEW}
    ```
 
-8. **Push** (branch + tag):
+9. **Push** (branch + tag):
    ```bash
    git push origin main
    git push origin v{NEW}
    ```
 
-9. Report success: confirm the push succeeded and show the new version. Remind the user that Claude Code will detect the update via marketplace refresh.
+10. Report success: confirm the push succeeded and show the new version. Remind the user that Claude Code will detect the update via marketplace refresh.

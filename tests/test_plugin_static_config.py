@@ -82,6 +82,14 @@ def test_runner_status_command_uses_plugin_root_for_repl_admin():
     assert "python3 scripts/repl_admin.py" not in runner_md
 
 
+def test_release_command_enforces_cockpit_build_and_dist_gate():
+    release_md = (ROOT / ".claude" / "commands" / "release.md").read_text(encoding="utf-8")
+    assert "npm ci" in release_md
+    assert "npm run build" in release_md
+    assert "scripts/admin/cockpit/dist/index.html" in release_md
+    assert "scripts/admin/cockpit/dist" in release_md
+
+
 def test_marketplace_json_has_valid_structure():
     marketplace_path = ROOT / ".claude-plugin" / "marketplace.json"
     data = json.loads(marketplace_path.read_text(encoding="utf-8"))
