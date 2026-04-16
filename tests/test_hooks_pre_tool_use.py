@@ -127,33 +127,6 @@ def test_intent_signature_uppercase_invalid_structure_still_blocks():
     assert hook_out.get("permissionDecision") == "deny"
 
 
-def test_icc_goal_rollback_returns_ask():
-    """icc_goal_rollback must return permissionDecision: ask for user confirmation."""
-    payload = {
-        "tool_name": "mcp__plugin_emerge_emerge__icc_goal_rollback",
-        "tool_input": {"target_event_id": "evt-abc123", "actor": "claude"},
-    }
-    out = _run_hook(payload)
-    hook_out = out.get("hookSpecificOutput", {})
-    assert hook_out.get("hookEventName") == "PreToolUse"
-    assert hook_out.get("permissionDecision") == "ask", \
-        f"icc_goal_rollback must ask for confirmation, got: {out}"
-    assert "systemMessage" in out
-    assert "rollback" in out["systemMessage"].lower() or "evt-abc123" in out["systemMessage"]
-
-
-def test_icc_goal_rollback_missing_target_blocks():
-    """icc_goal_rollback without target_event_id should deny (schema enforcement)."""
-    payload = {
-        "tool_name": "mcp__plugin_emerge_emerge__icc_goal_rollback",
-        "tool_input": {"actor": "claude"},
-    }
-    out = _run_hook(payload)
-    hook_out = out.get("hookSpecificOutput", {})
-    assert hook_out.get("permissionDecision") == "deny"
-    assert "target_event_id" in hook_out.get("permissionDecisionReason", "").lower()
-
-
 def test_icc_span_approve_invalid_intent_signature_blocks():
     """icc_span_approve must enforce connector.read|write.name format."""
     payload = {
@@ -267,15 +240,6 @@ def test_validate_icc_span_approve_missing_sig():
     from hooks.pre_tool_use import _validate_icc_span_approve
     err = _validate_icc_span_approve({}, "")
     assert err is not None and "intent_signature" in err
-
-def test_validate_icc_goal_rollback_valid():
-    from hooks.pre_tool_use import _validate_icc_goal_rollback
-    assert _validate_icc_goal_rollback({"target_event_id": "evt-abc"}) is None
-
-def test_validate_icc_goal_rollback_missing():
-    from hooks.pre_tool_use import _validate_icc_goal_rollback
-    err = _validate_icc_goal_rollback({})
-    assert err is not None and "target_event_id" in err
 
 def test_normalize_sig_no_change():
     from hooks.pre_tool_use import _normalize_sig

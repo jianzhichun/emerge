@@ -86,9 +86,6 @@ def test_tools_list_does_not_expose_admin_state_operations():
     names = [t["name"] for t in listed["result"]["tools"]]
     assert "icc_state_status" not in names
     assert "icc_state_clear" not in names
-    assert "icc_goal_ingest" in names
-    assert "icc_goal_read" in names
-    assert "icc_goal_rollback" in names
     icc_exec = next(t for t in listed["result"]["tools"] if t["name"] == "icc_exec")
     props = icc_exec["inputSchema"]["properties"]
     assert "result_var" in props
@@ -596,40 +593,7 @@ def test_resources_list_returns_static_and_pipeline_uris():
     assert "policy://current" in uris
     assert "runner://status" in uris
     assert "state://deltas" in uris
-    assert "state://goal" in uris
-    assert "state://goal-ledger" in uris
     assert any(u.startswith("pipeline://") for u in uris)
-
-
-def test_resources_read_goal_snapshot_and_ledger(tmp_path: Path):
-    os.environ["CLAUDE_PLUGIN_DATA"] = str(tmp_path / "hook-state")
-    try:
-        daemon = EmergeDaemon(root=ROOT)
-        raw = daemon.call_tool(
-            "icc_goal_ingest",
-            {
-                "event_type": "system_refine",
-                "source": "system",
-                "actor": "integration-test",
-                "text": "goal for resource test",
-                "confidence": 0.9,
-                "force": True,
-            },
-        )
-        assert raw["isError"] is False
-        snap_resp = daemon.handle_jsonrpc(
-            {"jsonrpc": "2.0", "id": 65, "method": "resources/read", "params": {"uri": "state://goal"}}
-        )
-        snap = json.loads(snap_resp["result"]["resource"]["text"])
-        assert snap["text"] == "goal for resource test"
-
-        ledger_resp = daemon.handle_jsonrpc(
-            {"jsonrpc": "2.0", "id": 66, "method": "resources/read", "params": {"uri": "state://goal-ledger"}}
-        )
-        ledger = json.loads(ledger_resp["result"]["resource"]["text"])
-        assert ledger["events"], "goal ledger should contain at least one event"
-    finally:
-        os.environ.pop("CLAUDE_PLUGIN_DATA", None)
 
 
 def test_resources_read_policy_current(tmp_path):
@@ -3545,8 +3509,6 @@ def test_tool_list_has_title_and_annotations():
         assert "title" in tool, f"{name} missing 'title'"
         assert "annotations" in tool, f"{name} missing 'annotations'"
 
-    assert tools["icc_goal_read"]["annotations"]["readOnlyHint"] is True
-    assert tools["icc_goal_rollback"]["annotations"]["destructiveHint"] is True
     assert tools["icc_reconcile"]["annotations"]["idempotentHint"] is True
 
 

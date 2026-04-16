@@ -42,7 +42,6 @@ def test_session_start_and_user_prompt_submit_output_parseable(tmp_path: Path):
     token = _extract_flywheel_token(u_json["hookSpecificOutput"]["additionalContext"])
     assert token["schema_version"] == "flywheel.v1"
     assert "deltas" in token
-    assert token["goal_source"] in {"unset", "hook_payload"}
 
 
 def test_post_tool_use_and_pre_compact_contract(tmp_path: Path):
@@ -167,24 +166,6 @@ def test_post_tool_use_tolerates_non_object_tool_result(tmp_path: Path):
     assert "additionalContext" in parsed["hookSpecificOutput"]
 
 
-def test_session_start_without_goal_does_not_write_default_goal(tmp_path: Path):
-    out = _run("session_start.py", {}, tmp_path)
-    parsed = json.loads(out)
-    token = _extract_flywheel_token(parsed["hookSpecificOutput"]["additionalContext"])
-    assert token["goal"] == ""
-    assert token["goal_source"] == "unset"
-
-
-def test_goal_is_capped_and_source_marked(tmp_path: Path):
-    long_goal = "g" * 500
-    _run("session_start.py", {"goal": long_goal}, tmp_path)
-    out = _run("user_prompt_submit.py", {}, tmp_path)
-    parsed = json.loads(out)
-    token = _extract_flywheel_token(parsed["hookSpecificOutput"]["additionalContext"])
-    assert len(token["goal"]) == 120
-    assert token["goal_source"] == "hook_payload"
-
-
 def test_pre_compact_emits_recovery_token(tmp_path: Path):
     # First seed some state via post_tool_use
     env = os.environ.copy()
@@ -263,15 +244,15 @@ def test_post_tool_use_no_longer_echoes_updated_mcp_tool_output(tmp_path: Path):
     )
 
 
-def test_pre_compact_resets_tracker_state_and_keeps_goal_in_snapshot(tmp_path: Path):
-    """After PreCompact, state.json resets while active goal remains in goal-snapshot."""
+def test_pre_compact_resets_tracker_state(tmp_path: Path):
+    """After PreCompact, state.json deltas and risks are cleared."""
     env = os.environ.copy()
     env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
 
-    # Seed goal + some deltas + a risk
+    # Seed some deltas via post_tool_use
     subprocess.run(
         ["python3", str(ROOT / "hooks" / "session_start.py")],
-        input=json.dumps({"goal": "deploy hypermesh pipeline"}),
+        input=json.dumps({}),
         capture_output=True, text=True, env=env, check=True,
     )
     subprocess.run(
@@ -284,26 +265,19 @@ def test_pre_compact_resets_tracker_state_and_keeps_goal_in_snapshot(tmp_path: P
         capture_output=True, text=True, env=env, check=True,
     )
 
-    # Verify state has deltas before compaction
     state_path = tmp_path / "state.json"
     before = json.loads(state_path.read_text())
     assert before["deltas"], "must have deltas before compaction"
 
-    # Run pre_compact
     subprocess.run(
         ["python3", str(ROOT / "hooks" / "pre_compact.py")],
         input="{}",
         capture_output=True, text=True, env=env, check=True,
     )
 
-    # After compaction: deltas and risks must be cleared in state.json
     after = json.loads(state_path.read_text())
     assert after["deltas"] == [], "deltas must be cleared after PreCompact"
     assert after["open_risks"] == [], "open_risks must be cleared after PreCompact"
-    # Goal ownership moved to goal-snapshot.json
-    snap = json.loads((tmp_path / "goal-snapshot.json").read_text())
-    assert snap["text"] == "deploy hypermesh pipeline"
-    assert snap["source"] == "hook_payload"
 
 
 def test_session_start_clears_stale_active_span(tmp_path, monkeypatch):
@@ -314,8 +288,6 @@ def test_session_start_clears_stale_active_span(tmp_path, monkeypatch):
     stale_state = {
         "active_span_id": "stale-uuid",
         "active_span_intent": "lark.read.get-doc",
-        "goal": "",
-        "goal_source": "unset",
         "deltas": [],
     }
     (hook_state / "state.json").write_text(json.dumps(stale_state), encoding="utf-8")
@@ -738,17 +710,6 @@ def test_format_pattern_alert_includes_key_fields():
     assert "canary" in result
     assert "hm.node_create" in result
     assert "occurrences=5" in result
-
-
-def test_init_goal_control_plane_helper(tmp_path):
-    from scripts.goal_control_plane import GoalControlPlane, init_goal_control_plane
-    from scripts.state_tracker import StateTracker
-    tracker = StateTracker()
-    tracker.set_goal("my goal", "test_source")
-    gcp = init_goal_control_plane(tmp_path, tracker)
-    assert isinstance(gcp, GoalControlPlane)
-    snap = gcp.read_snapshot()
-    assert snap["text"] == "my goal"
 
 
 # ── Span Protocol injection tests ────────────────────────────────────────────
