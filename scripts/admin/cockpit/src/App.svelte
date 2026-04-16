@@ -20,30 +20,13 @@
   import { sessionStore } from './stores/session';
   import { stateStore } from './stores/state';
   import { uiStore } from './stores/ui';
+  import { queueStore, type QueueDraft } from './stores/queue';
 
   interface TabBarItem {
     id: string;
     label: string;
     warn?: boolean;
     subtle?: boolean;
-  }
-
-  interface QueueDraft {
-    type: string;
-    label: string;
-    subLabel: string;
-    command: string;
-    data: Record<string, unknown>;
-  }
-
-  interface QueueItem extends QueueDraft {
-    id: number;
-  }
-
-  interface SubmitResponse {
-    ok?: boolean;
-    action_count?: number;
-    error?: string;
   }
 
   type GlobalTabId = 'overview' | 'monitors' | 'audit' | 'session' | 'state';
@@ -66,9 +49,6 @@
   let monitorsRefreshSignal = 0;
   let auditRefreshSignal = 0;
   let stateRefreshSignal = 0;
-  let queueItems: QueueItem[] = [];
-  let queueIdSeq = 0;
-  let queueSubmitting = false;
   let serverPending = false;
   let ccActive = false;
   let statusMessage: string | null = null;
@@ -217,52 +197,35 @@
     monitorsRefreshSignal += 1;
   }
 
-  function enqueue(queueDraft: QueueDraft): void {
-    queueIdSeq += 1;
-    queueItems = [...queueItems, { id: queueIdSeq, ...queueDraft }];
-  }
-
-  function dequeue(id: number): void {
-    queueItems = queueItems.filter((item) => item.id !== id);
-  }
-
-  function clearQueue(): void {
-    queueItems = [];
-  }
-
   function enqueuePrompt(event: CustomEvent<{ prompt: string }>): void {
     const prompt = event.detail.prompt;
-    enqueue({
+    queueStore.enqueue({
       type: 'global-prompt',
       label: 'Instruction',
       subLabel: prompt.length > 60 ? `${prompt.slice(0, 60)}...` : prompt,
       command: 'global-prompt',
-      data: { type: 'global-prompt', prompt }
+      data: { type: 'global-prompt', prompt },
     });
   }
 
   async function submitQueue(): Promise<void> {
-    if (!queueItems.length || queueSubmitting || serverPending) {
-      return;
-    }
-    queueSubmitting = true;
+    const items = $queueStore.items;
+    if (!items.length || $queueStore.submitting || serverPending) return;
     statusMessage = 'Submitting queue...';
     try {
-      const result = await api.request<SubmitResponse>('/api/submit', {
-        method: 'POST',
-        body: { actions: queueItems.map((item) => item.data) }
-      });
+      const result = await api.request<{ ok?: boolean; action_count?: number; error?: string }>(
+        '/api/submit',
+        { method: 'POST', body: { actions: items.map((item) => item.data) } }
+      );
       if (result.ok === false) {
         statusMessage = `Submit failed: ${result.error ?? 'unknown error'}`;
       } else {
-        statusMessage = `Submitted ${result.action_count ?? queueItems.length} action(s)`;
-        queueItems = [];
+        statusMessage = `Submitted ${result.action_count ?? items.length} action(s)`;
+        queueStore.clear();
       }
       await refreshShellData();
     } catch (error) {
       statusMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      queueSubmitting = false;
     }
   }
 
@@ -379,7 +342,7 @@
     ? []
     : $policyStore.pipelines.filter((pipeline) => String(pipeline.key ?? '').startsWith(`${activeTab}.`));
   $: queuedKeys = new Set(
-    queueItems.map((item) => String((item.data && item.data.key) ?? '')).filter((key) => key.length > 0)
+    $queueStore.items.map((item) => String((item.data && item.data.key) ?? '')).filter((key) => key.length > 0)
   );
   $: daemonOnline = sseStatus === 'connected';
   $: ccIndicatorText = !daemonOnline
@@ -435,7 +398,7 @@
           pipelines={$policyStore.pipelines}
           thresholds={$policyStore.thresholds}
           connectorNames={connectorNames}
-          queueSize={queueItems.length}
+          queueSize={$queueStore.items.length}
           on:openConnector={handleOverviewConnectorOpen}
         />
       {:else if activeTab === 'monitors'}
@@ -463,7 +426,7 @@
           {queuedKeys}
           criticalThreshold={rollbackThreshold}
           on:selectPanel={handleConnectorPanelSelect}
-          on:enqueue={(event) => enqueue(event.detail)}
+          on:enqueue={(event) => queueStore.enqueue(event.detail)}
         />
       {:else}
         <p>This tab is not available.</p>
@@ -474,12 +437,12 @@
     </section>
     {#if showQueuePanel}
       <QueuePanel
-        {queueItems}
-        submitting={queueSubmitting}
+        queueItems={$queueStore.items}
+        submitting={false}
         {serverPending}
         on:enqueuePrompt={enqueuePrompt}
-        on:dequeue={(event) => dequeue(event.detail.id)}
-        on:clear={clearQueue}
+        on:dequeue={(event) => queueStore.dequeue(event.detail.id)}
+        on:clear={() => queueStore.clear()}
         on:submit={() => void submitQueue()}
       />
     {/if}
