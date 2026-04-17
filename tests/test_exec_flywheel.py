@@ -239,8 +239,9 @@ def test_stable_rolls_back_on_window_failure_rate(tmp_path: Path):
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
         daemon = EmergeDaemon(root=ROOT)
-        # Use an intent with no crystallized pipeline so the flywheel bridge
-        # never short-circuits — exec() evidence drives stage transitions directly.
+        # Stable icc_exec normally bridges to a crystallized pipeline; this test
+        # needs raw exec() outcomes (including raises) to drive window_failure_rate.
+        daemon._try_flywheel_bridge = lambda _arguments: None  # type: ignore[method-assign]
         common = {
             "mode": "inline_code",
             "target_profile": "mycader-1.zwcad",

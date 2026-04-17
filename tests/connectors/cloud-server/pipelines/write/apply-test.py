@@ -7,7 +7,10 @@ def run_write(metadata, args):
     # --- CRYSTALLIZED ---
     result = 42
     # --- END ---
-    return __action  # exec code must set __action = {"ok": True, ...}
+    out = dict(locals().get('__action', {"ok": True}))
+    if "scenario" in args:
+        out["scenario"] = args["scenario"]
+    return out
 
 
 def verify_write(metadata, args, action_result):
