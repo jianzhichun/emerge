@@ -1,7 +1,7 @@
 """High-level sync flows and event/poll loops for Memory Hub.
 
 push_flow / pull_flow orchestrate git_ops + asset_ops.
-run_event_loop / run_poll_loop are the background agent entry points.
+run_event_loop is the background agent entry point.
 """
 from __future__ import annotations
 
@@ -180,8 +180,3 @@ def run_event_loop(stop_event: threading.Event | None = None) -> None:
         router.stop()
         for t in _timer:
             t.cancel()
-
-
-def run_poll_loop(stop_event: threading.Event | None = None) -> None:
-    """Deprecated: use run_event_loop. Kept for backward compat."""
-    run_event_loop(stop_event)

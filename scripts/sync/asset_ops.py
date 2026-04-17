@@ -32,9 +32,9 @@ def file_to_intent_sig(connector: str, rel: Path) -> str:
 
 def load_candidate_timestamps(connector: str) -> dict[str, int]:
     """Return {intent_sig: last_ts_ms} for stable span entries belonging to connector."""
-    from scripts.policy_config import default_exec_root, STABLE_MIN_ATTEMPTS, STABLE_MIN_SUCCESS_RATE
+    from scripts.policy_config import default_state_root, STABLE_MIN_ATTEMPTS, STABLE_MIN_SUCCESS_RATE
     from scripts.intent_registry import IntentRegistry
-    state_root = Path(os.environ.get("EMERGE_STATE_ROOT") or str(default_exec_root()))
+    state_root = Path(os.environ.get("EMERGE_STATE_ROOT") or str(default_state_root()))
     raw = IntentRegistry.load(state_root)
     result: dict[str, int] = {}
     prefix = connector + "."
@@ -111,9 +111,9 @@ def export_vertical(
 
 def export_spans_json(connector: str, dst: Path) -> None:
     """Merge local stable spans into the worktree spans.json. Remote-only spans are preserved."""
-    from scripts.policy_config import default_exec_root, STABLE_MIN_ATTEMPTS, STABLE_MIN_SUCCESS_RATE
+    from scripts.policy_config import default_state_root, STABLE_MIN_ATTEMPTS, STABLE_MIN_SUCCESS_RATE
     from scripts.intent_registry import IntentRegistry
-    state_root = Path(os.environ.get("EMERGE_STATE_ROOT") or str(default_exec_root()))
+    state_root = Path(os.environ.get("EMERGE_STATE_ROOT") or str(default_state_root()))
     all_candidates = IntentRegistry.load(state_root).get("intents", {})
 
     prefix = connector + "."

@@ -13,7 +13,7 @@ POST_HOOK = ROOT / "hooks" / "post_tool_use.py"
 
 def _run_post_hook(payload: dict, state: dict | None = None) -> dict:
     with tempfile.TemporaryDirectory() as tmpdir:
-        env = {**os.environ, "EMERGE_DATA_ROOT": tmpdir}
+        env = {**os.environ, "EMERGE_HOOK_STATE_ROOT": tmpdir}
         if state is not None:
             (Path(tmpdir) / "state.json").write_text(json.dumps(state), encoding="utf-8")
         result = subprocess.run(
@@ -81,7 +81,7 @@ def test_non_exec_tool_never_injects():
 def test_verification_state_reads_tool_response_not_tool_result():
     """Hook must read verification_state from payload.tool_response."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        env = {**os.environ, "EMERGE_DATA_ROOT": tmpdir}
+        env = {**os.environ, "EMERGE_HOOK_STATE_ROOT": tmpdir}
         payload = {
             "tool_name": "mcp__plugin_emerge_emerge__icc_span_close",
             "tool_input": {"outcome": "failure"},

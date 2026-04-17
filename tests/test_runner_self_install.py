@@ -275,7 +275,6 @@ def test_cockpit_runner_profiles_endpoint(tmp_path, monkeypatch):
     import time
     from scripts.repl_admin import CockpitHTTPServer, _StandaloneDaemonStub
 
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
 
     # Write a runner-monitor-state.json with one known runner
@@ -285,11 +284,13 @@ def test_cockpit_runner_profiles_endpoint(tmp_path, monkeypatch):
         ],
         "team_active": True,
     }
-    (tmp_path / "runner-monitor-state.json").write_text(
+    events_dir = tmp_path / "events"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    (events_dir / "runner-monitor-state.json").write_text(
         json.dumps(monitor_state), encoding="utf-8"
     )
 
-    cockpit = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), port=0, repl_root=tmp_path)
+    cockpit = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), port=0, state_root=tmp_path)
     url = cockpit.start()
     time.sleep(0.1)
     try:

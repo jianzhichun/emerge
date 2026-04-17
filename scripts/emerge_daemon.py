@@ -17,10 +17,10 @@ from scripts.policy_config import (  # noqa: E402
     atomic_write_json,
     derive_profile_token,
     derive_session_id,
-    default_exec_root,
+    default_state_root,
     default_hook_state_root,
     load_json_object,
-    pin_plugin_data_path_if_present,
+    session_idle_ttl_s,
 )
 from scripts.crystallizer import PipelineCrystallizer  # noqa: E402
 from scripts.intent_registry import IntentRegistry  # noqa: E402
@@ -33,9 +33,8 @@ class EmergeDaemon:
 
     def __init__(self, root: Path | None = None) -> None:
         resolved_root = root or ROOT
-        pin_plugin_data_path_if_present()
         state_root = Path(
-            os.environ.get("EMERGE_STATE_ROOT") or str(default_exec_root())
+            os.environ.get("EMERGE_STATE_ROOT") or str(default_state_root())
         ).expanduser().resolve()
         # Session ID is derived from the active project directory (CWD when CC starts
         # the daemon), not from the plugin installation directory. This matches the
@@ -51,7 +50,7 @@ class EmergeDaemon:
         self._root = resolved_root
         self._script_roots = self._resolve_script_roots()
         # Coarse lock protecting concurrent read-modify-write operations on
-        # candidates.json and intents.json. Always held for the
+        # candidates.json and state/registry/intents.json. Always held for the
         # full load→mutate→save cycle to prevent lost updates.
         self._registry_lock = threading.Lock()
         # Cache for RunnerRouter — rebuilt only when runner-map.json changes on disk.
@@ -71,14 +70,15 @@ class EmergeDaemon:
             self._version = json.loads(_plugin_manifest.read_text(encoding="utf-8")).get("version", "0.0.0")
         except Exception:
             self._version = "0.0.0"
-        self._operator_monitor: "OperatorMonitor | None" = None
+        self._operator_monitor: Any | None = None
         self._event_router = None
         from scripts.policy_engine import PolicyEngine
         from scripts.span_tracker import SpanTracker
         from scripts.mcp.flywheel_recorder import FlywheelRecorder
         _hook_state_root = Path(default_hook_state_root())
         # Single PolicyEngine instance shared across all evidence producers.
-        # This is the *only* writer for intents.json stage fields — span close
+        # This is the *only* writer for state/registry/intents.json stage
+        # fields — span close
         # (SpanTracker), icc_exec/pipeline events (FlywheelRecorder), and
         # icc_reconcile all flow through this one engine.
         self._policy_engine = PolicyEngine(
@@ -238,7 +238,8 @@ class EmergeDaemon:
             # Store failure info for icc_exec to inject into the response.
             # Falling back to LLM: the subsequent icc_exec path will record
             # evidence via PolicyEngine.apply_evidence — PolicyEngine is the
-            # unique writer for intents.json, so we do not bump counters here.
+            # unique writer for state/registry/intents.json, so we do not bump
+            # counters here.
             self._last_bridge_failure = {
                 "pipeline_id": base_pipeline_id,
                 "mode": mode,
@@ -554,133 +555,120 @@ class EmergeDaemon:
             tool_ok_json=self._tool_ok_json,
         )
 
-    def handle_jsonrpc(self, request: dict[str, Any]) -> dict[str, Any]:
+    # ------------------------------------------------------------------
+    # JSON-RPC dispatch
+    # ------------------------------------------------------------------
+
+    def _jsonrpc_initialize(self, req_id: Any, params: dict) -> dict[str, Any]:
+        client_version = str(params.get("protocolVersion", "") or "").strip()
+        # Version negotiation: respond with min(client, server_max).
+        # Versions are date-based (YYYY-MM-DD) — lexicographic comparison is correct.
+        _server_max = self._SERVER_MAX_PROTOCOL_VERSION
+        if client_version and client_version <= _server_max:
+            negotiated_version = client_version
+        elif client_version and client_version > _server_max:
+            negotiated_version = _server_max
+        else:
+            negotiated_version = "2025-03-26"  # fallback when client omits version
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "protocolVersion": negotiated_version,
+                "capabilities": {
+                    "tools": {},
+                    "resources": {"subscribe": True},
+                    "prompts": {},
+                    "logging": {},
+                },
+                "serverInfo": {"name": "emerge", "version": self._version},
+            },
+        }
+
+    def _jsonrpc_ack(self, req_id: Any, _params: dict) -> dict[str, Any]:
+        return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+
+    def _jsonrpc_tools_list(self, req_id: Any, _params: dict) -> dict[str, Any]:
+        from scripts.mcp.schemas import get_tool_schemas
+        return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": get_tool_schemas()}}
+
+    def _jsonrpc_tools_call(self, req_id: Any, params: dict) -> dict[str, Any]:
+        name = params.get("name", "")
+        arguments = params.get("arguments", {}) or {}
+        if not isinstance(arguments, dict):
+            arguments = {}
+        result = self.call_tool(name, arguments)
+        return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+    def _jsonrpc_resources_list(self, req_id: Any, _params: dict) -> dict[str, Any]:
+        return {"jsonrpc": "2.0", "id": req_id, "result": {"resources": self._list_resources()}}
+
+    def _jsonrpc_resources_read(self, req_id: Any, params: dict) -> dict[str, Any]:
+        uri = params.get("uri", "")
+        try:
+            resource = self._read_resource(uri)
+            return {"jsonrpc": "2.0", "id": req_id, "result": {"resource": resource}}
+        except KeyError as exc:
+            return {"jsonrpc": "2.0", "id": req_id,
+                    "error": {"code": -32602, "message": str(exc)}}
+        except Exception as exc:
+            return {"jsonrpc": "2.0", "id": req_id,
+                    "error": {"code": -32603, "message": f"Resource read error: {exc}"}}
+
+    def _jsonrpc_resources_templates_list(self, req_id: Any, _params: dict) -> dict[str, Any]:
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {"resourceTemplates": self._resource_handler.list_resource_templates()},
+        }
+
+    def _jsonrpc_prompts_list(self, req_id: Any, _params: dict) -> dict[str, Any]:
+        return {"jsonrpc": "2.0", "id": req_id, "result": {"prompts": self._PROMPTS}}
+
+    def _jsonrpc_prompts_get(self, req_id: Any, params: dict) -> dict[str, Any]:
+        pname = params.get("name", "")
+        pargs = params.get("arguments") or {}
+        try:
+            prompt = self._get_prompt(pname, pargs)
+            return {"jsonrpc": "2.0", "id": req_id, "result": prompt}
+        except KeyError as exc:
+            return {"jsonrpc": "2.0", "id": req_id,
+                    "error": {"code": -32602, "message": str(exc)}}
+
+    # Dispatch table — built lazily so methods are bound to the daemon instance.
+    # Methods starting with "notifications/" return None (one-way, no response).
+    _JSONRPC_DISPATCH_NAMES: dict[str, str] = {
+        "initialize": "_jsonrpc_initialize",
+        "ping": "_jsonrpc_ack",
+        "logging/setLevel": "_jsonrpc_ack",
+        "tools/list": "_jsonrpc_tools_list",
+        "tools/call": "_jsonrpc_tools_call",
+        "resources/list": "_jsonrpc_resources_list",
+        "resources/read": "_jsonrpc_resources_read",
+        "resources/templates/list": "_jsonrpc_resources_templates_list",
+        "prompts/list": "_jsonrpc_prompts_list",
+        "prompts/get": "_jsonrpc_prompts_get",
+    }
+
+    def handle_jsonrpc(self, request: dict[str, Any]) -> dict[str, Any] | None:
         req_id = request.get("id")
         method = request.get("method", "")
         params = request.get("params") or {}
         if not isinstance(params, dict):
             params = {}
 
-        if method == "initialize":
-            client_version = str(params.get("protocolVersion", "") or "").strip()
-            # Version negotiation: respond with min(client, server_max).
-            # Versions are date-based (YYYY-MM-DD) — lexicographic comparison is correct.
-            _server_max = self._SERVER_MAX_PROTOCOL_VERSION
-            if client_version and client_version <= _server_max:
-                negotiated_version = client_version
-            elif client_version and client_version > _server_max:
-                negotiated_version = _server_max
-            else:
-                negotiated_version = "2025-03-26"  # fallback when client omits version
-            return {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {
-                    "protocolVersion": negotiated_version,
-                    "capabilities": {
-                        "tools": {},
-                        "resources": {"subscribe": True},
-                        "prompts": {},
-                        "logging": {},
-                    },
-                    "serverInfo": {"name": "emerge", "version": self._version},
-                },
-            }
-
-        if method == "ping":
-            return {"jsonrpc": "2.0", "id": req_id, "result": {}}
-
-        if method == "logging/setLevel":
-            # acknowledge but take no action (logging is daemon-managed)
-            return {"jsonrpc": "2.0", "id": req_id, "result": {}}
-
+        # MCP notifications are one-way — no response.
         if method.startswith("notifications/"):
-            # MCP notifications are one-way; do NOT send a response
             return None
 
-        if method == "tools/list":
-            from scripts.mcp.schemas import get_tool_schemas
+        handler_name = self._JSONRPC_DISPATCH_NAMES.get(method)
+        if handler_name is None:
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {"tools": get_tool_schemas()},
+                "error": {"code": -32601, "message": f"Method not found: {method}"},
             }
-
-        if method == "tools/call":
-            name = params.get("name", "")
-            arguments = params.get("arguments", {}) or {}
-            if not isinstance(arguments, dict):
-                arguments = {}
-            result = self.call_tool(name, arguments)
-            return {"jsonrpc": "2.0", "id": req_id, "result": result}
-
-        if method == "resources/list":
-            return {"jsonrpc": "2.0", "id": req_id, "result": {"resources": self._list_resources()}}
-
-        if method == "resources/read":
-            uri = params.get("uri", "")
-            try:
-                resource = self._read_resource(uri)
-                return {"jsonrpc": "2.0", "id": req_id, "result": {"resource": resource}}
-            except KeyError as exc:
-                return {"jsonrpc": "2.0", "id": req_id,
-                        "error": {"code": -32602, "message": str(exc)}}
-            except Exception as exc:
-                return {"jsonrpc": "2.0", "id": req_id,
-                        "error": {"code": -32603, "message": f"Resource read error: {exc}"}}
-
-        if method == "resources/templates/list":
-            return {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {
-                    "resourceTemplates": [
-                        {
-                            "uriTemplate": "pipeline://{connector}/{mode}/{name}",
-                            "name": "Pipeline metadata",
-                            "description": "Read pipeline YAML metadata by connector/mode/name",
-                            "mimeType": "application/json",
-                        },
-                        {
-                            "uriTemplate": "policy://current",
-                            "name": "Policy registry",
-                            "description": "Current session pipeline lifecycle state",
-                            "mimeType": "application/json",
-                        },
-                        {
-                            "uriTemplate": "runner://status",
-                            "name": "Runner status",
-                            "description": "Remote runner health summary",
-                            "mimeType": "application/json",
-                        },
-                        {
-                            "uriTemplate": "state://deltas",
-                            "name": "State deltas",
-                            "description": "StateTracker deltas and risks",
-                            "mimeType": "application/json",
-                        },
-                    ]
-                },
-            }
-
-        if method == "prompts/list":
-            return {"jsonrpc": "2.0", "id": req_id, "result": {"prompts": self._PROMPTS}}
-
-        if method == "prompts/get":
-            pname = params.get("name", "")
-            pargs = params.get("arguments") or {}
-            try:
-                prompt = self._get_prompt(pname, pargs)
-                return {"jsonrpc": "2.0", "id": req_id, "result": prompt}
-            except KeyError as exc:
-                return {"jsonrpc": "2.0", "id": req_id,
-                        "error": {"code": -32602, "message": str(exc)}}
-
-        return {
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "error": {"code": -32601, "message": f"Method not found: {method}"},
-        }
+        return getattr(self, handler_name)(req_id, params)
 
     def _list_resources(self) -> list[dict[str, Any]]:
         return self._resource_handler.list_resources()
@@ -704,6 +692,10 @@ class EmergeDaemon:
     def _get_session(self, target_profile: str) -> ExecSession:
         normalized = (target_profile or "default").strip() or "default"
         profile_key = "__default__" if normalized == "default" else derive_profile_token(normalized)
+        # Evict idle sessions before handing back an instance. Eviction only
+        # drops the in-memory handle; WAL + checkpoint on disk survive so the
+        # next call for the same profile rehydrates the Python namespace.
+        self._evict_idle_sessions()
         if profile_key not in self._sessions_by_profile:
             if normalized == "default":
                 session_id = self._base_session_id
@@ -713,6 +705,28 @@ class EmergeDaemon:
                 state_root=self._state_root, session_id=session_id
             )
         return self._sessions_by_profile[profile_key]
+
+    def _evict_idle_sessions(self, *, now_ms: int | None = None) -> list[str]:
+        """Drop cached ExecSessions inactive longer than ``session_idle_ttl_s``.
+
+        Returns the list of evicted profile keys so callers/tests can assert on
+        eviction behaviour. Poisoned sessions are kept in-cache so callers see
+        the explicit error message until the background thread exits.
+        """
+        ttl_s = session_idle_ttl_s()
+        if ttl_s <= 0:
+            return []
+        current_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+        ttl_ms = ttl_s * 1000
+        evicted: list[str] = []
+        for key, sess in list(self._sessions_by_profile.items()):
+            if sess._poisoned_thread is not None:  # noqa: SLF001
+                continue
+            last = sess.last_active_at_ms
+            if last and (current_ms - last) > ttl_ms:
+                del self._sessions_by_profile[key]
+                evicted.append(key)
+        return evicted
 
     def _resolve_exec_code(self, mode: str, arguments: dict[str, Any]) -> str:
         if mode == "script_ref":

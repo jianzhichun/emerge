@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from scripts.intent_registry import registry_path
 
 _TESTS_DIR = Path(__file__).resolve().parent
 
@@ -43,23 +44,24 @@ def isolate_runner_config(tmp_path):
 
 @pytest.fixture
 def isolate_hook_state(tmp_path, monkeypatch):
-    """Give each test its own hook state dir (CLAUDE_PLUGIN_DATA).
+    """Give each test its own hook state dir (EMERGE_HOOK_STATE_ROOT).
     Also creates state.json so hooks don't crash on missing file.
     """
     hook_state = tmp_path / "hook-state"
     hook_state.mkdir()
     (hook_state / "state.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(hook_state))
+    monkeypatch.setenv("EMERGE_HOOK_STATE_ROOT", str(hook_state))
     return hook_state
 
 
 @pytest.fixture
 def seed_intent_registry():
-    """Write intents.json with provided entries and return its path."""
+    """Write state/registry/intents.json and return its path."""
 
     def _seed(state_root: Path, entries: dict) -> Path:
         state_root.mkdir(parents=True, exist_ok=True)
-        path = state_root / "intents.json"
+        path = registry_path(state_root)
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps({"intents": entries}, ensure_ascii=False),
             encoding="utf-8",

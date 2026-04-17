@@ -61,10 +61,7 @@ import pytest
 
 def _start_test_server(tmp_path, monkeypatch):
     """Start cockpit server and return base URL."""
-    # Set BOTH EMERGE_REPL_ROOT and EMERGE_STATE_ROOT so _cockpit_pid_path()
-    # (which uses _resolve_state_root → EMERGE_STATE_ROOT) also points to tmp_path,
-    # preventing cmd_serve from reusing a real running cockpit server.
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
+    # Pin state root to tmp_path so cmd_serve never reuses a real cockpit server.
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
     (tmp_path / "connectors").mkdir(exist_ok=True)
@@ -94,7 +91,6 @@ def test_serve_inject_component_merged_into_assets_and_servable(tmp_path, monkey
     connector_root = tmp_path / "connectors"
     (connector_root / "acme").mkdir(parents=True)
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     from scripts.repl_admin import cmd_serve
 
@@ -145,7 +141,6 @@ def test_serve_get_reflection_cache_endpoint(tmp_path, monkeypatch):
 def test_serve_submit_writes_events_jsonl(tmp_path, monkeypatch):
     """POST /api/submit must write a cockpit_action event to events.jsonl."""
     repl_root = tmp_path / "repl-root"
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(repl_root))
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(repl_root))
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
     (tmp_path / "connectors").mkdir(exist_ok=True)
@@ -164,7 +159,7 @@ def test_serve_submit_writes_events_jsonl(tmp_path, monkeypatch):
     assert submit["ok"] is True
     assert str(submit.get("event_id", "")).startswith("cockpit-")
 
-    events_path = repl_root / "events.jsonl"
+    events_path = repl_root / "events" / "events.jsonl"
     assert events_path.exists()
     lines = events_path.read_text(encoding="utf-8").strip().splitlines()
     event = json.loads(lines[-1])
@@ -178,7 +173,6 @@ def test_serve_submit_writes_events_jsonl(tmp_path, monkeypatch):
 def test_serve_status_reports_ack_progress(tmp_path, monkeypatch):
     """Status should expose cockpit ack progress fields."""
     repl_root = tmp_path / "repl-root"
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(repl_root))
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(repl_root))
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
     (tmp_path / "connectors").mkdir(exist_ok=True)
@@ -187,7 +181,9 @@ def test_serve_status_reports_ack_progress(tmp_path, monkeypatch):
     base = cmd_serve(port=0, open_browser=False)["url"]
 
     event_id = "cockpit-test-event"
-    (repl_root / "events.jsonl").write_text(
+    events_dir = repl_root / "events"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    (events_dir / "events.jsonl").write_text(
         json.dumps(
             {
                 "type": "cockpit_action",
@@ -206,7 +202,7 @@ def test_serve_status_reports_ack_progress(tmp_path, monkeypatch):
     assert pending["pending"] is True
     assert pending["last_cockpit_event_id"] == event_id
 
-    (repl_root / "cockpit-action-acks.jsonl").write_text(
+    (events_dir / "cockpit-action-acks.jsonl").write_text(
         json.dumps({"event_id": event_id, "event_ts_ms": 1000, "ack_ts_ms": 1200}) + "\n",
         encoding="utf-8",
     )
@@ -243,7 +239,6 @@ def test_cockpit_full_flow(tmp_path, monkeypatch):
     (connector_root / "myconn").mkdir(parents=True)
     (connector_root / "myconn" / "NOTES.md").write_text("# Notes\nsome info", encoding="utf-8")
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
 
     from scripts.repl_admin import cmd_serve
@@ -283,7 +278,7 @@ def test_cockpit_full_flow(tmp_path, monkeypatch):
         result = json.loads(resp.read())
     assert result["ok"]
 
-    events_path = tmp_path / "events.jsonl"
+    events_path = tmp_path / "events" / "events.jsonl"
     assert events_path.exists()
     lines = events_path.read_text(encoding="utf-8").strip().splitlines()
     event = json.loads(lines[-1])
@@ -313,7 +308,6 @@ def test_serve_get_action_types_and_sdk(tmp_path, monkeypatch):
 
 def test_submit_rejects_legacy_action_names(tmp_path, monkeypatch):
     repl_root = tmp_path / "repl-root"
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(repl_root))
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(repl_root))
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
     (tmp_path / "connectors").mkdir(exist_ok=True)
@@ -335,7 +329,6 @@ def test_submit_rejects_legacy_action_names(tmp_path, monkeypatch):
 
 def test_submit_and_inject_limits(tmp_path, monkeypatch):
     repl_root = tmp_path / "repl-root"
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(repl_root))
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(repl_root))
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
     (tmp_path / "connectors").mkdir(exist_ok=True)
@@ -368,16 +361,14 @@ def test_submit_and_inject_limits(tmp_path, monkeypatch):
 
 def test_session_reset_blocked_when_span_active(tmp_path, monkeypatch):
     """session/reset must refuse when active_span_id is present in state."""
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
-    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+    monkeypatch.setenv("EMERGE_HOOK_STATE_ROOT", str(tmp_path))
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
     (tmp_path / "connectors").mkdir(exist_ok=True)
 
-    from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present
+    from scripts.policy_config import default_hook_state_root
     from scripts.state_tracker import load_tracker, save_tracker
 
-    pin_plugin_data_path_if_present()
     state_path = Path(default_hook_state_root()) / "state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     tracker = load_tracker(state_path)

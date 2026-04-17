@@ -18,7 +18,7 @@ def test_runner_events_invalid_profile_special_chars():
 
 
 def test_runner_events_missing_file(tmp_path, monkeypatch):
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     result = cmd_control_plane_runner_events(profile="myrunner", limit=20)
     assert result["ok"] is True
     assert result["events"] == []
@@ -28,8 +28,10 @@ def test_runner_events_missing_file(tmp_path, monkeypatch):
 
 
 def test_runner_events_returns_newest_first(tmp_path, monkeypatch):
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
-    path = tmp_path / "events-myrunner.jsonl"
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    events_dir = tmp_path / "events"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    path = events_dir / "events-myrunner.jsonl"
     now = int(time.time() * 1000)
     path.write_text(
         json.dumps({"type": "runner_event", "ts_ms": now - 60000}) + "\n" +
@@ -44,9 +46,11 @@ def test_runner_events_returns_newest_first(tmp_path, monkeypatch):
 
 
 def test_runner_events_activity_buckets(tmp_path, monkeypatch):
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     now = int(time.time() * 1000)
-    path = tmp_path / "events-myrunner.jsonl"
+    events_dir = tmp_path / "events"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    path = events_dir / "events-myrunner.jsonl"
     # 3 events in the last bucket (last 6 minutes)
     lines = "\n".join(
         json.dumps({"type": "runner_event", "ts_ms": now - i * 60000})

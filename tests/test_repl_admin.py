@@ -18,6 +18,9 @@ from scripts import repl_admin
 from scripts.admin.api import _enrich_actions
 from scripts.remote_runner import RunnerExecutor, RunnerHTTPHandler, ThreadingHTTPServer
 
+# Connector package archive entry contract (transport format, not local path).
+CONNECTOR_PACKAGE_INTENTS_FILENAME = "intents.json"
+
 
 def _run_admin(args: list[str], env: dict[str, str]) -> dict:
     proc = subprocess.run(
@@ -39,6 +42,12 @@ def _run_admin_raw(args: list[str], env: dict[str, str]) -> str:
         check=True,
     )
     return proc.stdout
+
+
+def _registry_path(state_root: Path) -> Path:
+    path = state_root / "registry" / "intents.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 class _RunnerServer:
@@ -167,15 +176,15 @@ def test_repl_admin_default_root_is_home_emerge(tmp_path: Path):
     env.pop("EMERGE_STATE_ROOT", None)
     env["EMERGE_SESSION_ID"] = "default-check"
     out = _run_admin(["status"], env)
-    assert out["state_root"] == str(tmp_path / ".emerge" / "repl")
+    assert out["state_root"] == str(tmp_path / ".emerge" / "state")
 
 
 def test_repl_admin_policy_status_handles_corrupt_registry(tmp_path: Path):
     env = os.environ.copy()
     env["EMERGE_STATE_ROOT"] = str(tmp_path)
     env["EMERGE_SESSION_ID"] = "corrupt"
-    # registry lives at state_root level (not under session_dir)
-    (tmp_path / "intents.json").write_text("{bad json", encoding="utf-8")
+    # registry lives at state_root/registry level (not under session_dir)
+    _registry_path(tmp_path).write_text("{bad json", encoding="utf-8")
     out = _run_admin(["policy-status"], env)
     assert out["registry_exists"] is True
     assert out["registry_corrupt"] is False
@@ -342,7 +351,7 @@ def test_connector_export_produces_zip(tmp_path):
 
     state_root = tmp_path / "repl"
     state_root.mkdir()
-    (state_root / "intents.json").write_text(json.dumps({
+    _registry_path(state_root).write_text(json.dumps({
         "intents": {
             "mycon.read.state": {"stage": "explore", "rollout_pct": 0},
             "other.read.state": {"stage": "stable", "rollout_pct": 100},
@@ -363,13 +372,13 @@ def test_connector_export_produces_zip(tmp_path):
     with zipfile.ZipFile(out_zip, "r") as zf:
         names = zf.namelist()
         assert "manifest.json" in names
-        assert "intents.json" in names
+        assert CONNECTOR_PACKAGE_INTENTS_FILENAME in names
         assert "connectors/mycon/pipelines/read/state.py" in names
         assert "connectors/mycon/pipelines/read/state.yaml" in names
         assert not any("__pycache__" in n for n in names)
         manifest = json.loads(zf.read("manifest.json"))
         assert manifest["name"] == "mycon"
-        reg = json.loads(zf.read("intents.json"))
+        reg = json.loads(zf.read(CONNECTOR_PACKAGE_INTENTS_FILENAME))
         assert "mycon.read.state" in reg["intents"]
         assert "other.read.state" not in reg["intents"]
 
@@ -401,7 +410,7 @@ def _make_pkg(tmp_path: Path, connector: str = "mycon") -> Path:
 
     state_root = tmp_path / "src_repl"
     state_root.mkdir(exist_ok=True)
-    (state_root / "intents.json").write_text(json.dumps({
+    _registry_path(state_root).write_text(json.dumps({
         "intents": {f"{connector}.read.state": {"stage": "explore", "rollout_pct": 0}}
     }))
 
@@ -423,7 +432,7 @@ def test_connector_import_extracts_files_and_merges_registry(tmp_path):
     dest_connector_root.mkdir()
     dest_state_root = tmp_path / "dest_repl"
     dest_state_root.mkdir()
-    (dest_state_root / "intents.json").write_text(json.dumps({"intents": {}}))
+    _registry_path(dest_state_root).write_text(json.dumps({"intents": {}}))
 
     result = repl_admin.cmd_connector_import(
         pkg=str(pkg),
@@ -438,7 +447,7 @@ def test_connector_import_extracts_files_and_merges_registry(tmp_path):
     assert "mycon.read.state" in result["intents_merged"]
     assert result["intents_skipped"] == []
 
-    reg = json.loads((dest_state_root / "intents.json").read_text())
+    reg = json.loads(_registry_path(dest_state_root).read_text())
     assert "mycon.read.state" in reg["intents"]
 
 
@@ -474,7 +483,7 @@ def test_connector_import_overwrite_replaces_files_and_registry(tmp_path):
 
     dest_state_root = tmp_path / "dest_repl"
     dest_state_root.mkdir()
-    (dest_state_root / "intents.json").write_text(json.dumps({
+    _registry_path(dest_state_root).write_text(json.dumps({
         "intents": {"mycon.read.state": {"stage": "stable", "rollout_pct": 100}}
     }))
 
@@ -487,8 +496,68 @@ def test_connector_import_overwrite_replaces_files_and_registry(tmp_path):
 
     assert result["ok"] is True
     assert existing_file.read_text() == "# state"
-    reg = json.loads((dest_state_root / "intents.json").read_text())
+    reg = json.loads(_registry_path(dest_state_root).read_text())
     assert reg["intents"]["mycon.read.state"]["stage"] == "explore"
+
+
+def test_cli_intent_set_rejects_legacy_prefixed_key(tmp_path):
+    state_root = tmp_path / "repl"
+    state_root.mkdir()
+    _registry_path(state_root).write_text(
+        json.dumps({"intents": {"mock.read.layers": {"stage": "explore"}}}),
+        encoding="utf-8",
+    )
+    env = {**os.environ, "EMERGE_STATE_ROOT": str(state_root)}
+    result = _run_admin(
+        ["intent-set", "--intent-key", "pipeline::mock.read.layers", "--set", "stage=canary"],
+        env=env,
+    )
+    assert result["ok"] is False
+    assert result["key"] == "pipeline::mock.read.layers"
+    assert "intent not found" in result["error"]
+
+
+def test_cli_intent_delete_rejects_legacy_prefixed_key(tmp_path):
+    state_root = tmp_path / "repl"
+    state_root.mkdir()
+    _registry_path(state_root).write_text(
+        json.dumps({"intents": {"mock.read.layers": {"stage": "explore"}}}),
+        encoding="utf-8",
+    )
+    env = {**os.environ, "EMERGE_STATE_ROOT": str(state_root)}
+    result = _run_admin(
+        ["intent-delete", "--intent-key", "default::mock.read.layers"],
+        env=env,
+    )
+    assert result["ok"] is False
+    assert result["key"] == "default::mock.read.layers"
+    assert "intent not found" in result["error"]
+
+
+def test_cli_intent_set_and_delete_with_canonical_key(tmp_path):
+    state_root = tmp_path / "repl"
+    state_root.mkdir()
+    reg_path = _registry_path(state_root)
+    reg_path.write_text(
+        json.dumps({"intents": {"mock.read.layers": {"stage": "explore", "rollout_pct": 0}}}),
+        encoding="utf-8",
+    )
+    env = {**os.environ, "EMERGE_STATE_ROOT": str(state_root)}
+
+    set_result = _run_admin(
+        ["intent-set", "--intent-key", "mock.read.layers", "--set", "stage=canary"],
+        env=env,
+    )
+    assert set_result["ok"] is True
+    assert set_result["key"] == "mock.read.layers"
+    updated = json.loads(reg_path.read_text(encoding="utf-8"))
+    assert updated["intents"]["mock.read.layers"]["stage"] == "canary"
+
+    del_result = _run_admin(["intent-delete", "--intent-key", "mock.read.layers"], env=env)
+    assert del_result["ok"] is True
+    assert del_result["deleted"] == "mock.read.layers"
+    final = json.loads(reg_path.read_text(encoding="utf-8"))
+    assert "mock.read.layers" not in final["intents"]
 
 
 def test_cli_connector_export(tmp_path):
@@ -501,7 +570,7 @@ def test_cli_connector_export(tmp_path):
 
     state_root = tmp_path / "repl"
     state_root.mkdir()
-    (state_root / "intents.json").write_text(json.dumps({"intents": {}}))
+    _registry_path(state_root).write_text(json.dumps({"intents": {}}))
 
     out_zip = tmp_path / "mycon-pkg.zip"
     env = {
@@ -526,7 +595,7 @@ def test_cli_connector_import(tmp_path):
     (connector_dir / "state.yaml").write_text("pipeline: state")
     src_state_root = tmp_path / "src_repl"
     src_state_root.mkdir()
-    (src_state_root / "intents.json").write_text(json.dumps({
+    _registry_path(src_state_root).write_text(json.dumps({
         "intents": {"mycon.read.state": {"stage": "explore", "rollout_pct": 0}}
     }))
     pkg = tmp_path / "mycon-pkg.zip"
@@ -541,7 +610,7 @@ def test_cli_connector_import(tmp_path):
     dest_connector_root.mkdir()
     dest_state_root = tmp_path / "dest_repl"
     dest_state_root.mkdir()
-    (dest_state_root / "intents.json").write_text(json.dumps({"intents": {}}))
+    _registry_path(dest_state_root).write_text(json.dumps({"intents": {}}))
 
     env = {
         **os.environ,
@@ -554,61 +623,6 @@ def test_cli_connector_import(tmp_path):
     )
     assert result["ok"] is True
     assert (dest_connector_root / "mycon" / "pipelines" / "read" / "state.py").exists()
-
-
-def test_cmd_normalize_intents_rewrites_legacy_yaml(tmp_path):
-    connector_root = tmp_path / "connectors"
-    read_dir = connector_root / "demo" / "pipelines" / "read"
-    write_dir = connector_root / "demo" / "pipelines" / "write"
-    read_dir.mkdir(parents=True)
-    write_dir.mkdir(parents=True)
-    read_yaml = read_dir / "state.yaml"
-    write_yaml = write_dir / "apply.yaml"
-    read_yaml.write_text(
-        "intent_signature: read.demo.state\n"
-        "read_steps:\n"
-        "  - run_read\n"
-        "verify_steps:\n"
-        "  - verify_read\n"
-        "rollback_or_stop_policy: stop\n",
-        encoding="utf-8",
-    )
-    write_yaml.write_text(
-        "intent_signature: write.demo.apply\n"
-        "write_steps:\n"
-        "  - run_write\n"
-        "verify_steps:\n"
-        "  - verify_write\n"
-        "rollback_or_stop_policy: stop\n",
-        encoding="utf-8",
-    )
-
-    out = repl_admin.cmd_normalize_intents(connector="demo", connector_root=connector_root)
-    assert out["ok"] is True
-    assert out["normalized_files"] == 2
-    assert "demo.read.state" in read_yaml.read_text(encoding="utf-8")
-    assert "demo.write.apply" in write_yaml.read_text(encoding="utf-8")
-
-
-def test_cli_normalize_intents(tmp_path):
-    connector_root = tmp_path / "connectors"
-    read_dir = connector_root / "demo" / "pipelines" / "read"
-    read_dir.mkdir(parents=True)
-    read_yaml = read_dir / "state.yaml"
-    read_yaml.write_text(
-        "intent_signature: read.demo.state\n"
-        "read_steps:\n"
-        "  - run_read\n"
-        "verify_steps:\n"
-        "  - verify_read\n"
-        "rollback_or_stop_policy: stop\n",
-        encoding="utf-8",
-    )
-    env = {**os.environ, "EMERGE_CONNECTOR_ROOT": str(connector_root)}
-    out = _run_admin(["normalize-intents", "--connector", "demo"], env)
-    assert out["ok"] is True
-    assert out["normalized_files"] == 1
-    assert "demo.read.state" in read_yaml.read_text(encoding="utf-8")
 
 
 def test_enrich_actions_injects_notes_content_for_notes_comment(tmp_path):
@@ -713,7 +727,7 @@ def test_enrich_actions_marks_invalid_tool_call_payload():
 def test_hook_state_returns_expected_fields(tmp_path, monkeypatch):
     """cmd_control_plane_hook_state returns turn_count, active_span_id, context_preview."""
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
-    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+    monkeypatch.setenv("EMERGE_HOOK_STATE_ROOT", str(tmp_path))
 
     # Seed state.json with hook-tracked fields (written directly, like hooks do)
     state_data = {
@@ -743,7 +757,7 @@ def test_hook_state_returns_expected_fields(tmp_path, monkeypatch):
 def test_hook_state_empty_state(tmp_path, monkeypatch):
     """cmd_control_plane_hook_state handles clean state gracefully."""
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
-    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+    monkeypatch.setenv("EMERGE_HOOK_STATE_ROOT", str(tmp_path))
 
     result = repl_admin.cmd_control_plane_hook_state()
     assert result["ok"] is True
@@ -764,10 +778,9 @@ def test_cockpit_http_server_starts_and_returns_url(tmp_path: Path, monkeypatch)
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from scripts.repl_admin import CockpitHTTPServer, _StandaloneDaemonStub
 
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
 
-    cockpit = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), port=0, repl_root=tmp_path)
+    cockpit = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), port=0, state_root=tmp_path)
     url = cockpit.start()
     _time.sleep(0.1)
 
@@ -796,7 +809,7 @@ def test_cockpit_get_monitor_data_reads_memory(tmp_path: Path):
     class _MockDaemon:
         _http_server = _MockHTTPServer()
 
-    cockpit = CockpitHTTPServer(daemon=_MockDaemon(), port=0, repl_root=tmp_path)
+    cockpit = CockpitHTTPServer(daemon=_MockDaemon(), port=0, state_root=tmp_path)
     data = cockpit.get_monitor_data()
 
     assert data["team_active"] is True
@@ -813,13 +826,14 @@ def test_cockpit_get_monitor_data_standalone_fallback(tmp_path: Path):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from scripts.repl_admin import CockpitHTTPServer, _StandaloneDaemonStub
 
-    state_file = tmp_path / "runner-monitor-state.json"
+    state_file = tmp_path / "events" / "runner-monitor-state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
     state_file.write_text(json.dumps({
         "runners": [{"runner_profile": "p1", "connected": True}],
         "team_active": True,
     }), encoding="utf-8")
 
-    cockpit = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), port=0, repl_root=tmp_path)
+    cockpit = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), port=0, state_root=tmp_path)
     data = cockpit.get_monitor_data()
 
     assert data["team_active"] is True
@@ -832,7 +846,7 @@ def test_cockpit_broadcast_pushes_to_sse_clients(tmp_path: Path):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from scripts.repl_admin import CockpitHTTPServer, _StandaloneDaemonStub
 
-    cockpit = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), port=0, repl_root=tmp_path)
+    cockpit = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), port=0, state_root=tmp_path)
 
     buf = io.BytesIO()
     with cockpit._sse_lock:

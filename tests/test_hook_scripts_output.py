@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _run(script: str, payload: dict, data_dir: Path) -> str:
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_DATA"] = str(data_dir)
+    env["EMERGE_HOOK_STATE_ROOT"] = str(data_dir)
     proc = subprocess.run(
         ["python3", str(ROOT / "hooks" / script)],
         input=json.dumps(payload),
@@ -63,7 +63,7 @@ def test_post_tool_use_and_pre_compact_contract(tmp_path: Path):
 
     import os
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+    env["EMERGE_HOOK_STATE_ROOT"] = str(tmp_path)
     proc = subprocess.run(
         ["python3", str(ROOT / "hooks" / "pre_compact.py")],
         input="{}",
@@ -110,7 +110,7 @@ def test_post_compact_includes_span_protocol(tmp_path: Path):
 
 def test_hook_default_state_dir_uses_home_emerge(tmp_path: Path):
     env = os.environ.copy()
-    env.pop("CLAUDE_PLUGIN_DATA", None)
+    env.pop("EMERGE_HOOK_STATE_ROOT", None)
     env["HOME"] = str(tmp_path)
     proc = subprocess.run(
         ["python3", str(ROOT / "hooks" / "session_start.py")],
@@ -127,7 +127,7 @@ def test_hook_default_state_dir_uses_home_emerge(tmp_path: Path):
 
 def test_hooks_tolerate_invalid_json_and_budget(tmp_path: Path):
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+    env["EMERGE_HOOK_STATE_ROOT"] = str(tmp_path)
     bad = subprocess.run(
         ["python3", str(ROOT / "hooks" / "session_start.py")],
         input="{not json",
@@ -169,7 +169,7 @@ def test_post_tool_use_tolerates_non_object_tool_result(tmp_path: Path):
 def test_pre_compact_emits_recovery_token(tmp_path: Path):
     # First seed some state via post_tool_use
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+    env["EMERGE_HOOK_STATE_ROOT"] = str(tmp_path)
     subprocess.run(
         ["python3", str(ROOT / "hooks" / "post_tool_use.py")],
         input=json.dumps({
@@ -247,7 +247,7 @@ def test_post_tool_use_no_longer_echoes_updated_mcp_tool_output(tmp_path: Path):
 def test_pre_compact_resets_tracker_state(tmp_path: Path):
     """After PreCompact, state.json deltas and risks are cleared."""
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+    env["EMERGE_HOOK_STATE_ROOT"] = str(tmp_path)
 
     # Seed some deltas via post_tool_use
     subprocess.run(
@@ -291,7 +291,7 @@ def test_session_start_clears_stale_active_span(tmp_path, monkeypatch):
         "deltas": [],
     }
     (hook_state / "state.json").write_text(json.dumps(stale_state), encoding="utf-8")
-    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(hook_state))
+    monkeypatch.setenv("EMERGE_HOOK_STATE_ROOT", str(hook_state))
 
     result = subprocess.run(
         [sys.executable, "hooks/session_start.py"],
@@ -307,7 +307,7 @@ def test_session_start_clears_stale_active_span(tmp_path, monkeypatch):
 
 def _run_post_hook(payload: dict, hook_state: Path) -> dict:
     import json, subprocess, sys, os
-    env = {**os.environ, "CLAUDE_PLUGIN_DATA": str(hook_state)}
+    env = {**os.environ, "EMERGE_HOOK_STATE_ROOT": str(hook_state)}
     result = subprocess.run(
         [sys.executable, "hooks/post_tool_use.py"],
         input=json.dumps(payload),
@@ -451,7 +451,9 @@ def test_user_prompt_submit_no_longer_drains_pending_actions(tmp_path: Path):
 def test_watch_pending_emits_and_renames(tmp_path: Path):
     """watch_emerge.py tails events.jsonl and writes ack for cockpit_action events."""
     import subprocess, time, signal
-    events_file = tmp_path / "events.jsonl"
+    events_dir = tmp_path / "events"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    events_file = events_dir / "events.jsonl"
     event_id = "cockpit-test-ack-1"
     env = os.environ.copy()
     env["EMERGE_STATE_ROOT"] = str(tmp_path)
@@ -473,7 +475,7 @@ def test_watch_pending_emits_and_renames(tmp_path: Path):
     stdout, _ = proc.communicate(timeout=3)
     assert "[Cockpit]" in stdout
     assert "icc_exec" in stdout
-    ack_path = tmp_path / "cockpit-action-acks.jsonl"
+    ack_path = events_dir / "cockpit-action-acks.jsonl"
     assert ack_path.exists()
     ack = json.loads(ack_path.read_text(encoding="utf-8").strip().splitlines()[-1])
     assert ack["event_id"] == event_id
@@ -510,7 +512,7 @@ def test_post_tool_use_preserves_span_id(tmp_path):
         encoding="utf-8",
     )
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+    env["EMERGE_HOOK_STATE_ROOT"] = str(tmp_path)
     payload = {
         "tool_name": "mcp__plugin_emerge__icc_exec",
         "tool_response": {"content": [{"type": "text", "text": "{}"}]},
@@ -596,7 +598,7 @@ def test_task_completed_blocks_when_span_open(tmp_path: Path):
         encoding="utf-8",
     )
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+    env["EMERGE_HOOK_STATE_ROOT"] = str(tmp_path)
     proc = subprocess.run(
         ["python3", str(ROOT / "hooks" / "task_completed.py")],
         input="{}",
@@ -707,7 +709,7 @@ def test_session_start_includes_span_protocol(tmp_path, monkeypatch):
     hook_state = tmp_path / "hook-state"
     hook_state.mkdir()
     (hook_state / "state.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(hook_state))
+    monkeypatch.setenv("EMERGE_HOOK_STATE_ROOT", str(hook_state))
     result = subprocess.run(
         [sys.executable, "hooks/session_start.py"],
         input=json.dumps({}),
@@ -742,7 +744,7 @@ def test_recovery_token_active_span_fields_null_when_no_span():
 
 def test_pre_compact_includes_span_protocol(tmp_path):
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+    env["EMERGE_HOOK_STATE_ROOT"] = str(tmp_path)
     (tmp_path / "state.json").write_text("{}", encoding="utf-8")
     proc = subprocess.run(
         ["python3", str(ROOT / "hooks" / "pre_compact.py")],
@@ -757,7 +759,7 @@ def test_pre_compact_includes_span_protocol(tmp_path):
 
 def test_pre_compact_includes_active_span_reminder(tmp_path):
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+    env["EMERGE_HOOK_STATE_ROOT"] = str(tmp_path)
     state = {
         "active_span_id": "span-xyz",
         "active_span_intent": "zwcad.read.layers",
@@ -776,7 +778,8 @@ def test_pre_compact_includes_active_span_reminder(tmp_path):
 
 def _seed_span_reflection_data(exec_root: Path) -> None:
     exec_root.mkdir(parents=True, exist_ok=True)
-    (exec_root / "intents.json").write_text(
+    (exec_root / "registry").mkdir(parents=True, exist_ok=True)
+    (exec_root / "registry" / "intents.json").write_text(
         json.dumps(
             {
                 "intents": {
@@ -823,7 +826,7 @@ def test_pre_compact_includes_muscle_memory(tmp_path):
     exec_root = tmp_path / "exec-state"
     _seed_span_reflection_data(exec_root)
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_DATA"] = str(hook_state)
+    env["EMERGE_HOOK_STATE_ROOT"] = str(hook_state)
     env["EMERGE_STATE_ROOT"] = str(exec_root)
     proc = subprocess.run(
         ["python3", str(ROOT / "hooks" / "pre_compact.py")],
@@ -860,7 +863,7 @@ def test_pre_compact_prefers_cached_deep_reflection(tmp_path):
         encoding="utf-8",
     )
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_DATA"] = str(hook_state)
+    env["EMERGE_HOOK_STATE_ROOT"] = str(hook_state)
     env["EMERGE_STATE_ROOT"] = str(exec_root)
     proc = subprocess.run(
         ["python3", str(ROOT / "hooks" / "pre_compact.py")],
@@ -883,7 +886,7 @@ def test_user_prompt_submit_reflection_at_turn_threshold(tmp_path):
     exec_root = tmp_path / "exec-state"
     _seed_span_reflection_data(exec_root)
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_DATA"] = str(hook_state)
+    env["EMERGE_HOOK_STATE_ROOT"] = str(hook_state)
     env["EMERGE_STATE_ROOT"] = str(exec_root)
     proc = subprocess.run(
         ["python3", str(ROOT / "hooks" / "user_prompt_submit.py")],
@@ -908,7 +911,7 @@ def test_user_prompt_submit_span_reminder_at_interval(tmp_path):
     (hook_state / "state.json").write_text(json.dumps({"turn_count": 4}), encoding="utf-8")
     exec_root = tmp_path / "exec-state"
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_DATA"] = str(hook_state)
+    env["EMERGE_HOOK_STATE_ROOT"] = str(hook_state)
     env["EMERGE_STATE_ROOT"] = str(exec_root)
     proc = subprocess.run(
         ["python3", str(ROOT / "hooks" / "user_prompt_submit.py")],
@@ -933,7 +936,7 @@ def test_user_prompt_submit_no_reminder_when_span_active(tmp_path):
     )
     exec_root = tmp_path / "exec-state"
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_DATA"] = str(hook_state)
+    env["EMERGE_HOOK_STATE_ROOT"] = str(hook_state)
     env["EMERGE_STATE_ROOT"] = str(exec_root)
     proc = subprocess.run(
         ["python3", str(ROOT / "hooks" / "user_prompt_submit.py")],
@@ -954,7 +957,7 @@ def test_build_reflection_cache_script_writes_cache(tmp_path):
     exec_root = tmp_path / "exec-state"
     _seed_span_reflection_data(exec_root)
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_DATA"] = str(hook_state)
+    env["EMERGE_HOOK_STATE_ROOT"] = str(hook_state)
     env["EMERGE_STATE_ROOT"] = str(exec_root)
     proc = subprocess.run(
         ["python3", str(ROOT / "scripts" / "build_reflection_cache.py")],
@@ -1107,7 +1110,7 @@ def test_elicitation_ci_mode_auto_accepts_span_approve(tmp_path: Path):
     env_backup = _os.environ.copy()
     try:
         _os.environ["EMERGE_CI"] = "1"
-        _os.environ["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+        _os.environ["EMERGE_HOOK_STATE_ROOT"] = str(tmp_path)
         out = _run(
             "elicitation.py",
             {
@@ -1137,7 +1140,7 @@ def test_elicitation_non_ci_mode_passes_through(tmp_path: Path):
     env_backup = _os.environ.copy()
     try:
         _os.environ.pop("EMERGE_CI", None)
-        _os.environ["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+        _os.environ["EMERGE_HOOK_STATE_ROOT"] = str(tmp_path)
         out = _run(
             "elicitation.py",
             {
@@ -1163,7 +1166,7 @@ def test_elicitation_ci_auto_accepts_reconcile(tmp_path: Path):
     env_backup = _os.environ.copy()
     try:
         _os.environ["EMERGE_CI"] = "1"
-        _os.environ["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+        _os.environ["EMERGE_HOOK_STATE_ROOT"] = str(tmp_path)
         out = _run(
             "elicitation.py",
             {

@@ -4,11 +4,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from scripts.policy_config import atomic_write_json, load_json_object
+from scripts.policy_config import atomic_write_json, load_json_object, registry_root
 
 
 def registry_path(state_root: Path) -> Path:
-    return state_root / "intents.json"
+    return registry_root(state_root) / "intents.json"
 
 
 def default_intent_entry() -> dict[str, Any]:
@@ -29,6 +29,17 @@ def default_intent_entry() -> dict[str, Any]:
         "description": "",
         "last_ts_ms": 0,
         "updated_at_ms": 0,
+        # Bounded audit trail of stage changes. Each entry:
+        # {ts_ms, from_stage, to_stage, reason, attempts, success_rate,
+        #  verify_rate, consecutive_failures, window_success_rate,
+        #  session_id, target_profile, execution_path}.
+        "transition_history": [],
+        # Snapshot of the most recent demotion (explore→rollback,
+        # canary→explore, stable→explore). ``None`` while the intent has
+        # never been demoted. Mirrors the last demoting transition_history
+        # entry so cockpit can render "Why did this pipeline regress?"
+        # without scanning history.
+        "last_demotion": None,
     }
 
 

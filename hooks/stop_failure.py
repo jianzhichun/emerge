@@ -12,10 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.policy_config import (  # noqa: E402
-    default_hook_state_root,
-    pin_plugin_data_path_if_present,
-)
+from scripts.policy_config import default_hook_state_root  # noqa: E402
 from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
 
 
@@ -28,7 +25,6 @@ def main() -> None:
 
     error_type = str(payload.get("error", "unknown"))
 
-    pin_plugin_data_path_if_present()
     state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
 

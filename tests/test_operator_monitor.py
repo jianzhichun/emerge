@@ -45,7 +45,7 @@ def test_process_local_file_writes_events_local_jsonl(tmp_path):
     )
     monitor.process_local_file(events_file)
 
-    events_local = state_root / "events-local.jsonl"
+    events_local = state_root / "events" / "events-local.jsonl"
     assert events_local.exists(), "events-local.jsonl must be written"
     lines = [json.loads(l) for l in events_local.read_text().splitlines() if l.strip()]
     assert len(lines) >= 1
@@ -73,7 +73,7 @@ def test_process_local_file_no_events_does_not_write(tmp_path):
     )
     monitor.process_local_file(events_file)
 
-    assert not (state_root / "events-local.jsonl").exists()
+    assert not (state_root / "events" / "events-local.jsonl").exists()
 
 
 def test_operator_monitor_stops_cleanly(tmp_path):
@@ -106,7 +106,7 @@ def test_process_local_file_accumulates_across_calls(tmp_path):
     )
     monitor.process_local_file(events_file)
 
-    events_local = state_root / "events-local.jsonl"
+    events_local = state_root / "events" / "events-local.jsonl"
     assert events_local.exists()
     count_first = len(events_local.read_text().splitlines())
     assert count_first >= 1, "should write at least one alert after 3 events"

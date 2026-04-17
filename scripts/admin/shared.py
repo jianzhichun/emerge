@@ -18,7 +18,7 @@ if str(_ROOT) not in sys.path:
 
 import json as _json
 
-from scripts.policy_config import default_exec_root  # noqa: E402
+from scripts.policy_config import default_state_root  # noqa: E402
 
 _SHARED_ROOT = Path(__file__).resolve().parents[2]
 
@@ -35,25 +35,8 @@ def _local_plugin_version() -> str:
 def _resolve_state_root() -> Path:
     """Return the daemon state root directory (EMERGE_STATE_ROOT or default)."""
     return Path(
-        os.environ.get("EMERGE_STATE_ROOT", str(default_exec_root()))
+        os.environ.get("EMERGE_STATE_ROOT", str(default_state_root()))
     ).expanduser().resolve()
-
-
-def _resolve_repl_root() -> Path:
-    """Return the state root used by cockpit submit/listening handshake files.
-
-    Priority keeps compatibility with older setups:
-    1) EMERGE_REPL_ROOT (cockpit-specific)
-    2) EMERGE_STATE_ROOT (legacy single-root setups)
-    3) default_exec_root() (~/.emerge/repl)
-    """
-    repl_root = os.environ.get("EMERGE_REPL_ROOT", "").strip()
-    if repl_root:
-        return Path(repl_root).expanduser().resolve()
-    state_root = os.environ.get("EMERGE_STATE_ROOT", "").strip()
-    if state_root:
-        return Path(state_root).expanduser().resolve()
-    return default_exec_root().expanduser().resolve()
 
 
 def _detect_lan_ip() -> str:

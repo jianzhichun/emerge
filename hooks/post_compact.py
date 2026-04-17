@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.policy_config import REFLECTION_CACHE_TTL_MS, default_exec_root, default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
+from scripts.policy_config import REFLECTION_CACHE_TTL_MS, default_state_root, default_hook_state_root  # noqa: E402
 from scripts.span_tracker import SpanTracker  # noqa: E402
 from scripts.state_tracker import load_tracker  # noqa: E402
 
@@ -19,7 +19,6 @@ _BUDGET_CHARS = 800
 def main() -> None:
     sys.stdin.read()  # consume stdin (unused by PostCompact)
 
-    pin_plugin_data_path_if_present()
     state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
 
@@ -29,7 +28,7 @@ def main() -> None:
     token = tracker.format_recovery_token(budget_chars=_BUDGET_CHARS)
     token_json = json.dumps(token, ensure_ascii=True, separators=(",", ":"))
 
-    exec_root = Path(os.environ.get("EMERGE_STATE_ROOT", str(default_exec_root())))
+    exec_root = Path(os.environ.get("EMERGE_STATE_ROOT", str(default_state_root())))
     reflection = SpanTracker(
         state_root=exec_root,
         hook_state_root=state_root,

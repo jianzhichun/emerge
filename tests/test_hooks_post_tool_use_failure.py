@@ -13,7 +13,7 @@ HOOK = ROOT / "hooks" / "post_tool_use_failure.py"
 
 
 def _run_failure_hook(payload: dict, tmpdir: str) -> tuple[dict, dict]:
-    env = {**os.environ, "CLAUDE_PLUGIN_DATA": tmpdir}
+    env = {**os.environ, "EMERGE_HOOK_STATE_ROOT": tmpdir}
     result = subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps(payload),

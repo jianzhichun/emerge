@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.policy_config import REFLECTION_CACHE_TTL_MS, default_exec_root, default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
+from scripts.policy_config import REFLECTION_CACHE_TTL_MS, default_state_root, default_hook_state_root  # noqa: E402
 from scripts.span_tracker import SpanTracker  # noqa: E402
 from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
 
@@ -24,7 +24,6 @@ def main() -> None:
     except Exception:
         payload = {}
 
-    pin_plugin_data_path_if_present()
     state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
     tracker = load_tracker(state_path)
@@ -41,7 +40,7 @@ def main() -> None:
         budget_chars = None
     context_text = tracker.format_additional_context(budget_chars=budget_chars)
     if turn_count == _REFLECTION_TURN_THRESHOLD:
-        exec_root = Path(os.environ.get("EMERGE_STATE_ROOT", str(default_exec_root())))
+        exec_root = Path(os.environ.get("EMERGE_STATE_ROOT", str(default_state_root())))
         reflection = SpanTracker(
             state_root=exec_root,
             hook_state_root=state_root,

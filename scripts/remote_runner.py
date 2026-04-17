@@ -19,7 +19,12 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from scripts.policy_config import derive_profile_token, derive_session_id, default_exec_root
+from scripts.policy_config import (
+    default_state_root,
+    derive_profile_token,
+    derive_session_id,
+    session_idle_ttl_s,
+)
 from scripts.exec_session import ExecSession
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,7 +56,7 @@ class RunnerExecutor:
         resolved_root = root or ROOT
         self._root = resolved_root
         self._script_roots = self._resolve_script_roots()
-        self._state_root = (state_root or default_exec_root()).expanduser().resolve()
+        self._state_root = (state_root or default_state_root()).expanduser().resolve()
         self._base_session_id = derive_session_id(os.environ.get("EMERGE_SESSION_ID"), resolved_root)
         self._sessions_by_profile: dict[str, ExecSession] = {}
         self._repl_lock = threading.Lock()
@@ -259,6 +264,7 @@ class RunnerExecutor:
     def _get_session(self, target_profile: str) -> ExecSession:
         normalized = (target_profile or "default").strip() or "default"
         profile_key = "__default__" if normalized == "default" else derive_profile_token(normalized)
+        self._evict_idle_sessions()
         if profile_key not in self._sessions_by_profile:
             with self._repl_lock:
                 if profile_key not in self._sessions_by_profile:
@@ -271,6 +277,23 @@ class RunnerExecutor:
                         state_root=self._state_root, session_id=session_id
                     )
         return self._sessions_by_profile[profile_key]
+
+    def _evict_idle_sessions(self, *, now_ms: int | None = None) -> list[str]:
+        ttl_s = session_idle_ttl_s()
+        if ttl_s <= 0:
+            return []
+        current_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+        ttl_ms = ttl_s * 1000
+        evicted: list[str] = []
+        with self._repl_lock:
+            for key, sess in list(self._sessions_by_profile.items()):
+                if sess._poisoned_thread is not None:  # noqa: SLF001
+                    continue
+                last = sess.last_active_at_ms
+                if last and (current_ms - last) > ttl_ms:
+                    del self._sessions_by_profile[key]
+                    evicted.append(key)
+        return evicted
 
     def _resolve_exec_code(self, mode: str, arguments: dict[str, Any]) -> str:
         if mode == "script_ref":

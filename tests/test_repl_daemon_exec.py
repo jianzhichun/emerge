@@ -48,7 +48,7 @@ def test_default_session_id_is_project_scoped_not_literal_default(tmp_path: Path
     try:
         daemon = EmergeDaemon(root=ROOT)
         daemon.call_tool("icc_exec", {"code": "x = 1"})
-        dirs = [p.name for p in tmp_path.iterdir() if p.is_dir()]
+        dirs = [p.name for p in (tmp_path / "sessions").iterdir() if p.is_dir()]
         assert dirs
         assert "default" not in dirs
         assert any(name.startswith("emerge-") for name in dirs)
@@ -62,7 +62,7 @@ def test_wal_replay_tolerates_broken_entries(tmp_path: Path):
     try:
         daemon1 = EmergeDaemon(root=ROOT)
         daemon1.call_tool("icc_exec", {"code": "x = 7"})
-        session_dir = tmp_path / "recover"
+        session_dir = tmp_path / "sessions" / "recover"
         wal = session_dir / "wal.jsonl"
         wal.write_text(
             wal.read_text(encoding="utf-8")
@@ -87,7 +87,7 @@ def test_wal_replay_tolerates_invalid_json_lines(tmp_path: Path):
     try:
         daemon1 = EmergeDaemon(root=ROOT)
         daemon1.call_tool("icc_exec", {"code": "x = 8"})
-        session_dir = tmp_path / "recover-json"
+        session_dir = tmp_path / "sessions" / "recover-json"
         wal = session_dir / "wal.jsonl"
         wal.write_text(wal.read_text(encoding="utf-8") + "{not valid json}\n", encoding="utf-8")
 
@@ -109,9 +109,9 @@ def test_explicit_session_id_is_contained_under_state_root(tmp_path: Path):
     try:
         daemon = EmergeDaemon(root=ROOT)
         daemon.call_tool("icc_exec", {"code": "x = 1"})
-        dirs = [p for p in (tmp_path / "state").iterdir() if p.is_dir()]
+        dirs = [p for p in (tmp_path / "state" / "sessions").iterdir() if p.is_dir()]
         assert len(dirs) == 1
-        assert dirs[0].parent.resolve() == (tmp_path / "state").resolve()
+        assert dirs[0].parent.resolve() == (tmp_path / "state" / "sessions").resolve()
         assert ".." not in dirs[0].name
         assert "/" not in dirs[0].name
     finally:
@@ -125,7 +125,7 @@ def test_explicit_dot_session_id_is_sanitized(tmp_path: Path):
     try:
         daemon = EmergeDaemon(root=ROOT)
         daemon.call_tool("icc_exec", {"code": "x = 1"})
-        dirs = [p for p in (tmp_path / "state").iterdir() if p.is_dir()]
+        dirs = [p for p in (tmp_path / "state" / "sessions").iterdir() if p.is_dir()]
         assert len(dirs) == 1
         assert dirs[0].name != "."
         assert dirs[0].resolve() != (tmp_path / "state").resolve()
@@ -140,7 +140,7 @@ def test_corrupt_checkpoint_falls_back_to_wal_replay(tmp_path: Path):
     try:
         daemon1 = EmergeDaemon(root=ROOT)
         daemon1.call_tool("icc_exec", {"code": "x = 21"})
-        session_dir = tmp_path / "checkpoint-corrupt"
+        session_dir = tmp_path / "sessions" / "checkpoint-corrupt"
         checkpoint = session_dir / "checkpoint.json"
         checkpoint.write_text("{bad checkpoint", encoding="utf-8")
 

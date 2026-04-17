@@ -32,10 +32,12 @@ from scripts.admin.api import (
     _cmd_save_settings,
 )
 from scripts.admin.actions import ActionRegistry
-from scripts.admin.shared import _resolve_repl_root, _resolve_connector_root
+from scripts.admin.shared import _resolve_state_root, _resolve_connector_root
+from scripts.policy_config import events_root
 from scripts.admin.control_plane import (
     cmd_control_plane_state,
     cmd_control_plane_sessions,
+    cmd_control_plane_intent_history,
     cmd_control_plane_intents,
     cmd_control_plane_session,
     cmd_control_plane_hook_state,
@@ -47,6 +49,7 @@ from scripts.admin.control_plane import (
     cmd_control_plane_reflection_cache,
     cmd_control_plane_monitors,
     cmd_control_plane_runner_events,
+    cmd_control_plane_watchers,
     cmd_control_plane_delta_reconcile,
     cmd_control_plane_risk_update,
     cmd_control_plane_risk_add,
@@ -93,8 +96,9 @@ def _load_recent_jsonl(path: Path, max_tail_bytes: int = _STATUS_TAIL_BYTES) -> 
 
 
 def _latest_cockpit_dispatch_status(state_root: Path) -> dict:
-    events = _load_recent_jsonl(state_root / "events.jsonl")
-    acks = _load_recent_jsonl(state_root / "cockpit-action-acks.jsonl")
+    ev_root = events_root(state_root)
+    events = _load_recent_jsonl(ev_root / "events.jsonl")
+    acks = _load_recent_jsonl(ev_root / "cockpit-action-acks.jsonl")
     last_event = None
     for row in reversed(events):
         if row.get("type") == "cockpit_action":
@@ -230,7 +234,7 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/status":
             import time as _t_status
             _CC_ACTIVE_WINDOW_S = 120
-            state_root = _resolve_repl_root()
+            state_root = _resolve_state_root()
             last_mcp_ts = 0.0
             if self._cockpit is not None:
                 hsrv = getattr(self._cockpit, "_http_srv", None)
@@ -238,12 +242,18 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                     last_mcp_ts = getattr(hsrv, "_last_mcp_ts", 0.0)
             cc_active = (_t_status.time() - last_mcp_ts) < _CC_ACTIVE_WINDOW_S if last_mcp_ts else False
             dispatch = _latest_cockpit_dispatch_status(state_root)
+            from scripts.watchers import watcher_health_summary
+            watchers = watcher_health_summary(state_root)
             self._json(
                 {
                     "ok": True,
                     "pending": bool(dispatch["cockpit_ack_pending"]),
                     "server_online": True,
                     "cc_active": cc_active,
+                    "watchers_healthy": bool(watchers["healthy"]),
+                    "watchers_alive_count": int(watchers["alive_count"]),
+                    "watchers_total": int(watchers["total"]),
+                    "watchers_stale_ids": list(watchers.get("stale_watcher_ids", [])),
                     **dispatch,
                 }
             )
@@ -261,6 +271,16 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self._json(cmd_control_plane_sessions(state_root=_state_root, current_session_id=_current))
         elif path == "/api/control-plane/intents":
             self._json(cmd_control_plane_intents())
+        elif path == "/api/control-plane/intent-history":
+            key = (qs_all.get("intent") or qs_all.get("key") or [""])[0]
+            try:
+                limit = int((qs_all.get("limit") or ["0"])[0])
+            except ValueError:
+                limit = 0
+            self._json(cmd_control_plane_intent_history(
+                intent_signature=key,
+                limit=limit if limit > 0 else None,
+            ))
         elif path == "/api/control-plane/session":
             self._json(cmd_control_plane_session(session_id=session_id_q))
         elif path == "/api/control-plane/hook-state":
@@ -295,6 +315,9 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                 self._json(self._cockpit.get_monitor_data())
             else:
                 self._json(cmd_control_plane_monitors())
+        elif path == "/api/control-plane/watchers":
+            state_root = _resolve_state_root()
+            self._json(cmd_control_plane_watchers(state_root=state_root))
         elif path == "/api/control-plane/runner-events":
             qs_re = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             profile = (qs_re.get("profile") or [""])[0]
@@ -684,7 +707,7 @@ class InProcessCockpitBridge:
         self._http_srv.cockpit_broadcast(event)
 
     def write_event(self, event: dict) -> None:
-        self._http_srv._append_event(self._http_srv._state_root / "events.jsonl", event)
+        self._http_srv._append_event(events_root(self._http_srv._state_root) / "events.jsonl", event)
 
 
 class _StandaloneDaemonStub:
@@ -706,12 +729,12 @@ class CockpitHTTPServer:
         self,
         daemon: object,
         port: int = 0,
-        repl_root: Path | None = None,
+        state_root: Path | None = None,
         connector_root: Path | None = None,
     ) -> None:
         self._daemon = daemon
         self._port = port
-        self._repl_root = repl_root or _resolve_repl_root()
+        self._state_root = state_root or _resolve_state_root()
         self._connector_root = connector_root or _resolve_connector_root()
         self._server: socketserver.TCPServer | None = None
         self._thread: threading.Thread | None = None
@@ -727,7 +750,7 @@ class CockpitHTTPServer:
         self._server = _ReuseAddrTCPServer(("127.0.0.1", self._port), handler)
         actual_port = self._server.server_address[1]
         self.url = f"http://localhost:{actual_port}"
-        pid_path = _cockpit_pid_path(self._repl_root)
+        pid_path = _cockpit_pid_path(self._state_root)
         pid_path.parent.mkdir(parents=True, exist_ok=True)
         pid_path.write_text(
             json.dumps({"pid": os.getpid(), "port": actual_port, "cwd": str(Path.cwd())}),
@@ -748,7 +771,7 @@ class CockpitHTTPServer:
             except Exception:
                 pass
             self._server = None
-        _cockpit_pid_path(self._repl_root).unlink(missing_ok=True)
+        _cockpit_pid_path(self._state_root).unlink(missing_ok=True)
 
     def broadcast(self, event: dict) -> None:
         """Push SSE event to all connected browser clients."""
@@ -765,7 +788,7 @@ class CockpitHTTPServer:
                 self._sse_clients.remove(wfile)
 
     def write_event(self, event: dict) -> None:
-        path = self._repl_root / "events.jsonl"
+        path = events_root(self._state_root) / "events.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False) + "\n")
@@ -789,7 +812,7 @@ class CockpitHTTPServer:
             ]
             return {"runners": runners, "team_active": len(runners) > 0}
         # Standalone mode: fallback to file
-        state_path = self._repl_root / "runner-monitor-state.json"
+        state_path = events_root(self._state_root) / "runner-monitor-state.json"
         if not state_path.exists():
             return {"runners": [], "team_active": False}
         try:
@@ -802,8 +825,8 @@ class CockpitHTTPServer:
             return {"runners": [], "team_active": False}
 
 
-def _cockpit_pid_path(repl_root: Path | None = None) -> Path:
-    return (repl_root or _resolve_repl_root()) / "cockpit.pid"
+def _cockpit_pid_path(state_root: Path | None = None) -> Path:
+    return (state_root or _resolve_state_root()) / "cockpit.pid"
 
 
 def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
@@ -812,8 +835,8 @@ def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
     mismatch), it is stopped and a new one is started.
     """
     import signal as _signal
-    repl_root = _resolve_repl_root()
-    pid_path = _cockpit_pid_path(repl_root)
+    state_root = _resolve_state_root()
+    pid_path = _cockpit_pid_path(state_root)
     current_cwd = str(Path.cwd())
 
     # Reuse existing instance if alive AND same project
@@ -837,7 +860,7 @@ def cmd_serve(port: int = 0, open_browser: bool = False) -> dict:
             pass
         pid_path.unlink(missing_ok=True)
 
-    cockpit = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), port=port, repl_root=repl_root)
+    cockpit = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), port=port, state_root=state_root)
     url = cockpit.start()
     actual_port = int(url.split(":")[-1])
 

@@ -14,6 +14,12 @@ from scripts.emerge_daemon import EmergeDaemon
 from scripts.remote_runner import RunnerExecutor, RunnerHTTPHandler, ThreadingHTTPServer
 
 
+def _registry_path(state_root: Path) -> Path:
+    path = state_root / "registry" / "intents.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 class _RunnerServer:
     def __init__(self, state_root: Path) -> None:
         self._state_root = state_root
@@ -130,7 +136,7 @@ def test_pipeline_write_lifecycle_registry(tmp_path: Path):
             )
             assert out.get("isError") is not True
 
-        reg = tmp_path / "state" / "intents.json"
+        reg = _registry_path(tmp_path / "state")
         data = json.loads(reg.read_text(encoding="utf-8"))
         key = "mock.write.add-wall"
         assert data["intents"][key]["stage"] == "canary"
@@ -159,7 +165,7 @@ def test_exec_and_pipeline_share_key_when_intent_matches(tmp_path: Path):
             tool_name="icc_exec", mode="write",
             arguments={"connector": "mock", "pipeline": "add-wall", "length": 1000},
         )
-        registry = tmp_path / "state" / "compose" / "candidates.json"
+        registry = tmp_path / "state" / "sessions" / "compose" / "candidates.json"
         data = json.loads(registry.read_text(encoding="utf-8"))
         key = "mock.write.add-wall"
         assert data["candidates"][key]["total_calls"] == 2
@@ -475,7 +481,7 @@ def test_zwcad_policy_registry_tracks_pipeline_key(tmp_path: Path):
                 tool_name="icc_exec", mode="write",
                 arguments={"connector": "zwcad", "pipeline": "apply-change", "change_type": "line"},
             )
-        reg = tmp_path / "state" / "intents.json"
+        reg = _registry_path(tmp_path / "state")
         assert reg.exists(), "registry file not created"
         data = json.loads(reg.read_text(encoding="utf-8"))
         assert "zwcad.read.state" in data["intents"]
@@ -505,7 +511,7 @@ def test_pipeline_registry_is_shared_across_sessions(tmp_path: Path):
         daemon_b._run_connector_pipeline(tool_name="icc_exec", mode="read", arguments={"connector": "zwcad", "pipeline": "state"})
 
         # Registry must be at state_root level, not inside any session dir
-        global_reg = state_root / "intents.json"
+        global_reg = state_root / "registry" / "intents.json"
         assert global_reg.exists(), "registry must be at state_root level, not session-scoped"
         data = json.loads(global_reg.read_text(encoding="utf-8"))
         key = "zwcad.read.state"
@@ -513,10 +519,11 @@ def test_pipeline_registry_is_shared_across_sessions(tmp_path: Path):
         # 4 total calls (3 from A + 1 from B) must be reflected
         entry = data["intents"][key]
         assert entry.get("attempt_count", entry.get("attempts", 0)) >= 4 or True  # attempts tracked in candidates
-        # Session-scoped dirs must NOT contain intents.json
-        assert not (state_root / "session-a" / "intents.json").exists(), \
+        # Legacy-regression guard: old session-scoped registry path must not
+        # reappear after moving to state/registry/intents.json.
+        assert not (state_root / "sessions" / "session-a" / "intents.json").exists(), \
             "registry must not be duplicated inside session-a dir"
-        assert not (state_root / "session-b" / "intents.json").exists(), \
+        assert not (state_root / "sessions" / "session-b" / "intents.json").exists(), \
             "registry must not be duplicated inside session-b dir"
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
@@ -537,7 +544,7 @@ def test_pipeline_policy_metrics_are_recorded_for_stop_and_rollback(tmp_path: Pa
             arguments={"connector": "mock", "pipeline": "add-wall-rollback", "length": 1000},
         )
 
-        reg = tmp_path / "state" / "intents.json"
+        reg = _registry_path(tmp_path / "state")
         data = json.loads(reg.read_text(encoding="utf-8"))
 
         stop_key = "mock.write.add-wall"
@@ -559,7 +566,7 @@ def test_pipeline_registry_records_last_execution_path_local(tmp_path: Path):
     try:
         daemon = EmergeDaemon(root=ROOT)
         daemon._run_connector_pipeline(tool_name="icc_exec", mode="read", arguments={"connector": "mock", "pipeline": "layers"})
-        reg = tmp_path / "state" / "intents.json"
+        reg = _registry_path(tmp_path / "state")
         data = json.loads(reg.read_text(encoding="utf-8"))
         assert data["intents"]["mock.read.layers"]["last_execution_path"] == "local"
     finally:
@@ -575,7 +582,7 @@ def test_pipeline_registry_records_last_execution_path_remote(tmp_path: Path):
             os.environ["EMERGE_RUNNER_URL"] = server.url
             daemon = EmergeDaemon(root=ROOT)
             daemon._run_connector_pipeline(tool_name="icc_exec", mode="read", arguments={"connector": "mock", "pipeline": "layers"})
-        reg = tmp_path / "daemon-state" / "intents.json"
+        reg = _registry_path(tmp_path / "daemon-state")
         data = json.loads(reg.read_text(encoding="utf-8"))
         assert data["intents"]["mock.read.layers"]["last_execution_path"] == "remote"
     finally:
@@ -594,6 +601,19 @@ def test_resources_list_returns_static_and_pipeline_uris():
     assert "runner://status" in uris
     assert "state://deltas" in uris
     assert any(u.startswith("pipeline://") for u in uris)
+
+
+def test_resources_templates_list_returns_uri_templates():
+    daemon = EmergeDaemon(root=ROOT)
+    resp = daemon.handle_jsonrpc(
+        {"jsonrpc": "2.0", "id": 55, "method": "resources/templates/list", "params": {}}
+    )
+    templates = resp["result"]["resourceTemplates"]
+    uri_templates = {t["uriTemplate"] for t in templates}
+    assert "pipeline://{connector}/{mode}/{name}" in uri_templates
+    assert "policy://current" in uri_templates
+    assert "runner://status" in uri_templates
+    assert "state://deltas" in uri_templates
 
 
 def test_resources_read_policy_current(tmp_path):
@@ -712,11 +732,11 @@ def test_prompts_get_unknown_returns_error():
 # ── Task 8: icc_reconcile tool ───────────────────────────────────────────────
 
 def test_icc_reconcile_confirms_delta(tmp_path):
-    os.environ["CLAUDE_PLUGIN_DATA"] = str(tmp_path / "hook-state")
+    os.environ["EMERGE_HOOK_STATE_ROOT"] = str(tmp_path / "hook-state")
     try:
         # Seed a delta directly via tracker API
         from scripts.state_tracker import load_tracker, save_tracker, LEVEL_CORE_SECONDARY
-        state_path = Path(os.environ["CLAUDE_PLUGIN_DATA"]) / "state.json"
+        state_path = Path(os.environ["EMERGE_HOOK_STATE_ROOT"]) / "state.json"
         state_path.parent.mkdir(parents=True, exist_ok=True)
         tracker = load_tracker(state_path)
         delta_id = tracker.add_delta(
@@ -735,7 +755,7 @@ def test_icc_reconcile_confirms_delta(tmp_path):
         assert result["outcome"] == "confirm"
         assert "verification_state" in result
     finally:
-        os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+        os.environ.pop("EMERGE_HOOK_STATE_ROOT", None)
 
 
 def test_icc_reconcile_in_tools_list():
@@ -749,13 +769,13 @@ def test_icc_reconcile_in_tools_list():
 
 
 def test_flywheel_exec_routes_to_pipeline_when_stable(tmp_path):
-    """When flywheel bridge candidate is stable in pipelines-registry, icc_exec is redirected."""
+    """When flywheel bridge candidate is stable in intent registry, icc_exec is redirected."""
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "flywheel-promote-test"
     try:
         daemon = EmergeDaemon(root=ROOT)
 
-        # Status lives in intents.json, keyed by the bridge candidate key
+        # Status lives in state/registry/intents.json, keyed by candidate key
         bridge_key = "mock.read.layers"
         pipelines = {
             "intents": {
@@ -768,7 +788,7 @@ def test_flywheel_exec_routes_to_pipeline_when_stable(tmp_path):
         }
         state_dir = tmp_path / "state"
         state_dir.mkdir(parents=True, exist_ok=True)
-        (state_dir / "intents.json").write_text(json.dumps(pipelines))
+        _registry_path(state_dir).write_text(json.dumps(pipelines))
 
         out = daemon.call_tool("icc_exec", {
             "code": "x = 1",
@@ -803,7 +823,7 @@ def test_flywheel_exec_does_not_promote_when_candidate_is_canary(tmp_path):
         }
         state_dir = tmp_path / "state"
         state_dir.mkdir(parents=True, exist_ok=True)
-        (state_dir / "intents.json").write_text(json.dumps(pipelines))
+        _registry_path(state_dir).write_text(json.dumps(pipelines))
 
         out = daemon.call_tool("icc_exec", {
             "code": "print('hello')",
@@ -876,7 +896,7 @@ def test_icc_reconcile_correct_increments_human_fixes(tmp_path):
             "intent_signature": "test.write.fixme",
         })
         # Read candidates.json and verify human_fixes incremented
-        session_dir = state_root / "reconcile-fix-test"
+        session_dir = state_root / "sessions" / "reconcile-fix-test"
         cands = json.loads((session_dir / "candidates.json").read_text())
         matched = [
             v for k, v in cands["candidates"].items()
@@ -904,7 +924,7 @@ def test_increment_human_fix_increments_unified_key(tmp_path):
     os.environ["EMERGE_STATE_ROOT"] = str(state_root)
     os.environ["EMERGE_SESSION_ID"] = "fix-test"
     try:
-        session_dir = state_root / "fix-test"
+        session_dir = state_root / "sessions" / "fix-test"
         session_dir.mkdir(parents=True, exist_ok=True)
 
         now = int(time.time() * 1000)
@@ -1269,7 +1289,7 @@ def test_hypermesh_pipeline_write_lifecycle_registry(tmp_path: Path):
             )
             assert out.get("isError") is False
 
-        reg = tmp_path / "state" / "intents.json"
+        reg = _registry_path(tmp_path / "state")
         data = json.loads(reg.read_text(encoding="utf-8"))
         key = "hypermesh.write.apply-change"
         assert key in data["intents"], f"Key {key!r} not found; keys={list(data['intents'])}"
@@ -1384,7 +1404,7 @@ def test_cloud_server_policy_registry_tracks_pipeline_key(tmp_path: Path):
                 tool_name="icc_exec", mode="write",
                 arguments={"connector": "cloud-server", "pipeline": "apply-test", "scenario": "health-check"},
             )
-        reg = tmp_path / "state" / "intents.json"
+        reg = _registry_path(tmp_path / "state")
         assert reg.exists(), "registry file not created"
         data = json.loads(reg.read_text(encoding="utf-8"))
         assert "cloud-server.read.state" in data["intents"]
@@ -1430,13 +1450,13 @@ def test_description_stored_on_icc_exec(tmp_path: Path):
         },
     )
 
-    session_dir = tmp_path / "test-desc-exec"
+    session_dir = tmp_path / "sessions" / "test-desc-exec"
     registry = json.loads((session_dir / "candidates.json").read_text())
     entry = registry["candidates"].get("mock.read.state")
     assert entry is not None, "candidate entry not found"
     assert entry["description"] == "Read current state from mock connector"
 
-    pipeline_registry = json.loads((tmp_path / "intents.json").read_text())
+    pipeline_registry = json.loads(_registry_path(tmp_path).read_text())
     pipeline = pipeline_registry["intents"].get("mock.read.state")
     assert pipeline is not None, "intent registry entry not found"
     assert pipeline["description"] == "Read current state from mock connector"
@@ -1465,7 +1485,7 @@ def test_description_not_overwritten_on_second_exec(tmp_path: Path):
         },
     )
 
-    session_dir = tmp_path / "test-desc-nooverwrite"
+    session_dir = tmp_path / "sessions" / "test-desc-nooverwrite"
     registry = json.loads((session_dir / "candidates.json").read_text())
     entry = registry["candidates"]["mock.read.state"]
     assert entry["description"] == "Original description"
@@ -1588,7 +1608,7 @@ def test_crystallize_yaml_includes_description(tmp_path: Path):
             "description": "Read all layers",
         })
 
-        session_dir = tmp_path / "test-cryst-desc"
+        session_dir = tmp_path / "sessions" / "test-cryst-desc"
         wal_path = session_dir / "wal.jsonl"
         assert wal_path.exists(), "WAL must exist after icc_exec"
 
@@ -1630,7 +1650,7 @@ def test_crystallize_clears_synthesis_ready(tmp_path: Path):
         })
 
         # Manually inject synthesis_ready
-        reg_path = tmp_path / "intents.json"
+        reg_path = _registry_path(tmp_path)
         reg = json.loads(reg_path.read_text()) if reg_path.exists() else {"intents": {}}
         reg["intents"].setdefault("myconn.read.state", {})["synthesis_ready"] = True
         reg_path.write_text(json.dumps(reg), encoding="utf-8")
@@ -1709,7 +1729,7 @@ def test_intents_table_shows_execution_path(tmp_path: Path):
 
 
 def test_pipeline_registry_does_not_store_source(tmp_path: Path):
-    """intents.json should not persist legacy source markers."""
+    """state/registry/intents.json should not persist legacy source markers."""
     daemon = EmergeDaemon(root=ROOT)
     daemon._state_root = tmp_path
     daemon._base_session_id = "test-reg-src"
@@ -1719,7 +1739,7 @@ def test_pipeline_registry_does_not_store_source(tmp_path: Path):
         "intent_signature": "mock.read.state",
     })
 
-    reg = json.loads((tmp_path / "intents.json").read_text())
+    reg = json.loads(_registry_path(tmp_path).read_text())
     entry = reg["intents"].get("mock.read.state", {})
     assert "source" not in entry
 
@@ -1748,7 +1768,7 @@ def test_flywheel_bridge_fires_via_intent_signature_when_stable(tmp_path):
                 }
             }
         }
-        (state_dir / "intents.json").write_text(json.dumps(pipelines))
+        _registry_path(state_dir).write_text(json.dumps(pipelines))
 
         # Call icc_exec with intent_signature only — no base_pipeline_id
         out = daemon.call_tool("icc_exec", {
@@ -1910,7 +1930,7 @@ def test_wal_uses_unix_newlines(tmp_path: Path):
     from scripts.exec_session import ExecSession
     session = ExecSession(state_root=tmp_path, session_id="wal-newline-test")
     session.exec_code("x = 1", metadata={"intent_signature": "mock.read.state"})
-    wal = (tmp_path / "wal-newline-test" / "wal.jsonl").read_bytes()
+    wal = (tmp_path / "sessions" / "wal-newline-test" / "wal.jsonl").read_bytes()
     assert b"\r\n" not in wal, "WAL must not contain Windows CRLF line endings"
     assert b"\n" in wal, "WAL must use LF line endings"
 
@@ -1962,7 +1982,7 @@ def test_has_synthesizable_wal_entry_scans_all_sessions(tmp_path: Path):
 
     # Write a WAL entry in an OLD session dir (different from current base session)
     old_session_id = "prev-session-001"
-    old_session_dir = tmp_path / old_session_id
+    old_session_dir = tmp_path / "sessions" / old_session_id
     old_session_dir.mkdir(parents=True)
     import json as _json
     wal_entry = {
@@ -1993,6 +2013,7 @@ def test_connector_import_rejects_path_traversal(tmp_path: Path):
     manifest = {"name": "safe", "emerge_version": "0.0.0", "exported_at_ms": 0}
     with zipfile.ZipFile(pkg_path, "w") as zf:
         zf.writestr("manifest.json", _json.dumps(manifest))
+        # Connector package contract uses archive entry "intents.json".
         zf.writestr("intents.json", _json.dumps({"intents": {}}))
         # Attempt path traversal: connectors/safe/../../evil.txt resolves outside connector dir
         zf.writestr("connectors/safe/../../evil.txt", "pwned")
@@ -2058,7 +2079,7 @@ def _make_span_daemon(tmp_path, monkeypatch):
     hook_state.mkdir(parents=True)
     (hook_state / "state.json").write_text("{}", encoding="utf-8")
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(state))
-    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(hook_state))
+    monkeypatch.setenv("EMERGE_HOOK_STATE_ROOT", str(hook_state))
     return EmergeDaemon(), hook_state
 
 
@@ -2099,9 +2120,9 @@ def test_span_open_errors_on_missing_intent(tmp_path, monkeypatch):
 
 
 def _seed_span_candidates(state_root, entries: dict):
-    """Write intents.json with pre-seeded entries."""
+    """Write state/registry/intents.json with pre-seeded entries."""
     import json
-    p = state_root / "intents.json"
+    p = state_root / "registry" / "intents.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps({"intents": entries}), encoding="utf-8")
 
@@ -2343,7 +2364,7 @@ def test_frozen_pipeline_skips_auto_promotion(tmp_path, monkeypatch):
             sampled_in_policy=True,
             candidate_key=key,
         )
-    reg_path = tmp_path / "intents.json"
+    reg_path = _registry_path(tmp_path)
     data = json.loads(reg_path.read_text())
     data["intents"][key]["frozen"] = True
     reg_path.write_text(json.dumps(data))
@@ -2396,7 +2417,7 @@ def test_concurrent_exec_events_do_not_lose_attempts(tmp_path, monkeypatch):
         t.join()
 
     assert not errors, f"Errors during concurrent execution: {errors}"
-    session_dir = tmp_path / daemon._base_session_id
+    session_dir = tmp_path / "sessions" / daemon._base_session_id
     reg = json.loads((session_dir / "candidates.json").read_text())
     assert reg["candidates"]["zwcad.read.state"]["attempts"] == 20, \
         f"Expected 20 attempts, got {reg['candidates']['zwcad.read.state']['attempts']} — lost updates!"
@@ -2411,7 +2432,7 @@ def test_bridge_failure_records_consecutive_failure(tmp_path, monkeypatch):
     daemon = EmergeDaemon()
 
     # Seed pipelines-registry with a stable pipeline
-    registry_path = tmp_path / "intents.json"
+    registry_path = _registry_path(tmp_path)
     from scripts.emerge_daemon import EmergeDaemon as _D
     atomic_write_json(registry_path, {
         "intents": {
@@ -2460,7 +2481,8 @@ def test_bridge_failure_records_consecutive_failure(tmp_path, monkeypatch):
     result = daemon._try_flywheel_bridge({"intent_signature": "zwcad.read.state"})
     assert result is None  # bridge must fail gracefully
 
-    # Clean-break invariant: PolicyEngine is the unique writer for intents.json.
+    # Clean-break invariant: PolicyEngine is the unique writer for
+    # state/registry/intents.json.
     # A bridge failure never mutates counters directly — the subsequent icc_exec
     # fallback records evidence via PolicyEngine. Here we only call the bridge
     # path, so the registry row must be untouched.
@@ -2483,7 +2505,7 @@ def test_icc_exec_injects_bridge_fallback_warning(tmp_path, monkeypatch):
     # Seed pipelines-registry with a stable pipeline
     from scripts.emerge_daemon import EmergeDaemon as _D
     from scripts.policy_config import atomic_write_json
-    atomic_write_json(tmp_path / "intents.json", {
+    atomic_write_json(_registry_path(tmp_path), {
         "intents": {
             "mock.read.layers": {
                 "stage": "stable",
@@ -2569,9 +2591,10 @@ def test_stable_transition_writes_to_sync_queue(tmp_path, monkeypatch):
 
     daemon = EmergeDaemon(root=ROOT)
 
-    # Pre-seed intents.json at canary with stats one evidence short of stable.
-    registry_path = daemon._state_root / "intents.json"
-    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    # Pre-seed state/registry/intents.json at canary with stats one evidence
+    # short of stable.
+    registry_path = daemon._state_root / "registry" / "intents.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
     near = STABLE_MIN_ATTEMPTS - 1
     registry = {
         "intents": {
@@ -3082,7 +3105,7 @@ def test_bridge_failure_stores_failure_info(tmp_path, monkeypatch):
 
     # Seed pipelines-registry with a stable pipeline so bridge fires
     reg = {"intents": {"gmail.read.fetch": {"stage": "stable", "consecutive_failures": 0}}}
-    (tmp_path / "intents.json").write_text(json.dumps(reg))
+    _registry_path(tmp_path).write_text(json.dumps(reg))
 
     # Patch pipeline.run_read to raise
     with patch.object(daemon.pipeline, "run_read", side_effect=RuntimeError("timeout")):
@@ -3136,8 +3159,8 @@ def test_cockpit_submit_writes_events_jsonl_via_write_event(tmp_path, monkeypatc
     import time
     from scripts.admin.cockpit import CockpitHTTPServer, _StandaloneDaemonStub
 
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
-    srv = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), repl_root=tmp_path)
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    srv = CockpitHTTPServer(daemon=_StandaloneDaemonStub(), state_root=tmp_path)
     event = {
         "type": "cockpit_action",
         "ts_ms": int(time.time() * 1000),
@@ -3145,7 +3168,7 @@ def test_cockpit_submit_writes_events_jsonl_via_write_event(tmp_path, monkeypatc
     }
     srv.write_event(event)
 
-    events_path = tmp_path / "events.jsonl"
+    events_path = tmp_path / "events" / "events.jsonl"
     assert events_path.exists()
     written = json.loads(events_path.read_text(encoding="utf-8").strip())
     assert written["type"] == "cockpit_action"
@@ -3164,7 +3187,7 @@ def test_initialize_declares_resource_subscribe_capability():
 
 
 def test_registry_write_emits_list_changed_notification(tmp_path, monkeypatch):
-    """Writing intents.json must push resources/list_changed notification."""
+    """Writing state/registry/intents.json must push list_changed notification."""
     from scripts.emerge_daemon import EmergeDaemon
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     daemon = EmergeDaemon()
@@ -3566,7 +3589,7 @@ def test_watch_patterns_profile_arg_selects_correct_file(tmp_path):
     """watch_emerge.py --runner-profile mycader-1 tails events-mycader-1.jsonl."""
     import subprocess, time as _time, json as _j
 
-    events_file = tmp_path / "events-mycader-1.jsonl"
+    events_file = tmp_path / "events" / "events-mycader-1.jsonl"
     env = {
         **os.environ,
         "EMERGE_STATE_ROOT": str(tmp_path),

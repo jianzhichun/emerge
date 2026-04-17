@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 import time
 import zipfile
 from pathlib import Path
@@ -24,42 +23,22 @@ from scripts.policy_config import (  # noqa: E402
     STABLE_MIN_SUCCESS_RATE,
     STABLE_MIN_VERIFY_RATE,
 )
-from scripts.intent_registry import IntentRegistry  # noqa: E402
+from scripts.intent_registry import IntentRegistry, registry_path as intent_registry_path  # noqa: E402
 
-
-# ---------------------------------------------------------------------------
-# Pipeline registry helpers
-# ---------------------------------------------------------------------------
-
-def _normalize_intent_key(key: str) -> str:
-    """Key is the plain intent signature (e.g. 'mock.read.layers'). Strip legacy prefixes."""
-    key = key.strip()
-    for prefix in ("pipeline::", "flywheel::", "default::"):
-        if key.startswith(prefix):
-            key = key[len(prefix):]
-            break
-    return key
+# Connector bundle contract: intent registry payload inside zip is fixed at this
+# entry name. This is a transport artifact, not the local state path.
+CONNECTOR_PACKAGE_INTENTS_FILENAME = "intents.json"
 
 
 def _load_registry(state_root: Path) -> tuple[Path, dict]:
-    registry_path = state_root / "intents.json"
+    registry_path = intent_registry_path(state_root)
     data = IntentRegistry.load(state_root)
     return registry_path, data
 
 
-def _save_registry(registry_path: Path, data: dict) -> None:
+def _save_registry(state_root: Path, data: dict) -> None:
     """Atomic write via IntentRegistry."""
-    IntentRegistry.save(registry_path.parent, data)
-
-
-def _normalize_intent_signature(value: str) -> str:
-    """Normalize legacy intent format read.<connector>.<name> to <connector>.read.<name>."""
-    sig = str(value or "").strip().strip("'\"")
-    m = re.fullmatch(r"(read|write)\.([a-z][a-z0-9_-]*)\.([a-z][a-z0-9_./-]*)", sig)
-    if not m:
-        return sig
-    mode, connector, name = m.groups()
-    return f"{connector}.{mode}.{name}"
+    IntentRegistry.save(state_root, data)
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +48,7 @@ def _normalize_intent_signature(value: str) -> str:
 def cmd_policy_status(session_id: str | None = None) -> dict:
     from scripts.admin.control_plane import _resolve_session_id
     state_root = _resolve_state_root()
-    registry_path = state_root / "intents.json"
+    registry_path = intent_registry_path(state_root)
     intents = []
     data = IntentRegistry.load(state_root)
     raw = data.get("intents", {})
@@ -102,15 +81,15 @@ def cmd_policy_status(session_id: str | None = None) -> dict:
 
 def cmd_intent_delete(*, key: str) -> dict:
     """Remove an intent entry from the registry."""
-    full_key = _normalize_intent_key(key)
+    full_key = key.strip()
     state_root = _resolve_state_root()
-    registry_path, data = _load_registry(state_root)
+    _, data = _load_registry(state_root)
     intents = data.get("intents", {})
     if full_key not in intents:
         return {"ok": False, "error": f"intent not found: {full_key}", "key": full_key}
     del intents[full_key]
     data["intents"] = intents
-    _save_registry(registry_path, data)
+    _save_registry(state_root, data)
     return {"ok": True, "deleted": full_key, "remaining": len(intents)}
 
 
@@ -125,9 +104,9 @@ def cmd_intent_set(*, key: str, fields: dict) -> dict:
     if unknown:
         return {"ok": False, "error": f"unknown fields: {sorted(unknown)}", "allowed": sorted(PATCHABLE)}
 
-    full_key = _normalize_intent_key(key)
+    full_key = key.strip()
     state_root = _resolve_state_root()
-    registry_path, data = _load_registry(state_root)
+    _, data = _load_registry(state_root)
     intents = data.get("intents", {})
 
     if full_key not in intents:
@@ -136,7 +115,7 @@ def cmd_intent_set(*, key: str, fields: dict) -> dict:
     before = dict(intents[full_key])
     intents[full_key].update(fields)
     data["intents"] = intents
-    _save_registry(registry_path, data)
+    _save_registry(state_root, data)
     return {
         "ok": True,
         "key": full_key,
@@ -185,7 +164,7 @@ def cmd_connector_export(
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False))
         zf.writestr(
-            "intents.json",
+            CONNECTOR_PACKAGE_INTENTS_FILENAME,
             json.dumps({"intents": filtered}, indent=2, ensure_ascii=False),
         )
         for f in files:
@@ -233,7 +212,7 @@ def cmd_connector_import(
             }
 
         try:
-            imported_reg = json.loads(zf.read("intents.json"))
+            imported_reg = json.loads(zf.read(CONNECTOR_PACKAGE_INTENTS_FILENAME))
         except KeyError:
             imported_reg = {"intents": {}}
 
@@ -256,7 +235,7 @@ def cmd_connector_import(
             file_count += 1
 
     s_root = state_root if state_root is not None else _resolve_state_root()
-    registry_path, existing = _load_registry(s_root)
+    _, existing = _load_registry(s_root)
     existing_pipelines = existing.get("intents", {})
     imported_pipelines = imported_reg.get("intents", {})
 
@@ -270,7 +249,7 @@ def cmd_connector_import(
             merged.append(k)
 
     existing["intents"] = existing_pipelines
-    _save_registry(registry_path, existing)
+    _save_registry(s_root, existing)
 
     return {
         "ok": True,
@@ -282,55 +261,3 @@ def cmd_connector_import(
     }
 
 
-def cmd_normalize_intents(*, connector: str = "", connector_root: Path | None = None) -> dict:
-    """Normalize legacy intent_signature values in connector pipeline YAML files."""
-    c_root = connector_root if connector_root is not None else _resolve_connector_root()
-    if not c_root.exists():
-        return {
-            "ok": True,
-            "connector_root": str(c_root),
-            "connector": connector or "*",
-            "normalized_files": 0,
-            "scanned_files": 0,
-            "changes": [],
-        }
-
-    connector = str(connector or "").strip()
-    if connector:
-        connectors = [c_root / connector]
-    else:
-        connectors = [p for p in sorted(c_root.iterdir()) if p.is_dir()]
-
-    changes: list[dict[str, str]] = []
-    scanned = 0
-    for conn_dir in connectors:
-        if not conn_dir.exists():
-            continue
-        for yaml_path in sorted((conn_dir / "pipelines").glob("*/*.yaml")):
-            scanned += 1
-            text = yaml_path.read_text(encoding="utf-8")
-            lines = text.splitlines()
-            updated = False
-            for i, line in enumerate(lines):
-                m = re.match(r"^(\s*intent_signature\s*:\s*)(.+?)\s*$", line)
-                if not m:
-                    continue
-                prefix, raw_val = m.groups()
-                normalized = _normalize_intent_signature(raw_val)
-                raw_clean = raw_val.strip().strip("'\"")
-                if normalized != raw_clean:
-                    lines[i] = f"{prefix}{normalized}"
-                    updated = True
-                    changes.append({"file": str(yaml_path), "from": raw_clean, "to": normalized})
-                break
-            if updated:
-                yaml_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-    return {
-        "ok": True,
-        "connector_root": str(c_root),
-        "connector": connector or "*",
-        "normalized_files": len(changes),
-        "scanned_files": scanned,
-        "changes": changes,
-    }

@@ -38,6 +38,36 @@ class McpResourceHandler:
     # Resource listing
     # ------------------------------------------------------------------
 
+    _RESOURCE_TEMPLATES: list[dict[str, Any]] = [
+        {
+            "uriTemplate": "pipeline://{connector}/{mode}/{name}",
+            "name": "Pipeline metadata",
+            "description": "Read pipeline YAML metadata by connector/mode/name",
+            "mimeType": "application/json",
+        },
+        {
+            "uriTemplate": "policy://current",
+            "name": "Policy registry",
+            "description": "Current session pipeline lifecycle state",
+            "mimeType": "application/json",
+        },
+        {
+            "uriTemplate": "runner://status",
+            "name": "Runner status",
+            "description": "Remote runner health summary",
+            "mimeType": "application/json",
+        },
+        {
+            "uriTemplate": "state://deltas",
+            "name": "State deltas",
+            "description": "StateTracker deltas and risks",
+            "mimeType": "application/json",
+        },
+    ]
+
+    def list_resource_templates(self) -> list[dict[str, Any]]:
+        return list(self._RESOURCE_TEMPLATES)
+
     def list_resources(self) -> list[dict[str, Any]]:
         from scripts.pipeline_engine import PipelineEngine
 
@@ -215,7 +245,7 @@ class McpResourceHandler:
     # ------------------------------------------------------------------
 
     def get_connector_intents(self, connector: str) -> dict[str, Any]:
-        """Return all tracked intent entries for a connector from intents.json."""
+        """Return tracked connector intents from state/registry/intents.json."""
         registry = IntentRegistry.load(self._get_state_root())
         prefix = f"{connector}."
         return {

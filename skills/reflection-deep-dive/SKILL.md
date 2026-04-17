@@ -36,7 +36,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/build_reflection_cache.py" --max-items 12
 
 The command writes:
 
-- `~/.emerge/repl/reflection-cache/global.json` (or `EMERGE_STATE_ROOT/reflection-cache/global.json`)
+- `~/.emerge/state/reflection-cache/global.json` (or `EMERGE_STATE_ROOT/reflection-cache/global.json`)
 
 with:
 

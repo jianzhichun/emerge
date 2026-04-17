@@ -20,6 +20,12 @@ from scripts.hub_config import save_hub_config
 from scripts.policy_config import STABLE_MIN_ATTEMPTS
 
 
+def _intents_path(state_root: Path) -> Path:
+    path = state_root / "registry" / "intents.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def _stable_span_entry(intent_key: str, last_ts_ms: int = 1000) -> dict:
     """Build a span-candidates entry that meets stable promotion thresholds."""
     return {
@@ -66,7 +72,7 @@ def test_load_candidate_timestamps_returns_stable_only(tmp_path, monkeypatch):
             "cs.read.b": _explore_span_entry("cs.read.b", last_ts_ms=999),
         }
     }
-    (tmp_path / "intents.json").write_text(json.dumps(candidates), encoding="utf-8")
+    _intents_path(tmp_path).write_text(json.dumps(candidates), encoding="utf-8")
     ts = _load_candidate_timestamps("cs")
     assert ts == {"cs.read.a": 500}
 
@@ -95,6 +101,7 @@ def connector_home(tmp_path, monkeypatch):
     state_root = tmp_path / "state"
     worktree.mkdir()
     state_root.mkdir()
+    (state_root / "registry").mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connectors))
     monkeypatch.setenv("EMERGE_HUB_HOME", str(tmp_path))
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(state_root))
@@ -113,7 +120,7 @@ def _make_connector(connectors: Path, name: str, state_root: Path) -> None:
             intent_key: _stable_span_entry(intent_key, last_ts_ms=1000),
         }
     }
-    (state_root / "intents.json").write_text(json.dumps(candidates), encoding="utf-8")
+    _intents_path(state_root).write_text(json.dumps(candidates), encoding="utf-8")
 
 
 def test_export_copies_pipelines_and_notes(connector_home):
@@ -193,7 +200,7 @@ def test_export_spans_json_merges_remote_spans(connector_home):
             "cloud-server.read.get_quota": _stable_span_entry("cloud-server.read.get_quota", last_ts_ms=2000),
         }
     }
-    (state_root / "intents.json").write_text(json.dumps(candidates), encoding="utf-8")
+    _intents_path(state_root).write_text(json.dumps(candidates), encoding="utf-8")
 
     export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
@@ -226,7 +233,7 @@ def test_export_vertical_preserves_remote_only_pipeline(connector_home):
             "cloud-server.read.get_quota": _stable_span_entry("cloud-server.read.get_quota", last_ts_ms=2000),
         }
     }
-    (state_root / "intents.json").write_text(json.dumps(b_candidates), encoding="utf-8")
+    _intents_path(state_root).write_text(json.dumps(b_candidates), encoding="utf-8")
 
     export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
@@ -259,7 +266,7 @@ def test_export_vertical_local_wins_when_newer(connector_home):
             "cloud-server.read.fetch": _stable_span_entry("cloud-server.read.fetch", last_ts_ms=999),
         }
     }
-    (state_root / "intents.json").write_text(json.dumps(candidates), encoding="utf-8")
+    _intents_path(state_root).write_text(json.dumps(candidates), encoding="utf-8")
 
     export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
@@ -289,7 +296,7 @@ def test_export_vertical_remote_wins_when_newer(connector_home):
             "cloud-server.read.fetch": _stable_span_entry("cloud-server.read.fetch", last_ts_ms=50),
         }
     }
-    (state_root / "intents.json").write_text(json.dumps(candidates), encoding="utf-8")
+    _intents_path(state_root).write_text(json.dumps(candidates), encoding="utf-8")
 
     export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
@@ -309,7 +316,7 @@ def test_export_vertical_skips_explore_state_pipeline(connector_home):
             "cloud-server.read.draft": _explore_span_entry("cloud-server.read.draft", last_ts_ms=500),
         }
     }
-    (state_root / "intents.json").write_text(json.dumps(candidates), encoding="utf-8")
+    _intents_path(state_root).write_text(json.dumps(candidates), encoding="utf-8")
 
     export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
@@ -331,7 +338,7 @@ def test_export_vertical_copies_yaml_companion(connector_home):
             "cloud-server.read.fetch": _stable_span_entry("cloud-server.read.fetch", last_ts_ms=100),
         }
     }
-    (state_root / "intents.json").write_text(json.dumps(candidates), encoding="utf-8")
+    _intents_path(state_root).write_text(json.dumps(candidates), encoding="utf-8")
 
     export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
@@ -362,7 +369,7 @@ def test_export_vertical_removes_stale_yaml_when_local_has_none(connector_home):
             "cloud-server.read.fetch": _stable_span_entry("cloud-server.read.fetch", last_ts_ms=999),
         }
     }
-    (state_root / "intents.json").write_text(json.dumps(candidates), encoding="utf-8")
+    _intents_path(state_root).write_text(json.dumps(candidates), encoding="utf-8")
 
     export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 

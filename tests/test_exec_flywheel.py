@@ -10,6 +10,12 @@ if str(ROOT) not in sys.path:
 from scripts.emerge_daemon import EmergeDaemon
 
 
+def _registry_path(state_root: Path) -> Path:
+    path = state_root / "registry" / "intents.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def test_icc_exec_script_ref_mode_runs_file_with_args(tmp_path: Path):
     script = tmp_path / "double.py"
     script.write_text("print(__args['n'] * 2)\n", encoding="utf-8")
@@ -96,6 +102,7 @@ def test_icc_exec_success_updates_candidate_registry(tmp_path: Path):
         registry = (
             tmp_path
             / "state"
+            / "sessions"
             / "flywheel"
             / "candidates.json"
         )
@@ -129,7 +136,7 @@ def test_auto_promotes_candidate_to_canary_when_thresholds_met(tmp_path: Path):
             )
             assert out.get("isError") is not True
 
-        reg = tmp_path / "state" / "intents.json"
+        reg = _registry_path(tmp_path / "state")
         data = json.loads(reg.read_text(encoding="utf-8"))
         key = "zwcad.write.add-wall"
         assert data["intents"][key]["stage"] == "canary"
@@ -178,7 +185,7 @@ def test_auto_rolls_back_canary_on_two_consecutive_failures(tmp_path: Path):
             },
         )
 
-        reg = tmp_path / "state" / "intents.json"
+        reg = _registry_path(tmp_path / "state")
         data = json.loads(reg.read_text(encoding="utf-8"))
         key = "zwcad.write.add-wall"
         assert data["intents"][key]["stage"] == "explore"
@@ -217,7 +224,7 @@ def test_canary_sampling_progresses_to_stable(tmp_path: Path):
                     "verify_passed": True,
                 },
             )
-        reg = tmp_path / "state" / "intents.json"
+        reg = _registry_path(tmp_path / "state")
         data = json.loads(reg.read_text(encoding="utf-8"))
         key = "zwcad.write.add-wall"
         assert data["intents"][key]["stage"] == "stable"
@@ -250,7 +257,7 @@ def test_stable_rolls_back_on_window_failure_rate(tmp_path: Path):
             else:
                 daemon.call_tool("icc_exec", {**common, "code": "raise RuntimeError('window-fail')"})
 
-        reg = tmp_path / "state" / "intents.json"
+        reg = _registry_path(tmp_path / "state")
         data = json.loads(reg.read_text(encoding="utf-8"))
         key = "zwcad.write.add-wall"
         assert data["intents"][key]["stage"] == "explore"
@@ -279,7 +286,7 @@ def test_synthesis_ready_flag_set_on_canary_promotion(tmp_path):
                 "intent_signature": "test.read.synth",
                 "no_replay": False,
             })
-        registry_path = tmp_path / "state" / "intents.json"
+        registry_path = _registry_path(tmp_path / "state")
         assert registry_path.exists()
         data = json.loads(registry_path.read_text())
         entries = data.get("intents", {})
@@ -313,7 +320,7 @@ def test_exec_degraded_argument_is_not_trusted_for_policy_counters(tmp_path: Pat
         daemon.call_tool("icc_exec", common)
         daemon.call_tool("icc_exec", common)
 
-        registry = tmp_path / "state" / "flywheel" / "candidates.json"
+        registry = tmp_path / "state" / "sessions" / "flywheel" / "candidates.json"
         data = json.loads(registry.read_text(encoding="utf-8"))
         assert data["candidates"][key]["degraded_count"] == 0
         assert data["candidates"][key]["consecutive_failures"] == 0

@@ -27,7 +27,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.policy_config import default_exec_root, default_hook_state_root, derive_session_id, truncate_jsonl_if_needed  # noqa: E402
+from scripts.policy_config import (
+    default_state_root,
+    default_hook_state_root,
+    derive_session_id,
+    truncate_jsonl_if_needed,
+    sessions_root,
+)  # noqa: E402
 from scripts.span_tracker import is_read_only_tool  # noqa: E402
 
 _MAX_DELTAS = 500
@@ -140,7 +146,7 @@ def main() -> None:
 
     # ── Always: write tool-event to session-scoped file (Audit tab) ───────
     session_id = derive_session_id(os.environ.get("EMERGE_SESSION_ID"), Path.cwd())
-    session_dir = default_exec_root() / session_id
+    session_dir = sessions_root(default_state_root()) / session_id
     event = {
         "tool_name": tool_name,
         "ts_ms": int(time.time() * 1000),

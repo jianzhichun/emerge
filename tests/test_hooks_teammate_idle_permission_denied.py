@@ -14,7 +14,7 @@ PERMISSION_DENIED_HOOK = ROOT / "hooks" / "permission_denied.py"
 
 def _run(script: Path, payload: dict, data_dir: Path):
     """Run a hook script with JSON payload on stdin. Returns (returncode, stdout, stderr)."""
-    env = {**os.environ, "EMERGE_DATA_ROOT": str(data_dir)}
+    env = {**os.environ, "EMERGE_HOOK_STATE_ROOT": str(data_dir)}
     result = subprocess.run(
         [sys.executable, str(script)],
         input=json.dumps(payload),

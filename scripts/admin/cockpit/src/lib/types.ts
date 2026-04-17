@@ -25,6 +25,22 @@ export interface PolicyThresholds {
   rollback_consecutive_failures?: number;
 }
 
+export interface TransitionHistoryEntry {
+  ts_ms?: number;
+  from_stage?: string;
+  to_stage?: string;
+  reason?: string;
+  attempts?: number;
+  success_rate?: number;
+  verify_rate?: number;
+  human_fix_rate?: number;
+  window_success_rate?: number;
+  consecutive_failures?: number;
+  session_id?: string | null;
+  target_profile?: string | null;
+  execution_path?: string | null;
+}
+
 export interface PolicyIntent extends JsonObject {
   key?: string;
   stage?: string;
@@ -37,6 +53,18 @@ export interface PolicyIntent extends JsonObject {
   attempts?: number;
   successes?: number;
   consecutive_failures?: number;
+  last_transition_reason?: string | null;
+  last_transition_ts_ms?: number;
+  last_demotion?: TransitionHistoryEntry | null;
+}
+
+export interface IntentHistoryResponse extends ApiOkResponse {
+  intent_signature?: string;
+  stage?: string;
+  last_transition_reason?: string | null;
+  last_transition_ts_ms?: number;
+  last_demotion?: TransitionHistoryEntry | null;
+  transition_history?: TransitionHistoryEntry[];
 }
 
 export interface PolicyResponse extends ApiOkResponse {
@@ -72,6 +100,39 @@ export interface StatusResponse extends ApiOkResponse {
   last_cockpit_ack_ts_ms?: number | null;
   cockpit_ack_pending?: boolean;
   cockpit_ack_lag_ms?: number | null;
+  watchers_healthy?: boolean;
+  watchers_alive_count?: number;
+  watchers_total?: number;
+  watchers_stale_ids?: string[];
+}
+
+export interface WatcherStatus {
+  watcher_id?: string;
+  pid?: number | null;
+  target?: string | null;
+  state_root?: string | null;
+  started_at_ms?: number | null;
+  last_loop_ts_ms?: number | null;
+  updated_at_ms?: number | null;
+  stopped_at_ms?: number | null;
+  events_read?: number;
+  events_delivered?: number;
+  last_event_id?: string | null;
+  last_error?: JsonObject | null;
+  consecutive_errors?: number;
+  alive?: boolean;
+  lag_ms?: number | null;
+  stale_threshold_ms?: number;
+}
+
+export interface WatchersResponse extends ApiOkResponse {
+  total?: number;
+  alive_count?: number;
+  stale_count?: number;
+  healthy?: boolean;
+  stale_watcher_ids?: string[];
+  watchers?: WatcherStatus[];
+  stale_threshold_s?: number;
 }
 
 export interface RunnerEvent extends JsonObject {

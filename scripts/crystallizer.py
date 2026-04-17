@@ -55,7 +55,7 @@ class PipelineCrystallizer:
         """Scan the WAL for the most recent synthesizable exec, write .py + .yaml."""
         import json
         import time as _time
-        from scripts.policy_config import derive_profile_token, resolve_connector_root
+        from scripts.policy_config import derive_profile_token, resolve_connector_root, sessions_root
         from scripts.intent_registry import IntentRegistry
 
         # --- find synthesizable WAL entry ---
@@ -64,8 +64,9 @@ class PipelineCrystallizer:
 
         best_code: str | None = None
         best_ts: int = 0
-        if self._state_root.exists():
-            for session_dir in sorted(self._state_root.iterdir()):
+        sessions_dir = sessions_root(self._state_root)
+        if sessions_dir.exists():
+            for session_dir in sorted(sessions_dir.iterdir()):
                 if not session_dir.is_dir():
                     continue
                 dir_name = session_dir.name

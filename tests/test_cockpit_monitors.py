@@ -30,7 +30,9 @@ def test_monitors_reads_state_file(tmp_path):
         ],
         "team_active": False,
     }
-    (tmp_path / "runner-monitor-state.json").write_text(json.dumps(state))
+    events_dir = tmp_path / "events"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    (events_dir / "runner-monitor-state.json").write_text(json.dumps(state))
     result = cmd_control_plane_monitors(state_root=tmp_path)
     assert len(result["runners"]) == 1
     assert result["runners"][0]["runner_profile"] == "mycader-1"

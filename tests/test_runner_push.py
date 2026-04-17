@@ -38,7 +38,7 @@ def test_runner_online_writes_discovered_file(tmp_path):
     resp = _post(srv.port, "/runner/online",
                  {"runner_profile": "mycader-1", "machine_id": "wkst-A"})
     assert resp["ok"]
-    disc = tmp_path / "repl" / "events.jsonl"
+    disc = tmp_path / "repl" / "events" / "events.jsonl"
     events = [json.loads(l) for l in disc.read_text().splitlines()]
     assert any(e["type"] == "runner_discovered" and e["runner_profile"] == "mycader-1"
                for e in events)
@@ -51,7 +51,7 @@ def test_runner_event_forwarded_to_events_jsonl(tmp_path):
                  {"runner_profile": "mycader-1", "machine_id": "wkst-A",
                   "type": "op_event", "ts_ms": 1000, "data": "x"})
     assert resp["ok"]
-    profile_events = tmp_path / "repl" / "events-mycader-1.jsonl"
+    profile_events = tmp_path / "repl" / "events" / "events-mycader-1.jsonl"
     events = [json.loads(l) for l in profile_events.read_text().splitlines()]
     assert any(e["type"] == "runner_event" for e in events)
     srv.stop()
@@ -96,7 +96,7 @@ def test_runner_monitor_state_written(tmp_path):
     srv = _make_server_with_files(tmp_path)
     _post(srv.port, "/runner/online",
           {"runner_profile": "mycader-1", "machine_id": "wkst-A"})
-    state_path = tmp_path / "repl" / "runner-monitor-state.json"
+    state_path = tmp_path / "repl" / "events" / "runner-monitor-state.json"
     assert state_path.exists()
     state = json.loads(state_path.read_text())
     assert any(r["runner_profile"] == "mycader-1" for r in state["runners"])
@@ -128,7 +128,7 @@ def test_runner_executor_forwards_event_to_daemon(tmp_path):
     })
     time.sleep(0.3)  # wait for background thread
 
-    profile_events = tmp_path / "repl" / "events-test-runner.jsonl"
+    profile_events = tmp_path / "repl" / "events" / "events-test-runner.jsonl"
     assert profile_events.exists()
     events = [json.loads(l) for l in profile_events.read_text().splitlines()]
     assert any(e["type"] == "runner_event" for e in events)

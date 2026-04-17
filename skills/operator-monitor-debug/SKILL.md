@@ -72,9 +72,9 @@ this file and prints formatted alerts to stdout; CC streams stdout into the conv
 Check:
 1. Is `watch_emerge.py --runner-profile <profile>` running as a persistent Monitor?
    (launched by `/emerge:cockpit` step 4 via `watch_emerge.py --runner-profile`)
-2. Does `~/.emerge/repl/events-{profile}.jsonl` contain recent `pattern_alert` entries?
+2. Does `~/.emerge/state/events/events-{profile}.jsonl` contain recent `pattern_alert` entries?
    ```bash
-   grep '"type": "pattern_alert"' ~/.emerge/repl/events-<profile>.jsonl | tail -5
+   grep '"type": "pattern_alert"' ~/.emerge/state/events/events-<profile>.jsonl | tail -5
    ```
 3. If entries exist but CC didn't see them: the Monitor may have stopped — restart it.
 

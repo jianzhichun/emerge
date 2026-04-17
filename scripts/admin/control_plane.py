@@ -18,13 +18,14 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from scripts.admin.shared import _resolve_repl_root, _resolve_state_root  # noqa: E402
+from scripts.admin.shared import _resolve_state_root  # noqa: E402
 from scripts.policy_config import (  # noqa: E402
-    default_exec_root,
+    default_state_root,
     default_hook_state_root,
     derive_profile_token,
     derive_session_id,
-    pin_plugin_data_path_if_present,
+    sessions_root,
+    events_root,
 )
 from scripts.state_tracker import StateTracker, load_tracker, save_tracker  # noqa: E402
 from scripts.intent_registry import IntentRegistry  # noqa: E402
@@ -63,7 +64,7 @@ def _session_paths(session_id: str | None = None) -> tuple[Path, Path, Path]:
         if target_profile != "default":
             profile_key = derive_profile_token(target_profile)
             sid = f"{sid}__{profile_key}"
-    session_dir = state_root / sid
+    session_dir = sessions_root(state_root) / sid
     return session_dir, session_dir / "wal.jsonl", session_dir / "checkpoint.json"
 
 
@@ -74,10 +75,11 @@ def cmd_control_plane_sessions(
 ) -> dict:
     """List known session directories under state root for cockpit selector."""
     root = Path(state_root) if state_root else _resolve_state_root()
+    sessions_dir = sessions_root(root)
     current = _resolve_session_id(session_id=current_session_id) if current_session_id else _resolve_session_id()
     sessions: list[dict] = []
-    if root.exists():
-        for entry in root.iterdir():
+    if sessions_dir.exists():
+        for entry in sessions_dir.iterdir():
             if not entry.is_dir():
                 continue
             sid = entry.name
@@ -116,7 +118,6 @@ def cmd_control_plane_sessions(
 
 def cmd_control_plane_state() -> dict:
     """Full StateTracker snapshot for cockpit."""
-    pin_plugin_data_path_if_present()
     state_path = Path(default_hook_state_root()) / "state.json"
     tracker = load_tracker(state_path)
     d = tracker.to_dict()
@@ -132,7 +133,7 @@ def cmd_control_plane_state() -> dict:
 
 
 def cmd_control_plane_intents() -> dict:
-    """Global intent list from intents.json (single source of truth).
+    """Global intent list from state/registry/intents.json (single source of truth).
 
     Clean-break contract: each row surfaces the canonical ``stage`` field
     written by :class:`scripts.policy_engine.PolicyEngine`. Legacy
@@ -161,9 +162,45 @@ def cmd_control_plane_intents() -> dict:
                 "updated_at_ms": entry.get("updated_at_ms", 0),
                 "persistent": entry.get("persistent", False),
                 "description": entry.get("description", ""),
+                "last_transition_reason": entry.get("last_transition_reason"),
+                "last_transition_ts_ms": entry.get("last_transition_ts_ms", 0),
+                "last_demotion": entry.get("last_demotion"),
             }
         )
     return {"ok": True, "intents": intents}
+
+
+def cmd_control_plane_intent_history(
+    intent_signature: str,
+    *,
+    limit: int | None = None,
+) -> dict:
+    """Per-intent lifecycle audit trail.
+
+    Returns the bounded ``transition_history`` stored by
+    :class:`scripts.policy_engine.PolicyEngine`, plus the ``last_demotion``
+    snapshot for quick rollback attribution.
+    """
+    key = (intent_signature or "").strip()
+    if not key:
+        return {"ok": False, "error": "intent_signature required"}
+    state_root = _resolve_state_root()
+    data = IntentRegistry.load(state_root)
+    entry = data.get("intents", {}).get(key)
+    if not isinstance(entry, dict):
+        return {"ok": False, "error": "unknown_intent", "intent_signature": key}
+    history = list(entry.get("transition_history") or [])
+    if limit is not None and limit > 0:
+        history = history[-int(limit):]
+    return {
+        "ok": True,
+        "intent_signature": key,
+        "stage": entry.get("stage"),
+        "last_transition_reason": entry.get("last_transition_reason"),
+        "last_transition_ts_ms": entry.get("last_transition_ts_ms", 0),
+        "last_demotion": entry.get("last_demotion"),
+        "transition_history": history,
+    }
 
 
 def cmd_control_plane_session(session_id: str | None = None) -> dict:
@@ -219,7 +256,7 @@ def cmd_control_plane_hook_state() -> dict:
     }
 
     try:
-        exec_root = Path(os.environ.get("EMERGE_STATE_ROOT", str(default_exec_root())))
+        exec_root = Path(os.environ.get("EMERGE_STATE_ROOT", str(default_state_root())))
         reflection = SpanTracker(
             state_root=exec_root,
             hook_state_root=hook_state_root,
@@ -448,7 +485,7 @@ def cmd_control_plane_reflection_cache(ttl_ms: int = 15 * 60 * 1000) -> dict:
 def cmd_control_plane_monitors(state_root=None) -> dict:
     """Return connected runner monitor state from runner-monitor-state.json."""
     root = Path(state_root) if state_root else _resolve_state_root()
-    state_path = root / "runner-monitor-state.json"
+    state_path = events_root(root) / "runner-monitor-state.json"
     if not state_path.exists():
         return {"runners": [], "team_active": False}
     try:
@@ -461,6 +498,20 @@ def cmd_control_plane_monitors(state_root=None) -> dict:
         return {"runners": [], "team_active": False}
 
 
+def cmd_control_plane_watchers(state_root=None) -> dict:
+    """Return the aggregated watcher heartbeat / SLO summary.
+
+    Each ``watch_emerge.py`` process writes a heartbeat file under
+    ``state/events/watchers/``. This command summarises them so cockpit
+    clients can render a "watchers healthy / stale" badge without scanning
+    the directory themselves.
+    """
+    from scripts.watchers import watcher_health_summary
+
+    root = Path(state_root) if state_root else _resolve_state_root()
+    return watcher_health_summary(root)
+
+
 _PROFILE_RE = re.compile(r"^[a-zA-Z0-9_.\-]{1,64}$")
 
 
@@ -469,8 +520,8 @@ def cmd_control_plane_runner_events(profile: str, limit: int = 20) -> dict:
     if not profile or not _PROFILE_RE.match(profile):
         return {"ok": False, "error": "invalid profile"}
     limit = min(int(limit), 100)
-    repl_root = Path(os.environ.get("EMERGE_REPL_ROOT", "") or _resolve_repl_root())
-    events_path = repl_root / f"events-{profile}.jsonl"
+    state_root = _resolve_state_root()
+    events_path = events_root(state_root) / f"events-{profile}.jsonl"
     _empty: dict = {"ok": True, "events": [], "activity": [0] * 10, "today_events": 0, "today_alerts": 0}
     if not events_path.exists():
         return _empty
@@ -533,7 +584,6 @@ def cmd_control_plane_runner_events(profile: str, limit: int = 20) -> dict:
 # ---------------------------------------------------------------------------
 
 def cmd_control_plane_delta_reconcile(delta_id: str, outcome: str, intent_signature: str = "") -> dict:
-    pin_plugin_data_path_if_present()
     state_path = Path(default_hook_state_root()) / "state.json"
     tracker = load_tracker(state_path)
     tracker.reconcile_delta(delta_id, outcome)
@@ -544,7 +594,6 @@ def cmd_control_plane_delta_reconcile(delta_id: str, outcome: str, intent_signat
 def cmd_control_plane_risk_update(
     risk_id: str, action: str, reason: str = "", snooze_duration_ms: int = 3600000,
 ) -> dict:
-    pin_plugin_data_path_if_present()
     state_path = Path(default_hook_state_root()) / "state.json"
     tracker = load_tracker(state_path)
     tracker.update_risk(risk_id, action=action, reason=reason or None, snooze_duration_ms=snooze_duration_ms)
@@ -553,7 +602,6 @@ def cmd_control_plane_risk_update(
 
 
 def cmd_control_plane_risk_add(text: str, intent_signature: str = "") -> dict:
-    pin_plugin_data_path_if_present()
     state_path = Path(default_hook_state_root()) / "state.json"
     tracker = load_tracker(state_path)
     tracker.add_risk(text, intent_signature=intent_signature or None)
@@ -582,7 +630,6 @@ def cmd_control_plane_policy_unfreeze(key: str) -> dict:
 
 
 def cmd_control_plane_session_export(session_id: str | None = None) -> dict:
-    pin_plugin_data_path_if_present()
     state_path = Path(default_hook_state_root()) / "state.json"
     tracker = load_tracker(state_path)
     session_dir, wal_path, checkpoint_path = _session_paths(session_id=session_id)
@@ -601,7 +648,6 @@ def cmd_control_plane_session_export(session_id: str | None = None) -> dict:
 def cmd_control_plane_session_reset(confirm: str, full: bool = False, session_id: str | None = None) -> dict:
     if confirm != "RESET":
         return {"ok": False, "error": "must pass confirm='RESET'"}
-    pin_plugin_data_path_if_present()
     state_path = Path(default_hook_state_root()) / "state.json"
     try:
         existing = load_tracker(state_path)

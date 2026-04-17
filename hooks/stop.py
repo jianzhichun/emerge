@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from scripts.policy_config import default_hook_state_root  # noqa: E402
 
 
 def main() -> None:
@@ -17,16 +18,7 @@ def main() -> None:
     except Exception:
         payload = {}
 
-    data_root_env = os.environ.get("EMERGE_DATA_ROOT", "")
-    if data_root_env:
-        state_path = Path(data_root_env) / "state.json"
-    else:
-        try:
-            from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present
-            pin_plugin_data_path_if_present()
-            state_path = Path(default_hook_state_root()) / "state.json"
-        except Exception:
-            state_path = Path.home() / ".emerge" / "state.json"
+    state_path = Path(default_hook_state_root()) / "state.json"
 
     active_span_id: str = ""
     active_span_intent: str = ""

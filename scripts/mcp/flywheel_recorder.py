@@ -1,7 +1,7 @@
 """Flywheel recording for EmergeDaemon.
 
 FlywheelRecorder is now a pure *evidence* recorder. It never writes
-``intents.json`` stage directly — all stage transitions flow through
+``state/registry/intents.json`` stage directly — all stage transitions flow through
 :class:`scripts.policy_engine.PolicyEngine`, the single lifecycle writer.
 
 Responsibilities kept here:
@@ -13,7 +13,7 @@ Responsibilities kept here:
   - resolve_exec_candidate_key / resolve_pipeline_candidate_key — key derivation.
 
 The session-level ``candidates.json`` is distinct from the global
-``intents.json``: the former tracks per-session sampling counters (useful
+``state/registry/intents.json``: the former tracks per-session sampling counters (useful
 for canary rollout), the latter is the global aggregate owned by PolicyEngine.
 """
 from __future__ import annotations
@@ -32,6 +32,7 @@ from scripts.policy_config import (
     atomic_write_json,
     derive_profile_token,
     load_json_object,
+    sessions_root,
     truncate_jsonl_if_needed,
 )
 from scripts.pipeline_engine import PipelineEngine
@@ -64,7 +65,7 @@ class FlywheelRecorder:
         self._write_mcp_push = write_mcp_push
         self._auto_crystallize = auto_crystallize
         # PolicyEngine owns all stage writes. FlywheelRecorder hands evidence
-        # to it and never touches intents.json stage fields directly.
+        # to it and never touches state/registry/intents.json stage fields directly.
         self._policy = policy_engine or PolicyEngine(
             state_root=state_root,
             lock=registry_lock,
@@ -120,7 +121,7 @@ class FlywheelRecorder:
         if rollout_pct <= 0:
             return False
 
-        candidates_path = (state_root / session_id) / "candidates.json"
+        candidates_path = (sessions_root(state_root) / session_id) / "candidates.json"
         total_calls = 0
         if candidates_path.exists():
             cand = load_json_object(candidates_path, root_key="candidates")
@@ -137,10 +138,11 @@ class FlywheelRecorder:
         normalized = (target_profile or "default").strip() or "default"
         profile_suffix = "" if normalized == "default" else f"__{derive_profile_token(normalized)}"
         state_root = self._get_state_root()
-        if not state_root.exists():
+        sessions_dir = sessions_root(state_root)
+        if not sessions_dir.exists():
             return False
         try:
-            session_dirs = list(state_root.iterdir())
+            session_dirs = list(sessions_dir.iterdir())
         except OSError:
             return False
         for session_dir in session_dirs:
@@ -219,11 +221,12 @@ class FlywheelRecorder:
         """Increment human_fixes for the candidate keyed by intent_signature.
 
         Updates both the session-level candidate (for sampling bookkeeping) and
-        routes through PolicyEngine for the global ``intents.json`` entry.
+        routes through PolicyEngine for the global
+        ``state/registry/intents.json`` entry.
         """
         state_root = self._get_state_root()
         session_id = self._get_session_id()
-        session_dir = state_root / session_id
+        session_dir = sessions_root(state_root) / session_id
         candidates_path = session_dir / "candidates.json"
         if candidates_path.exists():
             with self._lock:
@@ -274,7 +277,7 @@ class FlywheelRecorder:
             "is_error": is_error,
             "sampled_in_policy": sampled_in_policy,
         }
-        session_dir = state_root / session_id
+        session_dir = sessions_root(state_root) / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
         events_path = session_dir / "exec-events.jsonl"
         try:
@@ -363,7 +366,7 @@ class FlywheelRecorder:
     ) -> None:
         state_root = self._get_state_root()
         session_id = self._get_session_id()
-        session_dir = state_root / session_id
+        session_dir = sessions_root(state_root) / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
 
         connector = str(arguments.get("connector", ""))

@@ -55,11 +55,13 @@ def test_cmd_control_plane_risk_update(tmp_path):
 def test_cmd_control_plane_policy_freeze(tmp_path):
     from scripts.repl_admin import cmd_control_plane_policy_freeze
     reg = {"intents": {"mock.read.layers": {"stage": "explore"}}}
-    (tmp_path / "intents.json").write_text(json.dumps(reg))
+    reg_path = tmp_path / "registry" / "intents.json"
+    reg_path.parent.mkdir(parents=True, exist_ok=True)
+    reg_path.write_text(json.dumps(reg))
     with patch("scripts.admin.control_plane._resolve_state_root", return_value=tmp_path):
         result = cmd_control_plane_policy_freeze(key="mock.read.layers")
     assert result["ok"]
-    updated = json.loads((tmp_path / "intents.json").read_text())
+    updated = json.loads(reg_path.read_text())
     assert updated["intents"]["mock.read.layers"]["frozen"] is True
 
 

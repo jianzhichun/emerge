@@ -1,9 +1,9 @@
 """WorktreeCreate / WorktreeRemove hooks — span state isolation for worktrees.
 
-When a subagent uses isolation="worktree", the new worktree inherits the
-parent session's CLAUDE_PLUGIN_DATA path, which means it could see a stale
-active_span_id from the parent. This hook clears that field in the new
-worktree's state.json on WorktreeCreate so isolated subagents start clean.
+When a subagent uses isolation="worktree", the new worktree shares the
+canonical ~/.emerge/hook-state/state.json with the parent session, so it could
+see a stale active_span_id from the parent. This hook clears that field on
+WorktreeCreate so isolated subagents start clean.
 
 WorktreeRemove is a no-op (state cleanup happens at session end), but
 registered so the hook file exists for future extension.
@@ -37,8 +37,7 @@ def main() -> None:
 
     # WorktreeCreate: clear stale span state so the new worktree starts clean.
     try:
-        from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present
-        pin_plugin_data_path_if_present()
+        from scripts.policy_config import default_hook_state_root
         state_root = Path(default_hook_state_root())
         from scripts.state_tracker import load_tracker, save_tracker
         state_path = state_root / "state.json"

@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
+from scripts.policy_config import default_hook_state_root  # noqa: E402
 from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
 
 
@@ -66,7 +66,6 @@ def main() -> None:
         json.loads(payload_text) if payload_text else {}
     except Exception:
         pass
-    pin_plugin_data_path_if_present()
     state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
     tracker = load_tracker(state_path)

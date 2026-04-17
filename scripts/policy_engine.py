@@ -2,7 +2,8 @@
 
 Architectural contract (optimal-solution clean-break):
 
-  - All stage transitions for `intents.json` flow through `PolicyEngine.apply_evidence`.
+  - All stage transitions for `state/registry/intents.json` flow through
+    `PolicyEngine.apply_evidence`.
     No other module writes the `stage` field.
   - Evidence callers (span close, exec call, pipeline event) pass a *raw* outcome;
     the engine decides counter updates, stage transitions, and side effects
@@ -34,12 +35,25 @@ from scripts.policy_config import (
     STABLE_MIN_ATTEMPTS,
     STABLE_MIN_SUCCESS_RATE,
     STABLE_MIN_VERIFY_RATE,
+    TRANSITION_HISTORY_MAX,
     WINDOW_SIZE,
 )
 
+# Stage ordering for demotion detection. Anything moving down the rank (or into
+# rollback cooldown) counts as a demotion for attribution purposes.
+_STAGE_RANK = {"rollback": -1, "explore": 0, "canary": 1, "stable": 2}
+
+
+def _is_demotion(from_stage: str, to_stage: str) -> bool:
+    if from_stage == to_stage:
+        return False
+    if to_stage == "rollback" and from_stage != "rollback":
+        return True
+    return _STAGE_RANK.get(to_stage, 0) < _STAGE_RANK.get(from_stage, 0)
+
 _log = logging.getLogger(__name__)
 
-# Hard cap to protect intents.json from unbounded growth.
+# Hard cap to protect state/registry/intents.json from unbounded growth.
 _MAX_INTENTS = 1000
 
 
@@ -144,9 +158,12 @@ class PolicyEngine:
             entry.setdefault("rollout_pct", 0)
             entry.setdefault("last_transition_reason", "init")
             entry.setdefault("attempts_at_transition", 0)
+            entry.setdefault("last_transition_ts_ms", 0)
             entry.setdefault("verify_attempts", 0)
             entry.setdefault("verify_passes", 0)
             entry.setdefault("degraded_count", 0)
+            entry.setdefault("transition_history", [])
+            entry.setdefault("last_demotion", None)
 
             # ── counters ───────────────────────────────────────────────
             entry["attempts"] = int(entry.get("attempts", 0)) + 1
@@ -223,6 +240,7 @@ class PolicyEngine:
             if transitioned:
                 entry["last_transition_reason"] = reason
                 entry["attempts_at_transition"] = int(entry["attempts"])
+                entry["last_transition_ts_ms"] = ts_ms
                 if new_stage == "canary":
                     entry["rollout_pct"] = 20
                 elif new_stage == "stable":
@@ -230,12 +248,48 @@ class PolicyEngine:
                 else:  # explore / rollback
                     entry["rollout_pct"] = 0
 
+                # ── traceability: append bounded transition history ────
+                history_entry = {
+                    "ts_ms": ts_ms,
+                    "from_stage": current_stage,
+                    "to_stage": new_stage,
+                    "reason": reason,
+                    "attempts": int(entry["attempts"]),
+                    "success_rate": entry["success_rate"],
+                    "verify_rate": entry["verify_rate"],
+                    "human_fix_rate": entry["human_fix_rate"],
+                    "window_success_rate": entry["window_success_rate"],
+                    "consecutive_failures": int(entry["consecutive_failures"]),
+                    "session_id": self._get_session_id() or None,
+                    "target_profile": target_profile,
+                    "execution_path": execution_path,
+                }
+                history = list(entry.get("transition_history") or [])
+                history.append(history_entry)
+                entry["transition_history"] = history[-TRANSITION_HISTORY_MAX:]
+
+                # ── rollback attribution ───────────────────────────────
+                demotion = _is_demotion(current_stage, new_stage)
+                if demotion:
+                    entry["last_demotion"] = dict(history_entry)
+
             # ── side effects on transition ─────────────────────────────
             if transitioned:
                 self._emit_sink("policy.transition", {
                     "candidate_key": intent_signature,
-                    "new_stage": new_stage,
+                    "intent_signature": intent_signature,
+                    "from_stage": current_stage,
+                    "to_stage": new_stage,
+                    "new_stage": new_stage,  # legacy alias; kept for sinks
+                    "reason": reason,
+                    "attempts": int(entry["attempts"]),
+                    "success_rate": entry["success_rate"],
+                    "verify_rate": entry["verify_rate"],
+                    "consecutive_failures": int(entry["consecutive_failures"]),
+                    "demotion": _is_demotion(current_stage, new_stage),
                     "session_id": self._get_session_id(),
+                    "target_profile": target_profile,
+                    "ts_ms": ts_ms,
                 })
                 if new_stage == "canary":
                     self._maybe_fire_auto_crystallize(entry, intent_signature, target_profile)

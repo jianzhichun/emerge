@@ -22,7 +22,6 @@ if str(ROOT) not in sys.path:
 from scripts.admin.shared import (  # noqa: E402
     _local_plugin_version,
     _resolve_state_root,
-    _resolve_repl_root,
     _resolve_connector_root,
 )
 from scripts.admin.api import (  # noqa: E402
@@ -55,13 +54,11 @@ from scripts.admin.control_plane import (  # noqa: E402
 from scripts.admin.pipeline import (  # noqa: E402
     _load_registry,
     _save_registry,
-    _normalize_intent_signature,
     cmd_policy_status,
     cmd_intent_delete,
     cmd_intent_set,
     cmd_connector_export,
     cmd_connector_import,
-    cmd_normalize_intents,
 )
 from scripts.admin.cockpit import (  # noqa: E402
     _make_cockpit_handler,
@@ -105,7 +102,6 @@ def main() -> None:
             "intent-set",
             "connector-export",
             "connector-import",
-            "normalize-intents",
             "serve",
             "serve-stop",
         ],
@@ -192,10 +188,6 @@ def main() -> None:
         out = cmd_connector_import(
             pkg=str(args.pkg),
             overwrite=bool(args.overwrite),
-        )
-    elif args.command == "normalize-intents":
-        out = cmd_normalize_intents(
-            connector=str(args.connector),
         )
     elif args.command == "serve":
         port = getattr(args, "port", 0) or 0

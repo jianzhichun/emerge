@@ -8,7 +8,6 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -17,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present  # noqa: E402
+from scripts.policy_config import default_hook_state_root  # noqa: E402
 from scripts.span_tracker import is_read_only_tool  # noqa: E402
 from scripts.state_tracker import (  # noqa: E402
     LEVEL_PERIPHERAL,
@@ -117,12 +116,7 @@ def main() -> None:
     tool_name = payload.get("tool_name", "")
     raw_result = payload.get("tool_response", payload.get("tool_result", {}))
     result = raw_result if isinstance(raw_result, dict) else {}
-    _data_root_env = os.environ.get("EMERGE_DATA_ROOT", "")
-    if _data_root_env:
-        state_root = Path(_data_root_env)
-    else:
-        pin_plugin_data_path_if_present()
-        state_root = Path(default_hook_state_root())
+    state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
     tracker = load_tracker(state_path)
 

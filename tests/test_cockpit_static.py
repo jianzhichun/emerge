@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def _start_test_server(tmp_path: Path, monkeypatch) -> str:
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
     (tmp_path / "connectors").mkdir(exist_ok=True)

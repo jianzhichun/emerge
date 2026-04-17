@@ -31,8 +31,7 @@ def main() -> None:
         payload = {}
 
     try:
-        from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present
-        pin_plugin_data_path_if_present()
+        from scripts.policy_config import default_hook_state_root
         state_root = Path(default_hook_state_root())
         from scripts.state_tracker import load_tracker
         tracker = load_tracker(state_root / "state.json")

@@ -12,9 +12,9 @@ STOP_HOOK = ROOT / "hooks" / "stop.py"
 
 
 def _run_stop_hook(state: dict | None = None) -> dict:
-    """Run stop.py with a temporary state.json via EMERGE_DATA_ROOT."""
+    """Run stop.py with a temporary state.json via EMERGE_HOOK_STATE_ROOT."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        env = {**os.environ, "EMERGE_DATA_ROOT": tmpdir}
+        env = {**os.environ, "EMERGE_HOOK_STATE_ROOT": tmpdir}
         if state is not None:
             state_path = Path(tmpdir) / "state.json"
             state_path.write_text(json.dumps(state), encoding="utf-8")

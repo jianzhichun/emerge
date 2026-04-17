@@ -7,6 +7,7 @@ from typing import Any
 from scripts.intent_registry import IntentRegistry
 from scripts.pattern_detector import PatternDetector
 from scripts.policy_engine import derive_stage
+from scripts.policy_config import default_state_root, events_root
 
 
 class OperatorMonitor:
@@ -22,7 +23,7 @@ class OperatorMonitor:
         self._machines = machines
         self._poll_interval_s = poll_interval_s
         self._event_root = event_root or (Path.home() / ".emerge" / "operator-events")
-        self._state_root = state_root or (Path.home() / ".emerge" / "repl")
+        self._state_root = state_root or default_state_root()
         self._detector = PatternDetector()
         self._last_poll_ms: dict[str, int] = {}
         self._event_buffers: dict[str, deque] = {}
@@ -76,7 +77,7 @@ class OperatorMonitor:
         for summary in summaries:
             # Primary path: write directly to events-local.jsonl
             ts_ms = int(_time.time() * 1000)
-            events_local = self._state_root / "events-local.jsonl"
+            events_local = events_root(self._state_root) / "events-local.jsonl"
             events_local.parent.mkdir(parents=True, exist_ok=True)
             # Resolve stage from IntentRegistry — single source of truth.
             # Unknown signatures default to "explore" via derive_stage on an

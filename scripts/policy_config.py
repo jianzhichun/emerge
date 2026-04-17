@@ -5,6 +5,7 @@ import os as _os
 import re
 from hashlib import sha1
 from pathlib import Path
+from typing import Any
 
 PROMOTE_MIN_ATTEMPTS = 20
 PROMOTE_MIN_SUCCESS_RATE = 0.95
@@ -18,69 +19,102 @@ STABLE_MIN_VERIFY_RATE = 0.99
 ROLLBACK_CONSECUTIVE_FAILURES = 2
 WINDOW_SIZE = 20
 
+# Bounded history of stage transitions carried per intent entry. Keeps
+# intents.json small while retaining enough timeline for audit and cockpit UI.
+TRANSITION_HISTORY_MAX = 20
+
 PIPELINE_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]*\.(read|write)\.[a-z][a-z0-9_./-]*$")
 
 REFLECTION_CACHE_TTL_MS = 15 * 60 * 1000  # 15 minutes
 
 USER_CONNECTOR_ROOT = Path("~/.emerge/connectors").expanduser()
 
+# icc_exec kernel resource limits. These bound wall-clock time and the volume of
+# captured stdout/stderr per exec call. Truncation produces a structured warning
+# in the response rather than an error — execution itself still succeeds.
+EXEC_DEFAULT_TIMEOUT_S = 120
+EXEC_DEFAULT_STDOUT_BYTES = 256 * 1024
+EXEC_DEFAULT_STDERR_BYTES = 64 * 1024
+
+# Idle TTL after which an ExecSession is evicted from the per-profile cache in
+# EmergeDaemon. The session directory stays on disk so state can be rehydrated
+# from the WAL + checkpoint on the next call.
+SESSION_DEFAULT_IDLE_TTL_S = 3600
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw = _os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def exec_limits() -> dict[str, int]:
+    """Return current exec kernel limits, resolved from env vars each call."""
+    return {
+        "timeout_s": _positive_int_env("EMERGE_EXEC_TIMEOUT_S", EXEC_DEFAULT_TIMEOUT_S),
+        "stdout_bytes": _positive_int_env("EMERGE_EXEC_STDOUT_BYTES", EXEC_DEFAULT_STDOUT_BYTES),
+        "stderr_bytes": _positive_int_env("EMERGE_EXEC_STDERR_BYTES", EXEC_DEFAULT_STDERR_BYTES),
+    }
+
+
+def session_idle_ttl_s() -> int:
+    """Return the idle TTL (seconds) after which an ExecSession is evicted.
+
+    ``0`` (or any negative value) explicitly disables eviction — in-memory
+    sessions live for the lifetime of the daemon.
+    """
+    raw = _os.environ.get("EMERGE_SESSION_IDLE_TTL_S", "").strip()
+    if not raw:
+        return SESSION_DEFAULT_IDLE_TTL_S
+    try:
+        value = int(raw)
+    except ValueError:
+        return SESSION_DEFAULT_IDLE_TTL_S
+    return max(0, value)
+
 
 def default_emerge_home() -> Path:
     return Path.home() / ".emerge"
 
 
-def default_exec_root() -> Path:
-    """Return the default execution-session state root (``~/.emerge/repl``).
-
-    The on-disk directory name stays ``repl`` for data-compatibility with
-    existing installations.
-    """
-    return default_emerge_home() / "repl"
+def default_state_root() -> Path:
+    """Return the default state root (``~/.emerge/state``)."""
+    return default_emerge_home() / "state"
 
 
-def _plugin_data_pin_path() -> Path:
-    """Path to the file that records where CC set CLAUDE_PLUGIN_DATA at install time."""
-    return default_emerge_home() / "plugin_data_path"
+def sessions_root(state_root: Path) -> Path:
+    """Return per-session storage directory under the state root."""
+    return state_root / "sessions"
 
 
-def resolve_plugin_data_root() -> Path:
-    """Return the directory CC uses for plugin state (CLAUDE_PLUGIN_DATA).
+def events_root(state_root: Path) -> Path:
+    """Return shared event-stream directory under the state root."""
+    return state_root / "events"
 
-    Priority:
-    1. CLAUDE_PLUGIN_DATA env var (set by CC in hook execution context)
-    2. Contents of ~/.emerge/plugin_data_path (written by setup hook)
-    3. Fallback: ~/.emerge/hook-state (legacy / dev environments)
-    """
-    env = _os.environ.get("CLAUDE_PLUGIN_DATA", "").strip()
-    if env:
-        return Path(env)
-    pin = _plugin_data_pin_path()
-    if pin.exists():
-        try:
-            pinned = pin.read_text(encoding="utf-8").strip()
-            if pinned:
-                return Path(pinned)
-        except OSError:
-            pass
-    return default_emerge_home() / "hook-state"
+
+def registry_root(state_root: Path) -> Path:
+    """Return global registry directory under the state root."""
+    return state_root / "registry"
 
 
 def default_hook_state_root() -> Path:
-    """Legacy name kept for compatibility — delegates to resolve_plugin_data_root()."""
-    return resolve_plugin_data_root()
+    """Return the canonical hook-state directory.
 
-
-def pin_plugin_data_path_if_present() -> None:
-    """Keep ~/.emerge/plugin_data_path in sync with current hook env when available."""
-    plugin_data = _os.environ.get("CLAUDE_PLUGIN_DATA", "").strip()
-    if not plugin_data:
-        return
-    pin = _plugin_data_pin_path()
-    try:
-        pin.parent.mkdir(parents=True, exist_ok=True)
-        pin.write_text(plugin_data, encoding="utf-8")
-    except OSError:
-        pass
+    Single source of truth for every process (daemon, hooks, tests). The env
+    override `EMERGE_HOOK_STATE_ROOT` exists solely for test isolation —
+    production code paths resolve to `~/.emerge/hook-state/` unconditionally,
+    so the long-lived daemon and short-lived hook processes never diverge
+    regardless of CC's plugin-data directory layout.
+    """
+    override = _os.environ.get("EMERGE_HOOK_STATE_ROOT", "").strip()
+    if override:
+        return Path(override)
+    return default_emerge_home() / "hook-state"
 
 
 def stable_token(raw: str, *, max_prefix: int = 48) -> str:

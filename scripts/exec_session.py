@@ -12,22 +12,93 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from scripts.policy_config import default_exec_root
+from scripts.policy_config import default_state_root, exec_limits, sessions_root
+
+
+class _BoundedBuffer(io.TextIOBase):
+    """Stream-like sink that caps total bytes written and records truncation.
+
+    Once the byte budget is exhausted further writes are dropped silently but
+    ``truncated_bytes`` keeps accumulating so the caller can surface an accurate
+    "output truncated at N bytes (M more dropped)" warning.
+    """
+
+    def __init__(self, max_bytes: int) -> None:
+        super().__init__()
+        self._buf = io.StringIO()
+        self._max = max(0, int(max_bytes))
+        self._written = 0
+        self._truncated_bytes = 0
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, s: str) -> int:  # type: ignore[override]
+        if not s:
+            return 0
+        encoded_len = len(s.encode("utf-8", errors="replace"))
+        remaining = self._max - self._written
+        if remaining <= 0:
+            self._truncated_bytes += encoded_len
+            return len(s)
+        if encoded_len <= remaining:
+            self._buf.write(s)
+            self._written += encoded_len
+            return len(s)
+        # Partial: take a prefix that fits in the remaining byte budget.
+        raw = s.encode("utf-8", errors="replace")
+        prefix = raw[:remaining].decode("utf-8", errors="ignore")
+        self._buf.write(prefix)
+        self._written += len(prefix.encode("utf-8", errors="replace"))
+        self._truncated_bytes += encoded_len - (len(prefix.encode("utf-8", errors="replace")))
+        return len(s)
+
+    def getvalue(self) -> str:
+        return self._buf.getvalue()
+
+    @property
+    def truncated_bytes(self) -> int:
+        return self._truncated_bytes
+
+    @property
+    def written_bytes(self) -> int:
+        return self._written
 
 
 class ExecSession:
-    """Persistent Python execution state for icc_exec."""
+    """Persistent Python execution state for icc_exec.
+
+    Resource limits (wall-clock timeout, captured stdout/stderr byte caps) are
+    resolved per call from :func:`exec_limits`, so operators can tune them via
+    environment variables without restarting the daemon.
+
+    Session telemetry (``created_at_ms``, ``last_active_at_ms``, ``exec_count``,
+    ``bytes_out_total``) is persisted in ``checkpoint.json`` alongside the
+    replayable globals. This makes the session identity observable — callers
+    can report per-session activity and the daemon can evict idle sessions.
+    """
 
     def __init__(self, state_root: Path | None = None, session_id: str = "default") -> None:
         self._globals: dict[str, Any] = {"__builtins__": __builtins__}
-        base = state_root or default_exec_root()
+        base = sessions_root(state_root or default_state_root())
         self._session_dir = base / session_id
+        self._session_id = session_id
         self._wal_path = self._session_dir / "wal.jsonl"
         self._checkpoint_path = self._session_dir / "checkpoint.json"
         self._recovery_path = self._session_dir / "recovery.json"
         self._seq = 0
         self._wal_seq_applied = 0
         self._recovery_issues: list[dict[str, Any]] = []
+        _now_ms = int(time.time() * 1000)
+        self._meta: dict[str, Any] = {
+            "session_id": session_id,
+            "created_at_ms": _now_ms,
+            "last_active_at_ms": _now_ms,
+            "exec_count": 0,
+            "bytes_out_total": 0,
+            "truncated_bytes_total": 0,
+            "timeout_count": 0,
+        }
         # Serialises concurrent exec_code calls for a single profile.
         # ThreadingHTTPServer dispatches requests on separate threads; without
         # this lock two concurrent execs would race on _globals and _seq.
@@ -38,6 +109,18 @@ class ExecSession:
         self._poisoned_thread: threading.Thread | None = None
         self._ensure_paths()
         self._restore_from_disk()
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
+
+    @property
+    def last_active_at_ms(self) -> int:
+        return int(self._meta.get("last_active_at_ms", 0))
+
+    def session_meta(self) -> dict[str, Any]:
+        """Return a shallow copy of persistent session telemetry."""
+        return dict(self._meta)
 
     def exec_code(
         self,
@@ -64,9 +147,10 @@ class ExecSession:
         """
         meta = metadata or {}
         no_replay = bool(meta.get("no_replay", False))
-
-        # Execution timeout — default 120 s, overridable via env var
-        _exec_timeout = int(os.environ.get("EMERGE_EXEC_TIMEOUT_S", "120"))
+        limits = exec_limits()
+        _exec_timeout = limits["timeout_s"]
+        _stdout_cap = limits["stdout_bytes"]
+        _stderr_cap = limits["stderr_bytes"]
 
         with self._exec_lock:
             # If a previous timed-out thread is still running, refuse to exec —
@@ -83,14 +167,15 @@ class ExecSession:
                         "text": "",
                         "stdout": "",
                         "stderr": "",
+                        "session_meta": self.session_meta(),
                     }
-                # Previous thread finished — clear the poison
                 self._poisoned_thread = None
 
-            stdout_buf = io.StringIO()
-            stderr_buf = io.StringIO()
+            stdout_buf = _BoundedBuffer(_stdout_cap)
+            stderr_buf = _BoundedBuffer(_stderr_cap)
             is_error = False
             error_message = ""
+            timed_out = False
             start_ts_ms = int(time.time() * 1000)
             if inject_vars:
                 for key, value in inject_vars.items():
@@ -109,9 +194,9 @@ class ExecSession:
             _t.start()
             _t.join(timeout=_exec_timeout)
             if _t.is_alive():
-                # Thread still running — poison the session to prevent concurrent _globals mutation
                 self._poisoned_thread = _t
                 is_error = True
+                timed_out = True
                 error_message = (
                     f"ExecTimeout: code execution exceeded {_exec_timeout}s limit. "
                     f"Session is now poisoned — start a fresh session to continue. "
@@ -125,48 +210,92 @@ class ExecSession:
 
             stdout = stdout_buf.getvalue()
             stderr = stderr_buf.getvalue()
+            stdout_truncated = stdout_buf.truncated_bytes
+            stderr_truncated = stderr_buf.truncated_bytes
+
+            # Update session meta before composing the response so the numbers
+            # reflect this call.
+            finished_ts_ms = int(time.time() * 1000)
+            self._meta["last_active_at_ms"] = finished_ts_ms
+            self._meta["exec_count"] = int(self._meta.get("exec_count", 0)) + 1
+            self._meta["bytes_out_total"] = int(self._meta.get("bytes_out_total", 0)) + (
+                stdout_buf.written_bytes + stderr_buf.written_bytes
+            )
+            self._meta["truncated_bytes_total"] = int(
+                self._meta.get("truncated_bytes_total", 0)
+            ) + (stdout_truncated + stderr_truncated)
+            if timed_out:
+                self._meta["timeout_count"] = int(self._meta.get("timeout_count", 0)) + 1
 
             text_parts = []
             if stdout:
                 text_parts.append(f"stdout:\n{stdout}".rstrip())
+            if stdout_truncated:
+                text_parts.append(
+                    f"stdout_truncated: dropped {stdout_truncated} bytes (limit {_stdout_cap})"
+                )
             if stderr:
                 text_parts.append(f"stderr:\n{stderr}".rstrip())
+            if stderr_truncated:
+                text_parts.append(
+                    f"stderr_truncated: dropped {stderr_truncated} bytes (limit {_stderr_cap})"
+                )
             if is_error:
                 text_parts.append(f"error:\n{error_message}".rstrip())
 
+            wal_entry_common = {
+                "started_at_ms": start_ts_ms,
+                "finished_at_ms": finished_ts_ms,
+                "stdout_bytes": stdout_buf.written_bytes,
+                "stderr_bytes": stderr_buf.written_bytes,
+                "stdout_truncated_bytes": stdout_truncated,
+                "stderr_truncated_bytes": stderr_truncated,
+                "metadata": meta,
+            }
             if is_error:
                 self._append_wal(
                     {
                         "status": "error",
                         "code": code,
-                        "started_at_ms": start_ts_ms,
-                        "finished_at_ms": int(time.time() * 1000),
                         "error": error_message,
-                        "metadata": meta,
+                        "timed_out": timed_out,
+                        **wal_entry_common,
                     }
                 )
+                # Persist updated meta even on error so TTL/observability stay accurate.
+                self._write_checkpoint(self._wal_seq_applied)
             else:
                 seq = self._append_wal(
                     {
                         "status": "success",
                         "no_replay": no_replay,
                         "code": code,
-                        "started_at_ms": start_ts_ms,
-                        "finished_at_ms": int(time.time() * 1000),
-                        "metadata": meta,
+                        **wal_entry_common,
                     }
                 )
                 self._write_checkpoint(seq)
 
             text = "\n\n".join(text_parts) if text_parts else "ok"
-            payload: dict[str, Any] = {"content": [{"type": "text", "text": text}]}
+            payload: dict[str, Any] = {
+                "content": [{"type": "text", "text": text}],
+                "session_meta": self.session_meta(),
+            }
+            if stdout_truncated or stderr_truncated:
+                payload["truncation"] = {
+                    "stdout_bytes": stdout_truncated,
+                    "stderr_bytes": stderr_truncated,
+                    "stdout_limit": _stdout_cap,
+                    "stderr_limit": _stderr_cap,
+                }
             if is_error:
                 payload["isError"] = True
                 parsed = self._parse_exec_error(error_message, code)
-                payload["error_class"] = parsed["error_class"]
-                payload["error_summary"] = parsed["error_summary"]
+                payload["error_class"] = "ExecTimeout" if timed_out else parsed["error_class"]
+                payload["error_summary"] = parsed["error_summary"] if not timed_out else error_message.splitlines()[0]
                 payload["failed_line"] = parsed["failed_line"]
                 payload["recovery_suggestion"] = "exec"
+                if timed_out:
+                    payload["timed_out"] = True
             elif result_var:
                 payload["result_var_name"] = result_var
                 if result_var not in self._globals:
@@ -207,6 +336,19 @@ class ExecSession:
                     self._globals.update(restored)
                 self._wal_seq_applied = int(checkpoint.get("wal_seq_applied", 0))
                 self._seq = self._wal_seq_applied
+                # Restore persistent meta if present; only trust recognised keys.
+                stored_meta = checkpoint.get("session_meta") or {}
+                if isinstance(stored_meta, dict):
+                    for key in (
+                        "created_at_ms",
+                        "last_active_at_ms",
+                        "exec_count",
+                        "bytes_out_total",
+                        "truncated_bytes_total",
+                        "timeout_count",
+                    ):
+                        if key in stored_meta:
+                            self._meta[key] = stored_meta[key]
             except Exception as exc:
                 self._recovery_issues.append(
                     {
@@ -300,6 +442,7 @@ class ExecSession:
                 )
             ).hexdigest(),
             "updated_at_ms": int(time.time() * 1000),
+            "session_meta": dict(self._meta),
         }
         fd, tmp_path = tempfile.mkstemp(
             prefix="checkpoint-", suffix=".json", dir=str(self._session_dir)
@@ -370,14 +513,12 @@ class ExecSession:
         error_summary = error_message.strip().splitlines()[-1] if error_message.strip() else ""
         failed_line = 0
 
-        # Extract exception class from last line: "ExcClass: message"
         last_line = error_summary
         m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*):\s*(.*)", last_line)
         if m:
-            error_class = m.group(1).split(".")[-1]   # e.g. "NameError" not "builtins.NameError"
+            error_class = m.group(1).split(".")[-1]
             error_summary = m.group(2).strip()
 
-        # Extract line number from "File ..., line N"
         for line in error_message.splitlines():
             lm = re.search(r",\s*line\s+(\d+)", line)
             if lm:

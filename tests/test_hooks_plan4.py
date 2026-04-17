@@ -18,7 +18,7 @@ SESSION_START_HOOK = ROOT / "hooks" / "session_start.py"
 
 
 def _run(script: Path, payload: dict, data_dir: Path):
-    env = {**os.environ, "EMERGE_DATA_ROOT": str(data_dir)}
+    env = {**os.environ, "EMERGE_HOOK_STATE_ROOT": str(data_dir)}
     result = subprocess.run(
         [sys.executable, str(script)],
         input=json.dumps(payload),
@@ -103,8 +103,7 @@ def test_instructions_loaded_injects_active_span(tmp_path):
 
     env = {
         **os.environ,
-        "EMERGE_DATA_ROOT": str(tmp_path / "emerge"),
-        "CLAUDE_PLUGIN_DATA": str(state_root),
+        "EMERGE_HOOK_STATE_ROOT": str(state_root),
     }
     result = subprocess.run(
         [sys.executable, str(INSTRUCTIONS_LOADED_HOOK)],
@@ -146,8 +145,7 @@ def test_worktree_create_clears_active_span(tmp_path):
 
     env = {
         **os.environ,
-        "EMERGE_DATA_ROOT": str(tmp_path / "emerge"),
-        "CLAUDE_PLUGIN_DATA": str(state_root),
+        "EMERGE_HOOK_STATE_ROOT": str(state_root),
     }
     result = subprocess.run(
         [sys.executable, str(WORKTREE_LIFECYCLE_HOOK)],
@@ -171,8 +169,7 @@ def test_worktree_create_no_op_when_no_span(tmp_path):
 
     env = {
         **os.environ,
-        "EMERGE_DATA_ROOT": str(tmp_path / "emerge"),
-        "CLAUDE_PLUGIN_DATA": str(state_root),
+        "EMERGE_HOOK_STATE_ROOT": str(state_root),
     }
     result = subprocess.run(
         [sys.executable, str(WORKTREE_LIFECYCLE_HOOK)],
@@ -197,8 +194,7 @@ def test_task_created_no_op_without_active_span(tmp_path):
 
     env = {
         **os.environ,
-        "EMERGE_DATA_ROOT": str(tmp_path / "emerge"),
-        "CLAUDE_PLUGIN_DATA": str(state_root),
+        "EMERGE_HOOK_STATE_ROOT": str(state_root),
     }
     result = subprocess.run(
         [sys.executable, str(TASK_CREATED_HOOK)],
@@ -222,8 +218,7 @@ def test_task_created_writes_wal_when_span_active(tmp_path):
 
     env = {
         **os.environ,
-        "EMERGE_DATA_ROOT": str(tmp_path / "emerge"),
-        "CLAUDE_PLUGIN_DATA": str(state_root),
+        "EMERGE_HOOK_STATE_ROOT": str(state_root),
     }
     result = subprocess.run(
         [sys.executable, str(TASK_CREATED_HOOK)],
@@ -266,8 +261,9 @@ def test_icc_exec_bridge_path_writes_operator_event(tmp_path):
 
     daemon = EmergeDaemon(root=tmp_path)
     # Inject a stable intent entry so the bridge fires
-    from scripts.policy_config import default_exec_root
-    reg_path = Path(str(default_exec_root())) / "intents.json"
+    from scripts.policy_config import default_state_root
+    from scripts.intent_registry import registry_path
+    reg_path = registry_path(Path(str(default_state_root())))
     existing = {}
     if reg_path.exists():
         import json as _j
@@ -278,7 +274,8 @@ def test_icc_exec_bridge_path_writes_operator_event(tmp_path):
     existing.setdefault("intents", {})
     existing["intents"]["test-bridge.write.event-check"] = {"stage": "stable"}
     # Write to a tmp registry that won't affect real state
-    tmp_reg = tmp_path / "intents.json"
+    tmp_reg = registry_path(tmp_path)
+    tmp_reg.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(tmp_reg, existing)
     # Patch daemon to use tmp registry
     daemon._state_root = tmp_path
@@ -301,8 +298,7 @@ def test_icc_exec_bridge_path_writes_operator_event(tmp_path):
 def _run_session_start(payload: dict, data_dir: Path, cwd: Path, extra_env: dict | None = None):
     env = {
         **os.environ,
-        "EMERGE_DATA_ROOT": str(data_dir),
-        "CLAUDE_PLUGIN_DATA": str(data_dir / "repl"),
+        "EMERGE_HOOK_STATE_ROOT": str(data_dir / "repl"),
         **(extra_env or {}),
     }
     result = subprocess.run(

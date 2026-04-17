@@ -43,6 +43,30 @@ def test_mcp_post_ping(tmp_path):
     srv.stop()
 
 
+def test_mcp_post_jsonrpc_notification_returns_202_empty_body(tmp_path):
+    """JSON-RPC notifications (no response body) map to HTTP 202 per handle_post_mcp."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.daemon_http import DaemonHTTPServer
+
+    class _StubDaemon:
+        def handle_jsonrpc(self, req):
+            if str(req.get("method", "")).startswith("notifications/"):
+                return None
+            return {"jsonrpc": "2.0", "id": req.get("id"), "result": {}}
+
+    srv = DaemonHTTPServer(daemon=_StubDaemon(), port=0, pid_path=tmp_path / "d.pid")
+    srv.start()
+    time.sleep(0.1)
+    url = f"http://localhost:{srv.port}/mcp"
+    body = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode()
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        assert r.status == 202
+        assert r.read() == b""
+    srv.stop()
+
+
 def test_cockpit_root_served_on_daemon_port(tmp_path):
     """Cockpit HTML is merged into DaemonHTTPServer (GET /)."""
     srv = _make_server(tmp_path)
@@ -58,7 +82,7 @@ def test_cockpit_root_served_on_daemon_port(tmp_path):
 
 def test_control_plane_sessions_endpoint_lists_known_sessions(tmp_path):
     srv = _make_server_with_daemon(tmp_path)
-    session_dir = tmp_path / "repl" / "demo-session"
+    session_dir = tmp_path / "repl" / "sessions" / "demo-session"
     session_dir.mkdir(parents=True, exist_ok=True)
     (session_dir / "wal.jsonl").write_text('{"x":1}\n', encoding="utf-8")
     req = urllib.request.Request(f"http://localhost:{srv.port}/api/control-plane/sessions")
@@ -230,7 +254,7 @@ def test_runner_push_pattern_alert_written_to_events_jsonl(tmp_path):
                                     data=body2, headers={"Content-Type": "application/json"})
         urllib.request.urlopen(r2, timeout=5)
 
-    events_file = tmp_path / "repl" / "events-p1.jsonl"
+    events_file = tmp_path / "repl" / "events" / "events-p1.jsonl"
     assert events_file.exists(), "events-p1.jsonl must exist"
     alerts = [
         json.loads(l)
@@ -305,7 +329,7 @@ def test_team_active_true_when_runner_connected(tmp_path):
                                data=body, headers={"Content-Type": "application/json"})
     urllib.request.urlopen(r, timeout=5)
 
-    state_path = tmp_path / "repl" / "runner-monitor-state.json"
+    state_path = tmp_path / "repl" / "events" / "runner-monitor-state.json"
     time.sleep(0.1)
     assert state_path.exists()
     state = json.loads(state_path.read_text())

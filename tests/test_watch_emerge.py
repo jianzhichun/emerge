@@ -14,7 +14,9 @@ def _write_event(path: Path, event: dict) -> None:
 
 def test_watch_emerge_global_prints_runner_discovered(tmp_path):
     """watch_emerge.py tails events.jsonl and prints runner_discovered events."""
-    events_file = tmp_path / "events.jsonl"
+    events_root = tmp_path / "events"
+    events_root.mkdir(parents=True, exist_ok=True)
+    events_file = events_root / "events.jsonl"
 
     proc = subprocess.Popen(
         [sys.executable, str(ROOT / "scripts" / "watch_emerge.py"),
@@ -36,7 +38,9 @@ def test_watch_emerge_global_prints_runner_discovered(tmp_path):
 
 
 def test_watch_emerge_runner_mode_tails_profile_file(tmp_path):
-    events_file = tmp_path / "events-mycader-1.jsonl"
+    events_root = tmp_path / "events"
+    events_root.mkdir(parents=True, exist_ok=True)
+    events_file = events_root / "events-mycader-1.jsonl"
 
     proc = subprocess.Popen(
         [sys.executable, str(ROOT / "scripts" / "watch_emerge.py"),
@@ -73,7 +77,9 @@ def test_watch_emerge_exits_on_sigterm(tmp_path):
 
 
 def test_watch_emerge_global_writes_cockpit_ack(tmp_path):
-    events_file = tmp_path / "events.jsonl"
+    events_root = tmp_path / "events"
+    events_root.mkdir(parents=True, exist_ok=True)
+    events_file = events_root / "events.jsonl"
     event_id = "cockpit-watch-test-1"
 
     proc = subprocess.Popen(
@@ -93,7 +99,7 @@ def test_watch_emerge_global_writes_cockpit_ack(tmp_path):
     proc.terminate()
     proc.wait(timeout=3)
 
-    ack_file = tmp_path / "cockpit-action-acks.jsonl"
+    ack_file = events_root / "cockpit-action-acks.jsonl"
     assert ack_file.exists()
     ack = json.loads(ack_file.read_text(encoding="utf-8").strip().splitlines()[-1])
     assert ack["event_id"] == event_id
@@ -101,7 +107,9 @@ def test_watch_emerge_global_writes_cockpit_ack(tmp_path):
 
 def test_watch_patterns_shim_delegates_to_watch_emerge(tmp_path):
     """watch_emerge.py --runner-profile tails per-runner events."""
-    events_file = tmp_path / "events-mycader-1.jsonl"
+    events_root = tmp_path / "events"
+    events_root.mkdir(parents=True, exist_ok=True)
+    events_file = events_root / "events-mycader-1.jsonl"
 
     proc = subprocess.Popen(
         [sys.executable, str(ROOT / "scripts" / "watch_emerge.py"),

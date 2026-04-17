@@ -355,8 +355,9 @@ Emerge is implemented in Python~3.11+ as a Claude Code plugin.
 Key implementation decisions:
 
 \paragraph{Policy storage.}
-Two files: \texttt{candidates.json} (per-session, per-\texttt{intent\_signature} counters)
-and \texttt{intents.json} (global, per-intent lifecycle state).
+Two files: \texttt{state/sessions/<session\_id>/candidates.json} (per-session,
+per-\texttt{intent\_signature} counters) and
+\texttt{state/registry/intents.json} (global, per-intent lifecycle state).
 All writes are atomic (temp file + rename) to prevent corruption under concurrent access.
 
 \paragraph{Human-fix targeting.}

@@ -12,6 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from scripts.policy_config import events_root
+
 _KEEPALIVE_INTERVAL_S = 20.0
 
 def _validate_machine_id(machine_id: str) -> None:
@@ -166,8 +168,14 @@ class DaemonHTTPServer:
             encoding="utf-8",
         )
 
-    def handle_post_mcp(self, body: bytes, session_id: str | None) -> dict:
-        """Dispatch a JSON-RPC request to the daemon."""
+    def handle_post_mcp(self, body: bytes, session_id: str | None) -> dict | None:
+        """Dispatch a JSON-RPC request to the daemon.
+
+        Returns None when the request is a notification (no `id`) so the HTTP
+        layer can respond with 202 Accepted and an empty body. JSON-RPC 2.0
+        requires notifications to be one-way — returning a fabricated result
+        dict for a missing id violates the spec.
+        """
         try:
             req = json.loads(body)
         except json.JSONDecodeError as exc:
@@ -175,11 +183,12 @@ class DaemonHTTPServer:
                     "error": {"code": -32700, "message": f"Parse error: {exc}"}}
         req_id = req.get("id")
         try:
-            resp = self._daemon.handle_jsonrpc(req)
+            return self._daemon.handle_jsonrpc(req)
         except Exception as exc:
-            resp = {"jsonrpc": "2.0", "id": req_id,
+            if req_id is None:
+                return None  # notification — swallow exception, return 202
+            return {"jsonrpc": "2.0", "id": req_id,
                     "error": {"code": -32603, "message": str(exc)}}
-        return resp or {"jsonrpc": "2.0", "id": req_id, "result": {}}
 
     def _on_runner_online(self, runner_profile: str, machine_id: str) -> None:
         import re as _re
@@ -193,13 +202,13 @@ class DaemonHTTPServer:
                 "machine_id": machine_id,
                 "last_alert": None,
             }
-        self._append_event(self._state_root / "events.jsonl", {
+        self._append_event(events_root(self._state_root) / "events.jsonl", {
             "type": "runner_discovered",
             "ts_ms": now_ms,
             "runner_profile": runner_profile,
             "machine_id": machine_id,
         })
-        self._append_event(self._state_root / f"events-{runner_profile}.jsonl", {
+        self._append_event(events_root(self._state_root) / f"events-{runner_profile}.jsonl", {
             "type": "runner_online",
             "ts_ms": now_ms,
             "runner_profile": runner_profile,
@@ -228,7 +237,7 @@ class DaemonHTTPServer:
                     self._connected_runners[runner_profile]["last_event_ts_ms"] = ts_ms
             _orig_type = payload.get("type", "")
             _written_type = _orig_type if _orig_type == "operator_message" else "runner_event"
-            self._append_event(self._state_root / f"events-{runner_profile}.jsonl", {
+            self._append_event(events_root(self._state_root) / f"events-{runner_profile}.jsonl", {
                 "type": _written_type,
                 "ts_ms": ts_ms,
                 "runner_profile": runner_profile,
@@ -274,7 +283,7 @@ class DaemonHTTPServer:
                     },
                 }
                 self._append_event(
-                    self._state_root / f"events-{runner_profile}.jsonl", alert
+                    events_root(self._state_root) / f"events-{runner_profile}.jsonl", alert
                 )
                 with self._runners_lock:
                     if runner_profile in self._connected_runners:
@@ -370,7 +379,7 @@ class DaemonHTTPServer:
             ]
         state = {"runners": runners, "team_active": len(runners) > 0,
                  "updated_ts_ms": int(time.time() * 1000)}
-        path = self._state_root / "runner-monitor-state.json"
+        path = events_root(self._state_root) / "runner-monitor-state.json"
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with _tf.NamedTemporaryFile("w", dir=path.parent, delete=False,
@@ -624,7 +633,13 @@ def _make_handler(srv: "DaemonHTTPServer"):
                 srv._last_mcp_ts = time.time()
                 session_id = qs.get("session_id", [None])[0]
                 resp = srv.handle_post_mcp(body, session_id)
-                self._send_json(200, resp)
+                if resp is None:
+                    # JSON-RPC notification — respond 202 Accepted with no body.
+                    self.send_response(202)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                else:
+                    self._send_json(200, resp)
             elif path == "/runner/online":
                 try:
                     payload = json.loads(body) if body else {}

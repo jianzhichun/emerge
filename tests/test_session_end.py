@@ -28,11 +28,10 @@ def test_session_end_hook_exits_cleanly():
 
 def test_session_end_hook_returns_cleanup_summary(tmp_path: Path, monkeypatch):
     """When active_span_id is set, session_end reports cleanup via top-level systemMessage."""
-    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
-    from scripts.policy_config import default_hook_state_root, pin_plugin_data_path_if_present
+    monkeypatch.setenv("EMERGE_HOOK_STATE_ROOT", str(tmp_path))
+    from scripts.policy_config import default_hook_state_root
     from scripts.state_tracker import load_tracker, save_tracker
 
-    pin_plugin_data_path_if_present()
     state_path = Path(default_hook_state_root()) / "state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     tracker = load_tracker(state_path)
@@ -41,7 +40,7 @@ def test_session_end_hook_returns_cleanup_summary(tmp_path: Path, monkeypatch):
     save_tracker(state_path, tracker)
 
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_DATA"] = str(tmp_path)
+    env["EMERGE_HOOK_STATE_ROOT"] = str(tmp_path)
     result = subprocess.run(
         [sys.executable, str(ROOT / "hooks" / "session_end.py")],
         input=json.dumps({}),

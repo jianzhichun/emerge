@@ -9,7 +9,7 @@ import pytest
 
 def _start_cockpit_server(tmp_path, monkeypatch):
     """Start cockpit HTTP server via cmd_serve; return base URL."""
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
     (tmp_path / "connectors").mkdir(exist_ok=True)
@@ -33,7 +33,7 @@ def test_sse_status_returns_online_event(tmp_path, monkeypatch):
 
 def test_sse_broadcast_reaches_connected_client(tmp_path, monkeypatch):
     """cockpit._sse_broadcast must push events to connected SSE clients."""
-    monkeypatch.setenv("EMERGE_REPL_ROOT", str(tmp_path))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))
     (tmp_path / "connectors").mkdir(exist_ok=True)

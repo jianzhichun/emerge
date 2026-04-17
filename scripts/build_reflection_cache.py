@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.policy_config import default_exec_root, default_hook_state_root
+from scripts.policy_config import default_state_root, default_hook_state_root
 from scripts.span_tracker import SpanTracker
 
 
@@ -95,8 +95,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    exec_root = Path(os.environ.get("EMERGE_STATE_ROOT", str(default_exec_root())))
-    hook_root = Path(os.environ.get("CLAUDE_PLUGIN_DATA", str(default_hook_state_root())))
+    exec_root = Path(os.environ.get("EMERGE_STATE_ROOT", str(default_state_root())))
+    hook_root = Path(default_hook_state_root())
     tracker = SpanTracker(state_root=exec_root, hook_state_root=hook_root)
 
     summary = _build_deep_summary(tracker, max_items=max(1, args.max_items))
