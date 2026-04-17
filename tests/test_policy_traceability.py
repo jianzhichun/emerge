@@ -217,6 +217,44 @@ def test_record_bridge_outcome_no_op_on_missing_intent(tmp_path: Path) -> None:
     assert "no.read.such" not in data["intents"]
 
 
+def test_record_bridge_outcome_captures_exception_fingerprint(tmp_path: Path) -> None:
+    """last_demotion must carry the exception class so the next session's
+    reflection can skip re-diagnosing the root cause."""
+    from scripts.policy_config import BRIDGE_BROKEN_THRESHOLD
+
+    engine = _fresh_engine(tmp_path)
+    key = "gmail.read.fetch"
+    reg_path = registry_path(tmp_path)
+    reg_path.parent.mkdir(parents=True, exist_ok=True)
+    import json
+    reg_path.write_text(json.dumps({
+        "intents": {
+            key: {
+                "intent_signature": key,
+                "stage": "stable",
+                "attempts": 50,
+                "successes": 50,
+                "recent_outcomes": [1] * 20,
+            }
+        }
+    }), encoding="utf-8")
+
+    for _ in range(BRIDGE_BROKEN_THRESHOLD):
+        engine.record_bridge_outcome(
+            key,
+            success=False,
+            reason="name '__action' is not defined",
+            exception_class="NameError",
+        )
+
+    entry = IntentRegistry.load(tmp_path)["intents"][key]
+    demo = entry["last_demotion"]
+    assert demo["bridge_failure_exception"] == "NameError"
+    assert demo["bridge_failure_reason"] == "name '__action' is not defined"
+    hist = entry["transition_history"][-1]
+    assert hist["bridge_failure_exception"] == "NameError"
+
+
 # ── last_demotion attribution ───────────────────────────────────────────────
 
 def test_last_demotion_populated_on_explore_to_rollback(tmp_path: Path) -> None:

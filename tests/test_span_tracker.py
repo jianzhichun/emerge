@@ -202,6 +202,43 @@ def test_span_reflection_surfaces_recent_demotions(tracker, monkeypatch):
     assert "rollback" in reflection
 
 
+def test_span_reflection_surfaces_bridge_exception_fingerprint(tracker):
+    """Bridge-broken demotions must leak the exception class to the next
+    session so the model skips re-diagnosing the root cause."""
+    from scripts.intent_registry import IntentRegistry, registry_path
+    import json
+
+    key = "lark.read.get-doc"
+    # Seed a stable intent then demote via record_bridge_outcome with a
+    # realistic exception fingerprint.
+    reg = registry_path(tracker._state_root)
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    reg.write_text(json.dumps({
+        "intents": {
+            key: {
+                "intent_signature": key,
+                "stage": "stable",
+                "attempts": 50,
+                "successes": 50,
+                "recent_outcomes": [1] * 20,
+            }
+        }
+    }), encoding="utf-8")
+    from scripts.policy_config import BRIDGE_BROKEN_THRESHOLD
+    engine = tracker._get_policy_engine()
+    for _ in range(BRIDGE_BROKEN_THRESHOLD):
+        engine.record_bridge_outcome(
+            key,
+            success=False,
+            reason="name '__action' is not defined",
+            exception_class="NameError",
+        )
+
+    reflection = tracker.format_reflection()
+    assert "Demoted:" in reflection
+    assert "NameError" in reflection, "exception fingerprint must surface in reflection"
+
+
 def test_format_reflection_uses_policy_status(tracker, monkeypatch):
     monkeypatch.setattr("scripts.policy_engine.PROMOTE_MIN_ATTEMPTS", 1)
     monkeypatch.setattr("scripts.policy_engine.PROMOTE_MIN_SUCCESS_RATE", 1.0)

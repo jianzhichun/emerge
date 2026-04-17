@@ -40,6 +40,12 @@ def default_intent_entry() -> dict[str, Any]:
         # entry so cockpit can render "Why did this pipeline regress?"
         # without scanning history.
         "last_demotion": None,
+        # Composition: when non-empty, this intent is a composite. Executing
+        # it runs each child intent's flywheel bridge in order and returns
+        # the aggregated result. Composite stage derives from the children
+        # (min-rank); a single non-stable child pulls the composite down so
+        # we never bridge-execute a composite whose pieces are broken.
+        "composed_from": [],
     }
 
 

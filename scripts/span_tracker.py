@@ -343,7 +343,7 @@ class SpanTracker:
 
         stable: list[str] = []
         canary: list[str] = []
-        demotions: list[tuple[int, str, str, str]] = []  # (ts_ms, sig, to_stage, reason)
+        demotions: list[tuple[int, str, str, str, str]] = []  # (ts_ms, sig, to_stage, reason, fingerprint)
         for sig, entry in candidates.items():
             status = self.get_policy_status(sig)
             if status == "stable":
@@ -358,6 +358,7 @@ class SpanTracker:
                         sig,
                         str(demo.get("to_stage", "") or ""),
                         str(demo.get("reason", "") or ""),
+                        str(demo.get("bridge_failure_exception", "") or ""),
                     ))
 
         recent: dict[str, dict[str, int]] = {}
@@ -401,10 +402,13 @@ class SpanTracker:
             # Newest demotions first — next session should see the freshest failure reasons.
             demotions.sort(key=lambda x: x[0], reverse=True)
             demo_rows: list[str] = []
-            for _ts, sig, to_stage, reason in demotions[:3]:
+            for _ts, sig, to_stage, reason, fingerprint in demotions[:3]:
                 tag = to_stage or "demoted"
-                if reason:
-                    demo_rows.append(f"{sig}→{tag} ({reason})")
+                detail = reason
+                if fingerprint:
+                    detail = f"{reason}:{fingerprint}" if reason else fingerprint
+                if detail:
+                    demo_rows.append(f"{sig}→{tag} ({detail})")
                 else:
                     demo_rows.append(f"{sig}→{tag}")
             parts.append("Demoted: " + "; ".join(demo_rows))

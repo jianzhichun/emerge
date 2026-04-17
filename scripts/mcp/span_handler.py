@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+class CompositeBridgeUnavailable(Exception):
+    """Composite `_try_flywheel_bridge` returned None; bridge failure already recorded."""
+
+
 class SpanHandlers:
     """Implements the three span MCP tool handlers."""
 
@@ -87,11 +91,17 @@ class SpanHandlers:
                         "intent_signature": intent_signature,
                         "result": bridge_result,
                     })
+                except CompositeBridgeUnavailable:
+                    # PolicyEngine already recorded bridge failure for the composite.
+                    pass
                 except Exception as _bridge_exc:
                     if self._record_bridge_outcome is not None:
                         try:
                             self._record_bridge_outcome(
-                                intent_signature, success=False, reason=str(_bridge_exc),
+                                intent_signature,
+                                success=False,
+                                reason=str(_bridge_exc),
+                                exception_class=type(_bridge_exc).__name__,
                             )
                         except Exception:
                             pass

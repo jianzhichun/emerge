@@ -3749,3 +3749,234 @@ def test_watch_patterns_profile_arg_selects_correct_file(tmp_path):
     assert "mycader-1" in out or "hypermesh.mesh.batch" in out, (
         f"watcher did not output alert content; got: {out!r}"
     )
+
+
+# ── Composite intents (icc_compose) ──────────────────────────────────────────
+
+def _seed_stable_intent(state_root: Path, key: str) -> None:
+    """Directly seed a stable intent so composition tests don't have to drive
+    the full lifecycle for every child."""
+    from scripts.intent_registry import IntentRegistry, default_intent_entry
+    reg = IntentRegistry.load(state_root)
+    entry = default_intent_entry()
+    entry["stage"] = "stable"
+    entry["attempts"] = 50
+    entry["successes"] = 50
+    entry["success_rate"] = 1.0
+    entry["verify_rate"] = 1.0
+    entry["window_success_rate"] = 1.0
+    entry["recent_outcomes"] = [1] * 20
+    entry["intent_signature"] = key
+    reg["intents"][key] = entry
+    IntentRegistry.save(state_root, reg)
+
+
+def test_icc_compose_registers_composite_with_inherited_stage(tmp_path):
+    """Composite intent inherits min(children.stage) so a single non-stable
+    child prevents the composite bridge from firing prematurely."""
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "compose-test"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        state_root = tmp_path / "state"
+        _seed_stable_intent(state_root, "gmail.read.fetch")
+        _seed_stable_intent(state_root, "slack.write.post")
+        res = daemon.call_tool("icc_compose", {
+            "intent_signature": "brief.workflow.daily",
+            "children": ["gmail.read.fetch", "slack.write.post"],
+            "description": "fetch inbox then post digest",
+        })
+        assert res.get("isError") is not True, res
+        body = res["structuredContent"]
+        assert body["intent_signature"] == "brief.workflow.daily"
+        assert body["stage"] == "stable"
+
+        # Stage inheritance: demote one child → composite's bridge must not fire
+        # until we re-register (stage is a snapshot, by design — consumers that
+        # want continuous recompute can re-call icc_compose).
+        from scripts.intent_registry import IntentRegistry
+        reg = IntentRegistry.load(state_root)
+        reg["intents"]["gmail.read.fetch"]["stage"] = "explore"
+        IntentRegistry.save(state_root, reg)
+        res2 = daemon.call_tool("icc_compose", {
+            "intent_signature": "brief.workflow.daily",
+            "children": ["gmail.read.fetch", "slack.write.post"],
+        })
+        assert res2["structuredContent"]["stage"] == "explore"
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_composite_bridge_runs_children_in_order(tmp_path):
+    """Executing a stable composite must run each child's bridge sequentially
+    and return an aggregated result, skipping LLM inference entirely."""
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "compose-bridge"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        state_root = tmp_path / "state"
+        _seed_stable_intent(state_root, "child.read.a")
+        _seed_stable_intent(state_root, "child.read.b")
+
+        calls: list[tuple[str, Any]] = []
+        original = daemon._try_flywheel_bridge
+        def fake_bridge(arguments):
+            sig = arguments.get("intent_signature", "")
+            if sig in ("child.read.a", "child.read.b"):
+                calls.append((sig, arguments.get("__prev_result")))
+                return {"ok": True, "sig": sig, "prev": arguments.get("__prev_result")}
+            return original(arguments)
+        daemon._try_flywheel_bridge = fake_bridge  # type: ignore[method-assign]
+
+        daemon.call_tool("icc_compose", {
+            "intent_signature": "combo.workflow.pair",
+            "children": ["child.read.a", "child.read.b"],
+        })
+        # Route the composite through the real bridge (not the fake one) —
+        # just restoring it lets composite delegate back to the fake for children.
+        real_bridge = original
+        def dispatch(arguments):
+            sig = arguments.get("intent_signature", "")
+            if sig == "combo.workflow.pair":
+                return real_bridge(arguments)
+            return fake_bridge(arguments)
+        daemon._try_flywheel_bridge = dispatch  # type: ignore[method-assign]
+
+        result = daemon.call_tool("icc_exec", {
+            "intent_signature": "combo.workflow.pair",
+            "mode": "inline_code",
+            "code": "# would be LLM fallback if bridge didn't fire",
+        })
+        assert result.get("isError") is not True, result
+        # First child called with no prev, second child called with first's result.
+        assert [c[0] for c in calls] == ["child.read.a", "child.read.b"]
+        assert calls[0][1] is None
+        assert calls[1][1] == {"ok": True, "sig": "child.read.a", "prev": None}
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_icc_span_open_stable_composite_uses_composite_bridge(tmp_path):
+    """icc_span_open on a stable composite must use the same flywheel bridge as
+    icc_exec (not PipelineEngine alone — composites have no .py module)."""
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "compose-span-open"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        state_root = tmp_path / "state"
+        _seed_stable_intent(state_root, "child.read.a")
+        _seed_stable_intent(state_root, "child.read.b")
+
+        calls: list[tuple[str, Any]] = []
+        original = daemon._try_flywheel_bridge
+
+        def fake_bridge(arguments):
+            sig = arguments.get("intent_signature", "")
+            if sig in ("child.read.a", "child.read.b"):
+                calls.append((sig, arguments.get("__prev_result")))
+                return {"ok": True, "sig": sig, "prev": arguments.get("__prev_result")}
+            return original(arguments)
+
+        daemon._try_flywheel_bridge = fake_bridge  # type: ignore[method-assign]
+
+        daemon.call_tool("icc_compose", {
+            "intent_signature": "combo.workflow.span",
+            "children": ["child.read.a", "child.read.b"],
+        })
+        real_bridge = original
+
+        def dispatch(arguments):
+            sig = arguments.get("intent_signature", "")
+            if sig == "combo.workflow.span":
+                return real_bridge(arguments)
+            return fake_bridge(arguments)
+
+        daemon._try_flywheel_bridge = dispatch  # type: ignore[method-assign]
+
+        result = daemon.call_tool("icc_span_open", {
+            "intent_signature": "combo.workflow.span",
+        })
+        assert result.get("isError") is not True, result
+        body = result.get("structuredContent") or json.loads(result["content"][0]["text"])
+        assert body.get("bridge") is True
+        res = body.get("result") or {}
+        assert res.get("composite") is True
+        assert [c[0] for c in calls] == ["child.read.a", "child.read.b"]
+        assert calls[0][1] is None
+        assert calls[1][1] == {"ok": True, "sig": "child.read.a", "prev": None}
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_composite_bridge_failure_records_bridge_broken_on_composite(tmp_path):
+    """When a child bridge fails inside a composite, the composite itself must
+    record a bridge failure — enough consecutive failures demote the composite
+    to canary with reason=bridge_broken, matching the single-intent contract."""
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "compose-fail"
+    try:
+        from scripts.policy_config import BRIDGE_BROKEN_THRESHOLD
+        daemon = EmergeDaemon(root=ROOT)
+        state_root = tmp_path / "state"
+        _seed_stable_intent(state_root, "child.read.a")
+        _seed_stable_intent(state_root, "child.read.b")
+        daemon.call_tool("icc_compose", {
+            "intent_signature": "combo.workflow.fail",
+            "children": ["child.read.a", "child.read.b"],
+        })
+
+        # Make child A's bridge blow up.
+        original = daemon._try_flywheel_bridge
+        def failing_bridge(arguments):
+            sig = arguments.get("intent_signature", "")
+            if sig == "child.read.a":
+                raise RuntimeError("child-A broken")
+            return original(arguments)
+        # For the composite path, we route combo to the real bridge (which calls
+        # our failing_bridge for children).
+        def dispatch(arguments):
+            sig = arguments.get("intent_signature", "")
+            if sig == "combo.workflow.fail":
+                return original(arguments)
+            return failing_bridge(arguments)
+        daemon._try_flywheel_bridge = dispatch  # type: ignore[method-assign]
+
+        for _ in range(BRIDGE_BROKEN_THRESHOLD):
+            # Each call exercises the composite bridge; child A raises; composite
+            # records a bridge failure.
+            try:
+                daemon._run_composite_bridge(
+                    "combo.workflow.fail",
+                    ["child.read.a", "child.read.b"],
+                    {"intent_signature": "combo.workflow.fail"},
+                )
+            except Exception:
+                pass
+
+        from scripts.intent_registry import IntentRegistry
+        entry = IntentRegistry.load(state_root)["intents"]["combo.workflow.fail"]
+        assert entry["stage"] == "canary"
+        assert entry["last_transition_reason"] == "bridge_broken"
+        assert "RuntimeError" in entry["last_demotion"]["bridge_failure_exception"]
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_icc_compose_rejects_missing_children(tmp_path):
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "compose-missing"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        res = daemon.call_tool("icc_compose", {
+            "intent_signature": "combo.workflow.x",
+            "children": ["missing.read.one", "missing.read.two"],
+        })
+        assert res.get("isError") is True
+        assert "missing" in res["content"][0]["text"].lower()
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)

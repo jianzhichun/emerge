@@ -29,7 +29,7 @@ BRIDGE_BROKEN_THRESHOLD = 2
 # intents.json small while retaining enough timeline for audit and cockpit UI.
 TRANSITION_HISTORY_MAX = 20
 
-PIPELINE_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]*\.(read|write)\.[a-z][a-z0-9_./-]*$")
+PIPELINE_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]*\.(read|write|workflow)\.[a-z][a-z0-9_./-]*$")
 
 REFLECTION_CACHE_TTL_MS = 15 * 60 * 1000  # 15 minutes
 

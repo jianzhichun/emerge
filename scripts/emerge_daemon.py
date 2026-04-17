@@ -24,6 +24,7 @@ from scripts.policy_config import (  # noqa: E402
 )
 from scripts.crystallizer import PipelineCrystallizer  # noqa: E402
 from scripts.intent_registry import IntentRegistry  # noqa: E402
+from scripts.mcp.span_handler import CompositeBridgeUnavailable, SpanHandlers  # noqa: E402
 from scripts.runner_client import RunnerRouter  # noqa: E402
 from scripts.exec_session import ExecSession  # noqa: E402
 
@@ -114,7 +115,6 @@ class EmergeDaemon:
             span_tracker=self._span_tracker,
             hook_state_path=self._hook_state_path,
         )
-        from scripts.mcp.span_handler import SpanHandlers
         self._span_handlers = SpanHandlers(
             span_tracker=self._span_tracker,
             open_spans=self._open_spans,
@@ -189,7 +189,19 @@ class EmergeDaemon:
           returns a full MCP response dict, not a bare result.
         Do NOT consolidate — different return types and recording semantics are
         load-bearing for the flywheel bridge and span promotion paths.
+
+        Composite intents (``composed_from`` non-empty) have no standalone pipeline
+        module — the span bridge must use the same flywheel path as ``icc_exec``:
+        ``_try_flywheel_bridge`` → ``_run_composite_bridge``.
         """
+        intent_sig = str(arguments.get("intent_signature", "")).strip()
+        if intent_sig:
+            entry = IntentRegistry.get(self._state_root, intent_sig)
+            if isinstance(entry, dict) and (entry.get("composed_from") or []):
+                br = self._try_flywheel_bridge({**arguments, "intent_signature": intent_sig})
+                if br is not None:
+                    return br, "composite"
+                raise CompositeBridgeUnavailable()
         _rr = self._get_runner_router()
         _client = _rr.find_client(arguments) if _rr else None
         if _client is not None:
@@ -215,6 +227,16 @@ class EmergeDaemon:
             return None
         if str(bridge_entry.get("stage", "explore")) != "stable":
             return None
+
+        # Composite intent: delegate to each child's bridge in declared order.
+        # Composite stage already inherits min(children.stage), so reaching
+        # this point means every child is stable. A child failure surfaces as
+        # a composite failure and records bridge_broken on both.
+        composed_from = bridge_entry.get("composed_from") or []
+        if isinstance(composed_from, list) and composed_from:
+            return self._run_composite_bridge(
+                base_pipeline_id, list(composed_from), arguments,
+            )
 
         parts = base_pipeline_id.split(".", 2)
         if len(parts) != 3:
@@ -252,7 +274,10 @@ class EmergeDaemon:
             # own success/failure still feeds apply_evidence as usual.
             try:
                 self._policy_engine.record_bridge_outcome(
-                    base_pipeline_id, success=False, reason=str(_bridge_exc),
+                    base_pipeline_id,
+                    success=False,
+                    reason=str(_bridge_exc),
+                    exception_class=type(_bridge_exc).__name__,
                 )
             except Exception:
                 pass
@@ -267,6 +292,82 @@ class EmergeDaemon:
         except Exception:
             pass
         return result
+
+    def _run_composite_bridge(
+        self,
+        composite_id: str,
+        children: list[str],
+        arguments: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Run each child intent's bridge sequentially, returning aggregated result.
+
+        Each child receives the same ``arguments`` plus the previous child's
+        result under ``__prev_result`` — callers can wire child pipelines to
+        consume the upstream output. If any child bridge fails (returns None
+        or raises), the composite is marked broken and the caller falls back
+        to the LLM path.
+        """
+        aggregated: dict[str, Any] = {
+            "bridge_promoted": True,
+            "composite": True,
+            "composite_id": composite_id,
+            "children": [],
+        }
+        prev_result: Any = None
+        for child_id in children:
+            child_args = {**arguments, "intent_signature": child_id}
+            if prev_result is not None:
+                child_args["__prev_result"] = prev_result
+            child_args.pop("base_pipeline_id", None)
+            try:
+                child_result = self._try_flywheel_bridge(child_args)
+            except Exception as _exc:
+                child_result = None
+                self._last_bridge_failure = {
+                    "pipeline_id": composite_id,
+                    "mode": "composite",
+                    "reason": f"child {child_id} raised: {_exc}",
+                }
+                try:
+                    self._policy_engine.record_bridge_outcome(
+                        composite_id,
+                        success=False,
+                        reason=f"child {child_id} raised: {_exc}",
+                        exception_class=type(_exc).__name__,
+                    )
+                except Exception:
+                    pass
+                return None
+            if child_result is None:
+                self._last_bridge_failure = {
+                    "pipeline_id": composite_id,
+                    "mode": "composite",
+                    "reason": f"child {child_id} bridge returned None",
+                }
+                try:
+                    self._policy_engine.record_bridge_outcome(
+                        composite_id,
+                        success=False,
+                        reason=f"child {child_id} bridge unavailable",
+                        exception_class="CompositeChildMissing",
+                    )
+                except Exception:
+                    pass
+                return None
+            aggregated["children"].append({"intent": child_id, "result": child_result})
+            prev_result = child_result
+        try:
+            self._sink.emit("flywheel.bridge.composite", {
+                "pipeline_id": composite_id,
+                "children": children,
+            })
+        except Exception:
+            pass
+        try:
+            self._policy_engine.record_bridge_outcome(composite_id, success=True)
+        except Exception:
+            pass
+        return aggregated
 
     def _crystallize(self, **kwargs: Any) -> dict[str, Any]:
         return PipelineCrystallizer(self._state_root).crystallize(**kwargs)
@@ -379,6 +480,7 @@ class EmergeDaemon:
         "icc_span_approve": "_handle_icc_span_approve",
         "icc_exec":         "_handle_icc_exec",
         "icc_crystallize":  "_handle_icc_crystallize",
+        "icc_compose":      "_handle_icc_compose",
         "icc_reconcile":    "_handle_icc_reconcile",
         "icc_hub":          "_handle_icc_hub",
         "runner_notify":    "_handle_runner_notify",
@@ -386,7 +488,7 @@ class EmergeDaemon:
 
     _WRITE_TOOLS = frozenset({
         "icc_exec", "icc_span_open", "icc_span_close", "icc_span_approve",
-        "icc_crystallize", "icc_reconcile", "icc_hub",
+        "icc_crystallize", "icc_compose", "icc_reconcile", "icc_hub",
     })
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -523,6 +625,87 @@ class EmergeDaemon:
             )
         except Exception as exc:
             return self._tool_error(f"icc_crystallize failed: {exc}")
+
+    def _handle_icc_compose(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Register a composite intent that delegates to existing stable intents.
+
+        A composite ``parent`` with ``children=[A, B, C]`` runs each child's
+        flywheel bridge in order, passing each child's result to the next via
+        ``__prev_result``. The composite's stage is derived from the minimum
+        of its children's stages so a broken child never hides behind a
+        stable composite.
+        """
+        parent = str(arguments.get("intent_signature", "")).strip()
+        children_raw = arguments.get("children")
+        if not parent:
+            return self._tool_error("icc_compose: intent_signature is required")
+        if not isinstance(children_raw, list) or not children_raw:
+            return self._tool_error(
+                "icc_compose: children must be a non-empty list of intent_signatures"
+            )
+        children = [str(c).strip() for c in children_raw if str(c).strip()]
+        if len(children) < 2:
+            return self._tool_error(
+                "icc_compose: composition requires at least 2 children — "
+                "a single child is just the child itself"
+            )
+
+        from scripts.intent_registry import IntentRegistry, default_intent_entry
+        from scripts.policy_config import PIPELINE_KEY_RE
+        if not PIPELINE_KEY_RE.match(parent):
+            return self._tool_error(
+                f"icc_compose: parent intent_signature {parent!r} must match connector.mode.name"
+            )
+        for c in children:
+            if not PIPELINE_KEY_RE.match(c):
+                return self._tool_error(
+                    f"icc_compose: child {c!r} must match connector.mode.name"
+                )
+
+        reg = IntentRegistry.load(self._state_root)
+        intents = reg["intents"]
+        missing = [c for c in children if c not in intents]
+        if missing:
+            return self._tool_error(
+                f"icc_compose: children must exist before composition — missing: {missing}"
+            )
+
+        # Composite stage inherits the weakest child. A single explore child
+        # pulls the whole composite to explore, which means the bridge won't
+        # short-circuit until every piece is proven.
+        _rank = {"rollback": -1, "explore": 0, "canary": 1, "stable": 2}
+        child_stages = [str(intents[c].get("stage", "explore")) for c in children]
+        min_stage = min(child_stages, key=lambda s: _rank.get(s, 0))
+
+        entry = intents.get(parent) or default_intent_entry()
+        entry["composed_from"] = children
+        entry["stage"] = min_stage
+        entry["description"] = str(arguments.get("description", entry.get("description", "") or "")).strip()
+        import time as _time
+        entry["updated_at_ms"] = int(_time.time() * 1000)
+        intents[parent] = entry
+        IntentRegistry.save(self._state_root, reg)
+        try:
+            self._policy_engine._notify_resources_changed()
+        except Exception:
+            pass
+
+        payload = {
+            "ok": True,
+            "intent_signature": parent,
+            "children": children,
+            "stage": min_stage,
+            "next_step": (
+                f"Composite registered. Call icc_exec(intent_signature={parent!r}) — "
+                "children will bridge-execute in order. If any child is non-stable, "
+                "the composite falls back to LLM."
+            ),
+        }
+        return {
+            "isError": False,
+            "structuredContent": payload,
+            "content": [{"type": "text", "text": json.dumps(payload)}],
+        }
 
     def _handle_icc_reconcile(self, arguments: dict[str, Any]) -> dict[str, Any]:
         delta_id = str(arguments.get("delta_id", "")).strip()

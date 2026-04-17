@@ -52,62 +52,72 @@ def test_icc_crystallize_generates_pipeline_files(tmp_path):
         os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
 
 
-def test_crystallized_pipeline_does_not_crash_when_wal_missing_return_var(tmp_path):
-    """Regression: a crystallized pipeline whose WAL code never set __result /
-    __action must not raise NameError on first invocation. Auto-activate fires
-    these immediately after stable — a NameError on first run hard-stops the
-    flywheel. CLAUDE.md North Star: auto-activated pipelines must survive the
-    first real call."""
+def test_crystallizer_refuses_wal_missing_return_var(tmp_path):
+    """Strict precondition: crystallize must refuse WAL that never sets
+    __result (read) or __action (write). Emitting a band-aid fallback that
+    always returns "ok" strands the intent at stable while LLM keeps paying
+    full cost — the broken pipeline is invisible. Better to reject up front
+    and mark the intent with a synthesis_skipped_reason so a human fixes it."""
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
-    os.environ["EMERGE_SESSION_ID"] = "cryst-robust"
+    os.environ["EMERGE_SESSION_ID"] = "cryst-strict"
     connector_root = tmp_path / "connectors"
     os.environ["EMERGE_CONNECTOR_ROOT"] = str(connector_root)
     try:
         from scripts.emerge_daemon import EmergeDaemon
         daemon = EmergeDaemon(root=ROOT)
-        # WAL records exec code that does NOT set __result — a common reality
-        # because exec callers are not always disciplined about the convention.
         daemon.call_tool("icc_exec", {
-            "code": "x = 1 + 1",
-            "intent_signature": "robust.read.thing",
+            "code": "x = 1 + 1",  # never sets __result
+            "intent_signature": "strict.read.thing",
             "no_replay": False,
         })
         result = daemon.call_tool("icc_crystallize", {
-            "intent_signature": "robust.read.thing",
-            "connector": "robust",
+            "intent_signature": "strict.read.thing",
+            "connector": "strict",
             "pipeline_name": "thing",
             "mode": "read",
         })
-        body = result.get("structuredContent", {})
-        py_path = Path(body["py_path"])
-        src = py_path.read_text()
-        # Import and invoke run_read — it must not raise NameError.
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("robust_thing", py_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        out = mod.run_read({}, {})
-        # Must return *something* structured, not blow up.
-        assert out is not None
+        assert result.get("isError") is True
+        assert "__result" in result["content"][0]["text"]
 
-        # Same for write:
+        py_path = connector_root / "strict" / "pipelines" / "read" / "thing.py"
+        assert not py_path.exists(), "no pipeline file must be emitted"
+
+        # Registry marks the intent so auto-crystallize does not keep retrying.
+        from scripts.intent_registry import IntentRegistry
+        reg = IntentRegistry.load(tmp_path / "state")
+        if "strict.read.thing" in reg["intents"]:
+            assert reg["intents"]["strict.read.thing"].get("synthesis_skipped_reason") == (
+                "missing___result_assignment"
+            )
+
+        # Write mode: same contract for __action.
         daemon.call_tool("icc_exec", {
             "code": "y = 2 + 2",
-            "intent_signature": "robust.write.thing",
+            "intent_signature": "strict.write.thing",
             "no_replay": False,
         })
         result2 = daemon.call_tool("icc_crystallize", {
-            "intent_signature": "robust.write.thing",
-            "connector": "robust",
+            "intent_signature": "strict.write.thing",
+            "connector": "strict",
             "pipeline_name": "thing",
             "mode": "write",
         })
-        py_path2 = Path(result2["structuredContent"]["py_path"])
-        spec2 = importlib.util.spec_from_file_location("robust_thing_w", py_path2)
-        mod2 = importlib.util.module_from_spec(spec2)
-        spec2.loader.exec_module(mod2)
-        out2 = mod2.run_write({}, {})
-        assert isinstance(out2, dict) and "ok" in out2
+        assert result2.get("isError") is True
+        assert "__action" in result2["content"][0]["text"]
+
+        # But a well-formed WAL still crystallizes fine.
+        daemon.call_tool("icc_exec", {
+            "code": "__action = {'ok': True, 'n': 3}",
+            "intent_signature": "strict.write.good",
+            "no_replay": False,
+        })
+        result3 = daemon.call_tool("icc_crystallize", {
+            "intent_signature": "strict.write.good",
+            "connector": "strict",
+            "pipeline_name": "good",
+            "mode": "write",
+        })
+        assert result3.get("isError") is not True, result3
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)

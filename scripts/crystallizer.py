@@ -13,11 +13,61 @@ IndentedSafeDumper is also exported for callers that need YAML generation
 """
 from __future__ import annotations
 
+import ast
 import os
 import tempfile
 import textwrap
 from pathlib import Path
 from typing import Any
+
+
+def _code_assigns_name(code: str, name: str) -> bool:
+    """Return True when `name` appears as an assignment target in `code`.
+
+    Covers plain ``name = ...``, augmented ``name += ...``, and
+    ``globals()[name] = ...`` style writes. Parse errors default to False
+    so we refuse to crystallize WAL that wouldn't even compile."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return False
+
+    class _Visitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.found = False
+
+        def _check_target(self, node: ast.AST) -> None:
+            if isinstance(node, ast.Name) and node.id == name:
+                self.found = True
+            elif isinstance(node, (ast.Tuple, ast.List)):
+                for elt in node.elts:
+                    self._check_target(elt)
+
+        def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802
+            for tgt in node.targets:
+                self._check_target(tgt)
+            self.generic_visit(node)
+
+        def visit_AugAssign(self, node: ast.AugAssign) -> None:  # noqa: N802
+            self._check_target(node.target)
+            self.generic_visit(node)
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:  # noqa: N802
+            self._check_target(node.target)
+            self.generic_visit(node)
+
+        def visit_Subscript(self, node: ast.Subscript) -> None:  # noqa: N802
+            # globals()["__action"] = ... or __builtins__["__action"] = ...
+            if (
+                isinstance(node.slice, ast.Constant)
+                and node.slice.value == name
+            ):
+                self.found = True
+            self.generic_visit(node)
+
+    v = _Visitor()
+    v.visit(tree)
+    return v.found
 
 
 class IndentedSafeDumper:
@@ -108,11 +158,37 @@ class PipelineCrystallizer:
                 )}],
             }
 
+        _registry = IntentRegistry.load(self._state_root)
+
+        # Precondition: WAL code must set the return variable this mode expects
+        # (__result for read, __action for write). Otherwise the crystallized
+        # pipeline would either crash or return a zombie "ok" — both of which
+        # strand the intent at stable while LLM pays full cost on every call.
+        required_var = "__result" if mode == "read" else "__action"
+        if not _code_assigns_name(best_code, required_var):
+            reason = (
+                f"WAL code for {intent_signature!r} never assigns {required_var}; "
+                f"crystallization refused. Re-run icc_exec with a code body that "
+                f"sets {required_var} before icc_crystallize promotes the pipeline."
+            )
+            try:
+                if intent_signature in _registry["intents"]:
+                    _registry["intents"][intent_signature]["synthesis_skipped_reason"] = (
+                        f"missing_{required_var}_assignment"
+                    )
+                    _registry["intents"][intent_signature].pop("synthesis_ready", None)
+                    IntentRegistry.save(self._state_root, _registry)
+            except Exception:
+                pass
+            return {
+                "isError": True,
+                "content": [{"type": "text", "text": f"icc_crystallize: {reason}"}],
+            }
+
         # --- generate pipeline source ---
         ts = int(_time.time())
         indented = textwrap.indent(best_code, "    ")
 
-        _registry = IntentRegistry.load(self._state_root)
         description = str(_registry["intents"].get(intent_signature, {}).get("description", "")).strip()
 
         py_src, yaml_data = self._build_pipeline_sources(
@@ -317,7 +393,7 @@ class PipelineCrystallizer:
                 f"    # --- CRYSTALLIZED ---\n"
                 f"{indented_code}\n"
                 f"    # --- END ---\n"
-                f"    return locals().get('__result', [])  # exec code sets __result; fallback avoids NameError on auto-activate\n\n\n"
+                f"    return __result  # exec code must set __result = [{{...}}]; crystallizer enforces this precondition\n\n\n"
                 f"def verify_read(metadata, args, rows):\n"
                 f"    return {{\"ok\": bool(rows)}}\n"
             )
@@ -347,7 +423,7 @@ class PipelineCrystallizer:
                 f"    # --- CRYSTALLIZED ---\n"
                 f"{indented_code}\n"
                 f"    # --- END ---\n"
-                f"    return locals().get('__action', {{\"ok\": True}})  # exec code sets __action; fallback avoids NameError on auto-activate\n\n\n"
+                f"    return __action  # exec code must set __action = {{\"ok\": True, ...}}; crystallizer enforces this precondition\n\n\n"
                 f"def verify_write(metadata, args, action_result):\n"
                 f"    return {{\"ok\": bool(action_result.get(\"ok\"))}}\n"
             )

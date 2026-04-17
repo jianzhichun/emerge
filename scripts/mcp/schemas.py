@@ -242,6 +242,33 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "icc_compose",
+            "title": "Compose Intents",
+            "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+            "description": (
+                "Register a composite intent that delegates to existing intents. "
+                "Composite executes each child's flywheel bridge in order, passing "
+                "each result to the next child via __prev_result. Composite stage "
+                "inherits min(children.stage) — a single non-stable child prevents "
+                "bridge short-circuit for the whole composite. All children must "
+                "already exist in state/registry/intents.json."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "intent_signature": {"type": "string", "description": "Composite intent signature (connector.mode.name)"},
+                    "children": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "description": "Ordered list of child intent_signatures (each must exist)",
+                    },
+                    "description": {"type": "string", "description": "Optional description of what the composite does"},
+                },
+                "required": ["intent_signature", "children"],
+            },
+        },
+        {
             "name": "icc_hub",
             "title": "Memory Hub",
             "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},

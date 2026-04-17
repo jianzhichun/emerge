@@ -14,7 +14,7 @@ from scripts.policy_config import default_hook_state_root  # noqa: E402
 from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
 
 # Compiled once at module load — shared across all validator functions.
-_SIG_RE = re.compile(r'^[a-z][a-z0-9_-]*\.(read|write)\.[a-z][a-z0-9_./-]*$')
+_SIG_RE = re.compile(r'^[a-z][a-z0-9_-]*\.(read|write|workflow)\.[a-z][a-z0-9_./-]*$')
 _SAFE_SEG_RE = re.compile(r'^[a-z0-9][a-z0-9_-]*$')
 _VAR_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 

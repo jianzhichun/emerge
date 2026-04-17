@@ -343,6 +343,7 @@ class PolicyEngine:
         *,
         success: bool,
         reason: str | None = None,
+        exception_class: str | None = None,
         ts_ms: int | None = None,
     ) -> dict[str, Any]:
         """Record a flywheel bridge execution outcome.
@@ -389,21 +390,27 @@ class PolicyEngine:
                 entry["last_transition_reason"] = "bridge_broken"
                 entry["attempts_at_transition"] = int(entry.get("attempts", 0))
                 entry["last_transition_ts_ms"] = ts_ms
+                # Keys may exist with JSON null — .get(k, 0.0) still returns None.
+                def _rfloat(k: str, default: float = 0.0) -> float:
+                    v = entry.get(k, default)
+                    return default if v is None else float(v)
+
                 history_entry = {
                     "ts_ms": ts_ms,
                     "from_stage": "stable",
                     "to_stage": "canary",
                     "reason": "bridge_broken",
                     "attempts": int(entry.get("attempts", 0)),
-                    "success_rate": float(entry.get("success_rate", 0.0)),
-                    "verify_rate": float(entry.get("verify_rate", 0.0)),
-                    "human_fix_rate": float(entry.get("human_fix_rate", 0.0)),
-                    "window_success_rate": float(entry.get("window_success_rate", 0.0)),
+                    "success_rate": _rfloat("success_rate"),
+                    "verify_rate": _rfloat("verify_rate"),
+                    "human_fix_rate": _rfloat("human_fix_rate"),
+                    "window_success_rate": _rfloat("window_success_rate"),
                     "consecutive_failures": int(entry.get("consecutive_failures", 0)),
                     "session_id": self._get_session_id() or None,
                     "target_profile": entry.get("target_profile"),
                     "execution_path": None,
                     "bridge_failure_reason": reason or "",
+                    "bridge_failure_exception": exception_class or "",
                 }
                 history = list(entry.get("transition_history") or [])
                 history.append(history_entry)
@@ -423,6 +430,8 @@ class PolicyEngine:
                 "to_stage": "canary",
                 "new_stage": "canary",
                 "reason": "bridge_broken",
+                "bridge_failure_reason": reason or "",
+                "bridge_failure_exception": exception_class or "",
                 "demotion": True,
                 "session_id": self._get_session_id(),
                 "ts_ms": ts_ms,
