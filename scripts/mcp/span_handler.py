@@ -26,6 +26,7 @@ class SpanHandlers:
         sink: Callable[[], Any],    # () → metrics sink with .emit()
         run_pipeline: Callable,     # (mode, args) → (result_dict, exec_path_str)
         record_pipeline_event: Callable,  # FlywheelRecorder.record_pipeline_event
+        record_bridge_outcome: Callable | None = None,  # PolicyEngine.record_bridge_outcome
         tool_error: Callable[[str], dict],
         tool_ok_json: Callable[[Any], dict],
     ) -> None:
@@ -37,6 +38,7 @@ class SpanHandlers:
         self._get_sink = sink
         self._run_pipeline = run_pipeline
         self._record_pipeline_event = record_pipeline_event
+        self._record_bridge_outcome = record_bridge_outcome
         self._tool_error = tool_error
         self._tool_ok_json = tool_ok_json
 
@@ -74,14 +76,26 @@ class SpanHandlers:
                         self._get_sink().emit("span.bridge.promoted", {"intent_signature": intent_signature})
                     except Exception:
                         pass
+                    if self._record_bridge_outcome is not None:
+                        try:
+                            self._record_bridge_outcome(intent_signature, success=True)
+                        except Exception:
+                            pass
                     return self._tool_ok_json({
                         "bridge": True,
                         "bridge_type": "result",
                         "intent_signature": intent_signature,
                         "result": bridge_result,
                     })
-                except Exception:
-                    pass  # PipelineMissingError or any failure → fall through to explore
+                except Exception as _bridge_exc:
+                    if self._record_bridge_outcome is not None:
+                        try:
+                            self._record_bridge_outcome(
+                                intent_signature, success=False, reason=str(_bridge_exc),
+                            )
+                        except Exception:
+                            pass
+                    # PipelineMissingError or any failure → fall through to explore
 
         # Intent gate: new intent for existing connector → confirm_needed
         _candidates = self._span_tracker._load_candidates()["intents"]
@@ -192,11 +206,49 @@ class SpanHandlers:
         }
         if skeleton_path:
             response["skeleton_path"] = skeleton_path
-            response["next_step"] = (
-                f"Review and complete {skeleton_path}, "
-                "then call icc_span_approve to activate the bridge."
-            )
+            # Auto-activate at stable unless opted out. The flywheel's whole
+            # point is zero-LLM repeat execution; leaving pipelines in _pending
+            # awaiting manual icc_span_approve means every future session pays
+            # LLM cost on an intent we already learned.
+            require_manual = os.environ.get("EMERGE_REQUIRE_APPROVE", "0") == "1"
+            activated_path: str | None = None
+            if not require_manual:
+                activated_path = self._auto_activate_pipeline(closed.intent_signature)
+            if activated_path:
+                response["auto_activated"] = True
+                response["pipeline_path"] = activated_path
+                response["next_step"] = (
+                    f"Pipeline activated at {activated_path}. "
+                    "Bridge is live — next call hits zero-LLM path."
+                )
+            else:
+                response["next_step"] = (
+                    f"Review and complete {skeleton_path}, "
+                    "then call icc_span_approve to activate the bridge."
+                )
         return self._tool_ok_json(response)
+
+    def _auto_activate_pipeline(self, intent_signature: str) -> str | None:
+        """Promote a stable skeleton from _pending/ to active without human gate.
+
+        Returns the activated .py path on success, None if auto-activation is
+        not applicable (wrong stage, missing skeleton, or write failure).
+        Failures are swallowed — caller falls back to the manual-approve path.
+        """
+        try:
+            if self._span_tracker.get_policy_status(intent_signature) != "stable":
+                return None
+            result = self.handle_span_approve({"intent_signature": intent_signature})
+        except Exception:
+            return None
+        if not isinstance(result, dict) or result.get("isError"):
+            return None
+        try:
+            import json as _json
+            body = _json.loads(result["content"][0]["text"])
+        except Exception:
+            return None
+        return str(body.get("pipeline_path") or "") or None
 
     # ------------------------------------------------------------------
     # icc_span_approve

@@ -52,6 +52,68 @@ def test_icc_crystallize_generates_pipeline_files(tmp_path):
         os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
 
 
+def test_crystallized_pipeline_does_not_crash_when_wal_missing_return_var(tmp_path):
+    """Regression: a crystallized pipeline whose WAL code never set __result /
+    __action must not raise NameError on first invocation. Auto-activate fires
+    these immediately after stable — a NameError on first run hard-stops the
+    flywheel. CLAUDE.md North Star: auto-activated pipelines must survive the
+    first real call."""
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "cryst-robust"
+    connector_root = tmp_path / "connectors"
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(connector_root)
+    try:
+        from scripts.emerge_daemon import EmergeDaemon
+        daemon = EmergeDaemon(root=ROOT)
+        # WAL records exec code that does NOT set __result — a common reality
+        # because exec callers are not always disciplined about the convention.
+        daemon.call_tool("icc_exec", {
+            "code": "x = 1 + 1",
+            "intent_signature": "robust.read.thing",
+            "no_replay": False,
+        })
+        result = daemon.call_tool("icc_crystallize", {
+            "intent_signature": "robust.read.thing",
+            "connector": "robust",
+            "pipeline_name": "thing",
+            "mode": "read",
+        })
+        body = result.get("structuredContent", {})
+        py_path = Path(body["py_path"])
+        src = py_path.read_text()
+        # Import and invoke run_read — it must not raise NameError.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("robust_thing", py_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        out = mod.run_read({}, {})
+        # Must return *something* structured, not blow up.
+        assert out is not None
+
+        # Same for write:
+        daemon.call_tool("icc_exec", {
+            "code": "y = 2 + 2",
+            "intent_signature": "robust.write.thing",
+            "no_replay": False,
+        })
+        result2 = daemon.call_tool("icc_crystallize", {
+            "intent_signature": "robust.write.thing",
+            "connector": "robust",
+            "pipeline_name": "thing",
+            "mode": "write",
+        })
+        py_path2 = Path(result2["structuredContent"]["py_path"])
+        spec2 = importlib.util.spec_from_file_location("robust_thing_w", py_path2)
+        mod2 = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(mod2)
+        out2 = mod2.run_write({}, {})
+        assert isinstance(out2, dict) and "ok" in out2
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+        os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+
+
 def test_icc_crystallize_write_pipeline(tmp_path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "cryst-write-test"

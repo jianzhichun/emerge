@@ -124,6 +124,99 @@ def test_transition_history_capped(tmp_path: Path) -> None:
     assert "reason" in history[-1]
 
 
+# ── bridge-broken auto-demotion ──────────────────────────────────────────────
+
+def test_record_bridge_outcome_demotes_stable_on_repeated_failure(tmp_path: Path) -> None:
+    """A stable pipeline whose bridge keeps failing (while LLM fallback masks
+    it as a success on the *intent*) must be auto-demoted from stable →
+    canary with reason 'bridge_broken'. Without this, a broken crystallized
+    pipeline burns LLM on every call forever — direct North Star violation."""
+    from scripts.policy_config import BRIDGE_BROKEN_THRESHOLD
+
+    engine = _fresh_engine(tmp_path)
+    key = "gmail.read.fetch"
+
+    # Seed an intent at stable directly (we're testing the bridge path, not
+    # how it got to stable).
+    reg_path = registry_path(tmp_path)
+    reg_path.parent.mkdir(parents=True, exist_ok=True)
+    import json
+    reg_path.write_text(json.dumps({
+        "intents": {
+            key: {
+                "intent_signature": key,
+                "stage": "stable",
+                "attempts": 50,
+                "successes": 50,
+                "success_rate": 1.0,
+                "verify_rate": 1.0,
+                "human_fix_rate": 0.0,
+                "window_success_rate": 1.0,
+                "consecutive_failures": 0,
+                "recent_outcomes": [1] * 20,
+                "transition_history": [],
+                "last_demotion": None,
+            }
+        }
+    }), encoding="utf-8")
+
+    # Below the threshold: stage should stay stable.
+    for _ in range(BRIDGE_BROKEN_THRESHOLD - 1):
+        engine.record_bridge_outcome(key, success=False, reason="ImportError")
+    entry = IntentRegistry.load(tmp_path)["intents"][key]
+    assert entry["stage"] == "stable"
+    assert entry["bridge_failure_streak"] == BRIDGE_BROKEN_THRESHOLD - 1
+
+    # One more failure crosses the threshold → demote.
+    engine.record_bridge_outcome(key, success=False, reason="ImportError")
+    entry = IntentRegistry.load(tmp_path)["intents"][key]
+    assert entry["stage"] == "canary", "bridge broken at threshold must demote stable→canary"
+    assert entry["last_transition_reason"] == "bridge_broken"
+    demo = entry["last_demotion"]
+    assert demo is not None
+    assert demo["from_stage"] == "stable"
+    assert demo["to_stage"] == "canary"
+    assert demo["reason"] == "bridge_broken"
+
+
+def test_record_bridge_outcome_success_resets_streak(tmp_path: Path) -> None:
+    engine = _fresh_engine(tmp_path)
+    key = "gmail.read.fetch"
+    reg_path = registry_path(tmp_path)
+    reg_path.parent.mkdir(parents=True, exist_ok=True)
+    import json
+    reg_path.write_text(json.dumps({
+        "intents": {
+            key: {
+                "intent_signature": key,
+                "stage": "stable",
+                "attempts": 50,
+                "successes": 50,
+                "recent_outcomes": [1] * 20,
+                "bridge_failure_streak": 0,
+            }
+        }
+    }), encoding="utf-8")
+
+    engine.record_bridge_outcome(key, success=False, reason="boom")
+    entry = IntentRegistry.load(tmp_path)["intents"][key]
+    assert entry["bridge_failure_streak"] == 1
+    # A successful bridge run clears the streak.
+    engine.record_bridge_outcome(key, success=True)
+    entry = IntentRegistry.load(tmp_path)["intents"][key]
+    assert entry["bridge_failure_streak"] == 0
+    assert entry["stage"] == "stable"
+
+
+def test_record_bridge_outcome_no_op_on_missing_intent(tmp_path: Path) -> None:
+    """Bridge evidence for an unknown intent must be a no-op, not create a
+    rogue entry. Intent creation is the job of apply_evidence."""
+    engine = _fresh_engine(tmp_path)
+    engine.record_bridge_outcome("no.read.such", success=False)
+    data = IntentRegistry.load(tmp_path)
+    assert "no.read.such" not in data["intents"]
+
+
 # ── last_demotion attribution ───────────────────────────────────────────────
 
 def test_last_demotion_populated_on_explore_to_rollback(tmp_path: Path) -> None:

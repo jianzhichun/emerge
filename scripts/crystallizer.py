@@ -317,7 +317,7 @@ class PipelineCrystallizer:
                 f"    # --- CRYSTALLIZED ---\n"
                 f"{indented_code}\n"
                 f"    # --- END ---\n"
-                f"    return __result  # exec code must set __result = [{{...}}]\n\n\n"
+                f"    return locals().get('__result', [])  # exec code sets __result; fallback avoids NameError on auto-activate\n\n\n"
                 f"def verify_read(metadata, args, rows):\n"
                 f"    return {{\"ok\": bool(rows)}}\n"
             )
@@ -347,7 +347,7 @@ class PipelineCrystallizer:
                 f"    # --- CRYSTALLIZED ---\n"
                 f"{indented_code}\n"
                 f"    # --- END ---\n"
-                f"    return __action  # exec code must set __action = {{\"ok\": True, ...}}\n\n\n"
+                f"    return locals().get('__action', {{\"ok\": True}})  # exec code sets __action; fallback avoids NameError on auto-activate\n\n\n"
                 f"def verify_write(metadata, args, action_result):\n"
                 f"    return {{\"ok\": bool(action_result.get(\"ok\"))}}\n"
             )

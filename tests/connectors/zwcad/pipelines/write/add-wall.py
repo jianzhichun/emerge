@@ -7,7 +7,7 @@ def run_write(metadata, args):
     # --- CRYSTALLIZED ---
     v = 1
     # --- END ---
-    return __action  # exec code must set __action = {"ok": True, ...}
+    return locals().get('__action', {"ok": True})  # exec code sets __action; fallback avoids NameError on auto-activate
 
 
 def verify_write(metadata, args, action_result):

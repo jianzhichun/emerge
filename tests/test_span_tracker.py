@@ -186,6 +186,22 @@ def test_span_reflection_includes_recent_wal(tracker):
     assert "lark.write.create-doc 0ok/1fail" in reflection
 
 
+def test_span_reflection_surfaces_recent_demotions(tracker, monkeypatch):
+    # Two failures in explore → rollback (ROLLBACK_CONSECUTIVE_FAILURES=2).
+    # The demotion reason must land in the next reflection so the next session
+    # does not repeat the same mistake (CLAUDE.md P2: failed-once, learn-forever).
+    monkeypatch.setattr("scripts.policy_engine.ROLLBACK_CONSECUTIVE_FAILURES", 2)
+    s1 = tracker.open_span("lark.write.create-doc")
+    tracker.close_span(s1, outcome="failure")
+    s2 = tracker.open_span("lark.write.create-doc")
+    tracker.close_span(s2, outcome="failure")
+    reflection = tracker.format_reflection()
+    assert "Demoted:" in reflection
+    assert "lark.write.create-doc" in reflection
+    # The reason and target stage must be visible — that's the whole point.
+    assert "rollback" in reflection
+
+
 def test_format_reflection_uses_policy_status(tracker, monkeypatch):
     monkeypatch.setattr("scripts.policy_engine.PROMOTE_MIN_ATTEMPTS", 1)
     monkeypatch.setattr("scripts.policy_engine.PROMOTE_MIN_SUCCESS_RATE", 1.0)

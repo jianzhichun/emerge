@@ -19,6 +19,12 @@ STABLE_MIN_VERIFY_RATE = 0.99
 ROLLBACK_CONSECUTIVE_FAILURES = 2
 WINDOW_SIZE = 20
 
+# A stable pipeline whose crystallized code fails this many times in a row
+# (with LLM fallback covering each failure) is auto-demoted from stable to
+# canary with reason "bridge_broken". Protects the flywheel from broken-but-
+# silently-masked pipelines where every "stable" run still pays LLM cost.
+BRIDGE_BROKEN_THRESHOLD = 2
+
 # Bounded history of stage transitions carried per intent entry. Keeps
 # intents.json small while retaining enough timeline for audit and cockpit UI.
 TRANSITION_HISTORY_MAX = 20

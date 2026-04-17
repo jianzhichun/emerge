@@ -1,205 +1,116 @@
 # CLAUDE.md
 
+> **You — reading this — are building this plugin. You are not its user.**
+>
+> The user is *another Claude session*, tomorrow, running Claude Code with this plugin installed. It will never read this file. It will only feel what you leave behind: which intents auto-promote, which failures survive into the next reflection, which pipelines compose, which hooks open doors vs bar them.
+>
+> Every commit here is a contract with a Claude you will never meet. Your job is to expand its action surface, not polish the plumbing. When in doubt, ship the change that lets the next Claude skip a step, remember a failure, or compose a capability — even if the diff is larger or uglier than a "clean" refactor.
+
+## North Star — three capability axes for operator-Claude
+
+1. **Skip inference on solved work.** The flywheel's payoff is zero-LLM execution of stable intents. Manual gates, `_pending/` pipelines, confirmation prompts, "just to be safe" dialogs — these tax every future session on work that was already learned. **Auto-promote, don't gate.** Humans veto by rolling back, not by approving forward.
+2. **Failed once → learn forever.** When an intent demotes, the root cause must reach the *next* session through reflection injection (`SpanTracker.format_reflection` → `SessionStart` / `UserPromptSubmit` / `PreCompact`). A signal that dies inside `transition_history` and never surfaces in reflection is a bug, no matter how well the cockpit shows it.
+3. **Compose, don't re-derive.** `connector.mode.name` intents are building blocks. Stable pipelines should compose (`new = stable_A >> stable_B` inherits both parents' stable status + verify history) so learning cost stays sub-linear in intent count.
+
+**The binary test before every merge:** does this change let operator-Claude (a) skip LLM inference more often, or (b) carry a failure into the next session, or (c) compose existing intents into new ones?
+
+- **Yes to any** → capability work. Ship it.
+- **No to all** → maintenance. OK to do, not OK to call progress, not OK to displace (a)/(b)/(c).
+
+"It would be cleaner", "unified dispatch", "consistent naming" do not answer the test. They are maintainer aesthetics.
+
 ## Commands
 
 ```bash
-# Run full test suite
-python -m pytest tests -q
-
-# Run a single test file
-python -m pytest tests/test_mcp_tools_integration.py -q
-
-# Run a single test by name
-python -m pytest tests/test_mcp_tools_integration.py::test_increment_human_fix_targets_most_recent_candidate_only -q
-
-# Run the daemon manually (dev)
-python3 scripts/emerge_daemon.py
-
-# Runner install URL (operator runs on remote machine; first-time setup)
-python3 scripts/repl_admin.py runner-install-url --target-profile "key" --pretty
-
-# Runner deploy (push updated scripts + hot-reload watchdog — use after any scripts/ change)
-python3 scripts/repl_admin.py runner-deploy --target-profile mycader-1
-
-# Runner status
-python3 scripts/repl_admin.py runner-status --pretty
-
-# Memory Hub — first-time setup (interactive wizard, run once per machine)
-python3 scripts/emerge_sync.py setup
-
-# Memory Hub — start sync agent (background poll loop, restart after any scripts/ change)
-python3 scripts/emerge_sync.py run
-
-# Memory Hub — manual sync for all selected connectors (or one specific connector)
-python3 scripts/emerge_sync.py sync
-python3 scripts/emerge_sync.py sync gmail
+python -m pytest tests -q                                                # full suite
+python -m pytest tests/test_mcp_tools_integration.py::<name> -q          # single test
+python3 scripts/emerge_daemon.py                                         # run daemon
+python3 scripts/repl_admin.py runner-install-url --target-profile key    # runner bootstrap URL
+python3 scripts/repl_admin.py runner-deploy  --target-profile mycader-1  # push scripts/ to runner
+python3 scripts/repl_admin.py runner-status  --pretty                    # runner health
+python3 scripts/emerge_sync.py setup|run|sync [connector]                # Memory Hub
 ```
 
-## Architecture
+## Architecture — the shape that enables the North Star
 
-**Documentation source of truth**: `README.md` is the canonical source for architecture and data-flow diagrams. `CLAUDE.md` focuses on implementation constraints and invariants; when behavior changes, update both, but keep diagram semantics centralized in `README.md` to avoid drift.
+- **One control plane.** `EmergeDaemon` (`scripts/emerge_daemon.py`, HTTP `:8789` via `scripts/daemon_http.py`) is the sole MCP server — owns all flywheel tools (`icc_span_*`, `icc_exec`, `icc_crystallize`, `icc_reconcile`, `icc_hub`, `runner_notify`) and resources (`policy://`, `runner://`, `state://deltas`, `pipeline://`, `connector://`). Tool dispatch is `_TOOL_DISPATCH` dict → `_handle_<tool>`.
+- **One execution path for pipelines.** `PipelineEngine` runs in-process locally; for remote, the daemon builds a self-contained `exec()` payload and POSTs to the runner over SSE. Runners never receive pipeline files — switching machines is a URL change. Policy + WAL always land locally regardless of where execution ran.
+- **One writer for policy.** `PolicyEngine.apply_evidence` is the *only* mutation path for `stage` in `state/registry/intents.json`. `SpanTracker`, `FlywheelRecorder`, `icc_reconcile` only produce evidence. All file I/O flows through `IntentRegistry` with atomic writes. Bridge failures surface telemetry via `_last_bridge_failure`; they never touch counters.
+- **One span at a time.** `icc_span_open → ... → icc_span_close` + span-WAL + policy update. `SessionStart` / `SessionEnd` / `StopFailure` clear stale `active_span_id`. `Stop` / `SubagentStop` **block** when a span is open. New intent colliding with connector history returns `{status: "confirm_needed"}`, not an error (gated by `self._intent_gate`, persisted).
+- **Span bridge = the flywheel payoff.** `icc_span_open` on a stable intent with a pipeline short-circuits to `PipelineEngine` — zero inference. Auto-activate is default at stable (skeleton + move to real dir + write YAML), opt-out via `EMERGE_REQUIRE_APPROVE=1`. A pipeline stuck in `_pending/` is a North Star violation.
+- **Auto-crystallize & reflection.** `icc_exec` sets `synthesis_ready` at `explore → canary`; WAL code gets extracted to `.py` + `.yaml` (`scripts/crystallizer.py`). `SpanTracker.format_reflection()` builds the "Muscle memory" digest (stable ≤ 8, canary ≤ 3, recent spans ≤ 5) from `intents.json` + `spans.jsonl`; hooks prefer the deep cache (`reflection-cache/global.json`, 15m TTL) then fall back. `FLYWHEEL_TOKEN` carries `active_span_id` through compaction.
+- **Runner push + unified events.** Runners `POST /runner/online`, hold `GET /runner/sse`, push via `POST /runner/event`. `DaemonHTTPServer._on_runner_event` runs `PatternDetector.ingest()` and routes alerts to `state/events/events-{profile}.jsonl`. Popups flow daemon → runner over SSE; results return via `POST /runner/popup-result` keyed by `popup_id` (except `type=toast`, which is fire-and-forget). Three event streams: `events.jsonl` (global), `events-{profile}.jsonl` (per runner), `events-local.jsonl` (local). `watch_emerge.py` tails any of them.
+- **Cockpit + action bridge.** `GET /` serves `scripts/admin/cockpit/dist/index.html`; `/api/*` is the control plane (source in `scripts/admin/cockpit/src/`). `ActionRegistry` validates/enriches cockpit actions; `/api/submit` appends a `cockpit_action` event to `events.jsonl`; `watch_emerge.py` streams it into the CC conversation and writes an ack. **This bridge exists because `notifications/claude/channel` is silently dropped for plugin MCP servers.**
+- **Memory Hub.** `emerge_sync.py` shares `pipelines/`, `NOTES.md`, and a stripped `spans.json` (stable only) via a git orphan branch. **Never synced:** `intents.json`, `state.json`, operator-events, credentials.
 
-**Single control plane**: `EmergeDaemon` (`scripts/emerge_daemon.py`) is the only MCP server (HTTP, port 8789, via `scripts/daemon_http.py`). It handles all flywheel tools (`icc_span_open`, `icc_span_close`, `icc_span_approve`, `icc_exec`, `icc_crystallize`, `icc_reconcile`, `icc_hub`) and all resources (`policy://`, `runner://`, `state://deltas`, `pipeline://`, `connector://`). There is no second server.
+Shared utilities (import from `scripts/policy_config.py`): `resolve_connector_root`, `load_json_object`, `USER_CONNECTOR_ROOT`, `REFLECTION_CACHE_TTL_MS`, `exec_limits`, `session_idle_ttl_s`. Don't re-inline these.
 
-**Single execution path for pipelines**: `PipelineEngine` is called in-process by the span bridge (`icc_span_open` when stable). When `RunnerRouter` resolves a client, the daemon builds a self-contained inline `exec()` payload and POSTs to the remote runner. The runner never receives pipeline files — switching machines is a URL change only.
+## Invariants worth internalizing
 
-**Canonical model contract (clean break)**:
-- Policy state single source of truth: `state/registry/intents.json` only (no `pipelines-registry.json`, no `span-candidates.json`).
-- **PolicyEngine is the unique writer** of `state/registry/intents.json` `stage` field: `scripts/policy_engine.py::PolicyEngine.apply_evidence` is the only code path that mutates lifecycle counters or transitions. `SpanTracker` (span close), `FlywheelRecorder` (exec/pipeline events), and `icc_reconcile` (`increment_human_fix`) are *evidence producers* — they hand raw outcomes to the single shared `PolicyEngine` instance owned by `EmergeDaemon`. No module derives `stage` outside `PolicyEngine._derive_transition`; read-only inspection uses `policy_engine.derive_stage(entry)`.
-- **Bridge failures never bump counters**: `_try_flywheel_bridge` only surfaces telemetry via `_last_bridge_failure`. The subsequent `icc_exec` fallback (or lack thereof) produces the authoritative evidence through `PolicyEngine`. Any direct bump to `consecutive_failures` violates the single-writer invariant.
-- Lifecycle field: `stage` only (`explore`/`canary`/`stable`/`rollback`) — never `status` for policy stage.
-- Rollback semantics: `explore → rollback` when `consecutive_failures >= ROLLBACK_CONSECUTIVE_FAILURES`; `rollback → explore` when the failure streak breaks (reason `rollback_recovered`); `canary → explore` or `stable → explore` on two consecutive failures (reason `two_consecutive_failures`); `stable → explore` on window-success-rate `< 0.9` (reason `window_failure_rate`).
-- Verify-rate gate: `verify_rate = verify_passes / max(1, verify_attempts)` with a default of `1.0` when `verify_attempts == 0`. This lets span-only evidence (which carries no verify signal — `verify_observed=False`) clear the verify gate by success alone, while exec/pipeline evidence (`verify_observed=True`) still has to meet the strict threshold.
-- Synthesis readiness is two distinct concepts: (a) PolicyEngine sets `entry["synthesis_ready"] = True` on `explore → canary` for exec-path auto-crystallize when WAL has code; (b) `SpanTracker.is_synthesis_ready()` returns `True` at `stage == stable` to trigger span-skeleton generation. Both are intentional — exec WAL carries code so it can crystallize earlier than span WAL which needs full stabilization.
-- Control-plane API (`/api/policy`): returns `intents` + `intent_count` (never `pipelines`/`pipeline_count`). `/api/control-plane/intents` surfaces the canonical `stage` field (never `policy_status`). `/api/control-plane/span-candidates` returns payload keyed by `intents` (legacy `candidates` alias removed).
-- Cockpit queue action types: `intent.set` / `intent.delete` / `notes.comment` / `notes.edit` / `core.tool-call` / `core.crystallize` / `core.prompt`. Payload dataclasses are `IntentSetPayload`/`IntentDeletePayload` (legacy `Pipeline*Payload` removed).
-- CLI policy actions: `intent-set` / `intent-delete` with `--intent-key`.
-- Any `state/registry/intents.json` read/write path must go through `IntentRegistry` (no direct ad-hoc file writes).
+These are the non-obvious contracts that span multiple files. Point-in-module detail lives in the owning module's docstring — trust it, don't mirror it here.
 
-**Auto-crystallize**: `icc_exec` synthesis_ready triggers daemon to auto-extract WAL code and write `.py`+`.yaml` pipeline (intent_signature encodes connector/mode/name). Skipped if file exists; `icc_crystallize` manual call can force-overwrite. Logic lives in `scripts/crystallizer.py` (`PipelineCrystallizer`); daemon delegates via thin `_crystallize`/`_auto_crystallize`/`_generate_span_skeleton` wrappers.
+**Policy**
+- Lifecycle field is `stage` (`explore` / `canary` / `stable` / `rollback`) — never `status` for policy stage.
+- Verify rate defaults to `1.0` when `verify_attempts == 0` — lets span-only evidence (no verify signal) promote on success alone. Don't "fix" this to `0.0`.
+- `synthesis_ready` has two intentional meanings: PolicyEngine flag at `explore → canary` for exec-path auto-crystallize; `SpanTracker.is_synthesis_ready()` at `stable` for span-path skeleton generation. Exec WAL carries code and can crystallize earlier than span WAL.
+- `icc_reconcile(outcome=correct)` bumps `human_fix_rate` only on the latest-`last_ts_ms` candidate for the intent. Never fan out to all matches.
+- `frozen: true` skips automatic transitions (stats still accrue). Toggle via `/api/control-plane/policy/freeze`.
+- `transition_history` + `last_transition_reason` + `last_demotion` are written on every stage change. `rollback → explore` does NOT touch `last_demotion` (recovery, not regression).
 
-**Tool dispatch**: `EmergeDaemon.call_tool` uses a `_TOOL_DISPATCH` dict → `_handle_<tool>` methods. Each tool handler is an independent method — no if/elif chain. Adding a new tool: add entry to `_TOOL_DISPATCH` + implement `_handle_<tool>`.
+**Execution kernel**
+- `icc_exec` requires `intent_signature` (`connector.mode.name`, lowercase). `PreToolUse` blocks if missing, targets 2-part sigs with format guidance, normalizes uppercase via `updatedInput`.
+- Per-call limits from `policy_config.exec_limits()`: `EMERGE_EXEC_TIMEOUT_S` (120 s) → poisons session on timeout; `EMERGE_EXEC_STDOUT_BYTES` / `EMERGE_EXEC_STDERR_BYTES` (256/64 KiB) → return `truncation` + WAL `*_truncated_bytes`, never fail. `session_meta` persists in `checkpoint.json`.
+- Idle eviction at `EMERGE_SESSION_IDLE_TTL_S` (3600 s, `0` disables) drops in-memory sessions; WAL + checkpoint survive → next call rehydrates. Poisoned sessions are **not** evictable.
+- WAL entries with `no_replay=True` are excluded from **both** replay and crystallization. State-setup entries must never set `no_replay`.
+- `from __future__ import annotations` is stripped before `exec()` injection (it raises `SyntaxError` mid-string).
 
-**Shared utilities in `policy_config.py`**: `resolve_connector_root()` (EMERGE_CONNECTOR_ROOT env or `~/.emerge/connectors`), `load_json_object(path, root_key)` (safe JSON load with empty-dict fallback), `USER_CONNECTOR_ROOT` constant, `REFLECTION_CACHE_TTL_MS` constant. All files should import these instead of inlining the patterns.
+**Hooks, MCP, notifications** (detail in each hook file; only cross-cutting rules here)
+- CC's `hookSpecificOutput` allowlist is weirdly narrow. Events outside it (`Stop`, `SubagentStop`, `SessionEnd`, `PreCompact`, `InstructionsLoaded`, `WorktreeCreate/Remove`, `TaskCreated`, `StopFailure`) **must** use top-level `systemMessage` or return `{}`. When adding or editing a hook, verify against `hooks/hooks.json` + CC docs before assuming shape.
+- `notifications/claude/channel` is silently dropped for plugin MCP servers. For any new "tell the model X" path, use Monitor tool (`watch_emerge.py`) + `UserPromptSubmit`/`additionalContext`, not channel notifications.
+- Resource change push: `PolicyEngine._notify_resources_changed()` fires `notifications/resources/list_changed` after every `IntentRegistry.save`. Don't poll `policy://current`.
+- **Silence principle** for operator popups: interrupt only when operator input changes the outcome (ambiguous intent, irreversible + high-risk). Never popup for started/running/completed, read-only, status, or self-recoverable errors.
 
-**Span path**: `icc_span_open` → [any MCP tool calls, PostToolUse records] → `icc_span_close` → span-wal + intents update policy. At stable, auto-generates Python skeleton to `_pending/`. `icc_span_approve` moves skeleton to real dir and generates YAML, activating the bridge.
+**Events / Memory Hub**
+- `EventRouter.start()` drains existing watched files synchronously before activating watchdog. No events lost across daemon restart.
+- `sync-queue.jsonl` accepts exactly two event types: `stable` and `pull_requested`. Anything else accumulates unbounded.
+- Memory Hub **never** syncs `intents.json`, `state.json`, operator-events, or credentials. Only pipelines, `NOTES.md`, and stripped-stable `spans.json`. Adding a new "share this across machines" feature must first prove it's not a credential leak.
 
-**Span bridge**: `icc_span_open` detects stable + pipeline exists → PipelineEngine executes directly and returns result, zero LLM inference. `_record_pipeline_event` called, pipeline quality enters state/registry/intents.json normal tracking.
+## Freedom boundaries — what you're authorized to do without asking
 
-**Single span constraint**: at most one active span at any time. SessionStart hook clears stale `active_span_id`. `icc_exec` calls are excluded from span action recording.
+**Ship freely:**
+- New `icc_*` tools / resources / cockpit endpoints — extending the surface is capability work.
+- New demotion reasons, new reflection fields, new span bridge optimizations — if it lets operator-Claude avoid a mistake or skip inference.
+- Hook additions, new event types in dedicated streams — as long as the notification path isn't the dropped channel.
+- Ugly code that earns its ugliness by expanding capability. Do not prematurely refactor it.
 
-**Span Protocol injection**: SessionStart and PreCompact inject a static span protocol directive (~150 chars) instructing the model to wrap reusable multi-step tool sequences in `icc_span_open`/`icc_span_close`. UserPromptSubmit does NOT inject the directive — only the FLYWHEEL_TOKEN carries `active_span_id`/`active_span_intent` (or null) per turn.
+**Do not, without explicit user request:**
+- Add a manual approval step, confirmation prompt, or `_pending/` gate to any auto-promoted path.
+- Write `stage` or lifecycle counters outside `PolicyEngine.apply_evidence`.
+- Write `intents.json` outside `IntentRegistry`. Write any policy state non-atomically.
+- Reintroduce `status` / `policy_status` field names for policy stage. Reintroduce `pipelines-registry.json` / `span-candidates.json`. Reintroduce `icc_read` / `icc_write`.
+- Sync anything containing credentials or per-session state through Memory Hub.
+- Rename fields across multiple files "for consistency". That is not capability work; it's churn that obsoletes every prior reflection and crystallized pipeline.
 
-**Daemon intent gate**: `icc_span_open` returns `{status: "confirm_needed"}` (not error) when `intent_signature` is new and the connector already has existing intent history in `state/registry/intents.json`. The model must re-call with the same intent to confirm. Gate tracked via `self._intent_gate: set[str]` (persisted to `state_root/intent-gate.json` via atomic write; survives daemon restarts). Fires at most once per new intent per daemon lifecycle. Existing intents capped at 5 in the response. Does not fire for the first intent of a connector or for intents already tracked.
+## Test infra
 
-**Span reflection injection**: `SpanTracker.format_reflection()` composes a compact "Muscle memory" summary from `state/registry/intents.json` (stable/canary policy) and recent `span-wal/spans.jsonl` outcomes. Hooks call `format_reflection_with_cache()` first: fresh deep cache (`reflection-cache/global.json`, TTL 15m) is preferred, otherwise fallback to lightweight reflection. `PreCompact`, `PostCompact`, and `UserPromptSubmit` (turn 1) inject reflection. Reflection output is capped (stable<=8, canary<=3, recent<=5) so token cost stays bounded.
+- `conftest.py` autouse fixtures: `_mock_connector_root` (sets `EMERGE_CONNECTOR_ROOT` → `tests/connectors/`), `isolate_runner_config` (clears runner env).
+- Primary integration surface: `tests/test_mcp_tools_integration.py` — calls `EmergeDaemon.call_tool(...)` directly, not through JSON-RPC.
+- Tests needing a real runner start `_RunnerServer` in-process (see `test_remote_runner.py`).
 
-**`icc_read`/`icc_write` deleted**: fully removed — no dispatch, no schema, no internal compat path. Use `icc_span_open` bridge for pipeline execution, `icc_exec` for exploration.
+## Keeping docs honest
 
-**`connector://` resource**: `connector://<name>/notes` reads `~/.emerge/connectors/<name>/NOTES.md` — operational notes, COM patterns, API quirks, and known issues for a vertical. `connector://<name>/spans` — JSON index of span intent policy states for that connector. Listed automatically when data is present.
+`README.md` is canonical for architecture diagrams and user-facing surface. When you change:
 
-**Policy never leaves the daemon**: all lifecycle state (`candidates.json`, `state/registry/intents.json`), WAL, and metrics are written locally regardless of whether execution is local or remote.
-
-**Flywheel bridge**: inside `icc_exec`, when a candidate matching `intent_signature`+`script_ref` is `stable`, execution short-circuits to the pipeline result without LLM inference. Bridge key: `flywheel::<pipeline_id>::<intent_signature>::<script_ref>`.
-
-**`from __future__` stripping**: pipeline `.py` files may contain `from __future__ import annotations`. This line is stripped before injection into `exec()` payloads (it raises `SyntaxError` when not first in a string).
-
-**Human-fix targeting**: `icc_reconcile` with `outcome=correct` increments `human_fix_rate` only on the candidate with the highest `last_ts_ms` matching the `intent_signature` — the most-recently-used one. Never all matching candidates.
-
-**Delta enrichment**: Each delta in `StateTracker` carries `intent_signature`, `tool_name`, and `ts_ms` alongside the original `id`, `message`, `level`, `verification_state`, `provisional` fields. `_normalize_state` fills missing fields with `None`/`None`/`0` for backward compatibility.
-
-**Risk object model**: `open_risks` are now dicts with `risk_id`, `text`, `status` (open/handled/snoozed), `created_at_ms`, `snoozed_until_ms`, `handled_reason`, `source_delta_id`, `intent_signature`. `_normalize_state` migrates bare string risks to objects. `update_risk(risk_id, action)` handles lifecycle transitions.
-
-**Frozen flag**: `state/registry/intents.json` entries support a `frozen: bool` field. When frozen, automatic stage transitions are skipped (stats still update) and policy status remains non-promoting. Set/unset via cockpit `/api/control-plane/policy/freeze` and `/unfreeze`.
-
-**Memory Hub**: `emerge_sync.py` is a standalone sync agent that shares connector assets (pipelines, NOTES.md, spans.json) via a self-hosted git repo's orphan branch (`emerge-hub`). The daemon writes a `stable` event to `~/.emerge/sync-queue.jsonl` when a pipeline is promoted to stable; emerge_sync polls the queue and triggers a push flow. A background timer drives periodic pull. Conflicts are written to `~/.emerge/pending-conflicts.json` and resolved via `icc_hub(action="resolve", ...)`. Hub config lives in `~/.emerge/hub-config.json`. Never synced: credentials, operator-events, `state/registry/intents.json`.
-
-**EventRouter**: File system watcher that monitors local operator event files. Triggers async handlers on file changes. Enforces drain-on-start contract: all existing watched files are processed synchronously before watchdog activation.
-
-**Cockpit→CC action dispatch**: `ActionRegistry` is the single source of truth for cockpit action types, payload validation, and enrichment. `/api/action-types` exposes the registry to clients. When the cockpit submits actions, `/api/submit` validates/enriches through `ActionRegistry` and appends a `cockpit_action` event (with `event_id`) to `~/.emerge/state/events/events.jsonl`. `scripts/watch_emerge.py` (Monitor tool, persistent) tails `events.jsonl`, formats actions, and streams them to the CC conversation in real time. After printing a cockpit action, watcher writes delivery ack to `~/.emerge/state/events/cockpit-action-acks.jsonl` keyed by `event_id`. Cockpit SSE remains browser-only status signaling (`pending`, `monitors_updated`, `data_updated`). This design avoids plugin channel limits (`notifications/claude/channel` is silently dropped for plugin MCP servers).
-
-**Cockpit control plane**: With the HTTP daemon, the browser UI and `/api/*` control plane are served on the **same port as MCP** (default **8789**). Cockpit frontend source lives under `scripts/admin/cockpit/src/` and Vite build output under `scripts/admin/cockpit/dist/`: `GET /` serves `dist/index.html` and bundled `/assets/*`; `/api/control-plane/*`, `/api/status`, `/api/sse/status`, etc. match `repl_admin.py` + `scripts/admin/cockpit.py` route handlers. Cockpit supports explicit session routing via `/api/control-plane/sessions` and `session_id` query params on session-scoped control-plane endpoints (`policy`, `session`, `exec-events`, `tool-events`, `pipeline-events`, `session/export`, `session/reset`). `repl_admin.py serve` remains for standalone use (no daemon) via `CockpitHTTPServer` on its own port. In-process: `DaemonHTTPServer.cockpit_broadcast` pushes SSE to cockpit clients; `InProcessCockpitBridge` supplies the same handler surface as `CockpitHTTPServer`. Standalone: `get_monitor_data()` falls back to `runner-monitor-state.json`. `_StandaloneDaemonStub` is the sentinel daemon for CLI-only mode. CORS uses `resolve_cors_allow_origin` (same `Host` as `Origin` netloc, or loopback aliases with matching ports — no blanket `127.0.0.1` bypass that ignores `Host` port).
-
-**Daemon HTTP persistence**: `emerge_daemon.py` runs as an HTTP MCP server (`scripts/daemon_http.py` `DaemonHTTPServer`, port 8789, PID file `~/.emerge/daemon.pid` with `host`/`port`/`version`/`code_fingerprint`). Bind address defaults to loopback; set **`EMERGE_DAEMON_BIND`** (e.g. `0.0.0.0`) or **`python3 scripts/emerge_daemon.py --bind 0.0.0.0`** so LAN hosts can fetch runner self-install URLs. CC sessions connect via `plugin.json` `url: "http://localhost:8789/mcp"`. `SessionStart` hook starts daemon via `--ensure-running`; this now detects stale runtime code via pid fingerprint and restarts instead of reusing an outdated process. All CC sessions (team lead + watcher subagents) share one daemon instance. All confirmations route through `PreToolUse` `permissionDecision: ask`; the daemon never emits `elicitations/create`.
-
-**Runner push architecture**: Runners connect to the daemon via `GET /runner/sse?runner_profile=<p>`, register via `POST /runner/online`, and push events via `POST /runner/event`. `DaemonHTTPServer._on_runner_event` maintains a per-runner sliding-window `deque` and runs `PatternDetector.ingest()` on each push; pattern alerts are written directly to `events-{profile}.jsonl` (type=`pattern_alert`). `DaemonHTTPServer._notify_cockpit_broadcast({"monitors_updated": True})` is called on pattern detection and runner connect/disconnect (tests may set `daemon._cockpit_server` to a mock) — no file IPC. Popup commands are sent via SSE; results return via `POST /runner/popup-result` with correlation ID.
-
-**Unified event streams**: `~/.emerge/state/events/events.jsonl` (global), `~/.emerge/state/events/events-{profile}.jsonl` (per-runner), `~/.emerge/state/events/events-local.jsonl` (local). `watch_emerge.py` is the unified watcher supporting all three modes.
-
-**Monitors tab**: cockpit reads `GET /api/control-plane/monitors` which returns `runner-monitor-state.json` (written by daemon on runner connect/disconnect). SSE `monitors_updated` event triggers automatic refresh when the Monitors tab is active.
-
-## Test Infrastructure
-
-`conftest.py` sets two `autouse` fixtures:
-- `_mock_connector_root`: sets `EMERGE_CONNECTOR_ROOT` to `tests/connectors/` so `PipelineEngine` finds the mock connector
-- `isolate_runner_config`: clears runner env vars so tests never hit a real remote runner
-
-Tests that need a real runner (`test_remote_runner.py`) start their own in-process server via `_RunnerServer`.
-
-Integration tests go in `test_mcp_tools_integration.py` and call `EmergeDaemon.call_tool(...)` directly — not through JSON-RPC. This is the primary integration surface.
-
-## Key Invariants
-
-- `icc_exec` **requires** `intent_signature` — enforced by `PreToolUse` hook which blocks the call with convention guidance if missing.
-- **ExecSession kernel hardening**: each `exec_code` call is bounded by three independent limits, resolved per call from env vars via `policy_config.exec_limits()`:
-  - wall clock (`EMERGE_EXEC_TIMEOUT_S`, default 120 s) — exceeding marks the session poisoned and surfaces `error_class="ExecTimeout"`;
-  - `stdout` / `stderr` byte caps (`EMERGE_EXEC_STDOUT_BYTES` default 256 KiB; `EMERGE_EXEC_STDERR_BYTES` default 64 KiB) — enforced by `_BoundedBuffer`; overflow does **not** fail the call, it returns a `truncation` section in the payload and writes `stdout_truncated_bytes` / `stderr_truncated_bytes` into the WAL entry so crystallization can see the original size.
-  Every call also carries a `session_meta` block (`created_at_ms`, `last_active_at_ms`, `exec_count`, `bytes_out_total`, `truncated_bytes_total`, `timeout_count`) that is persisted in `checkpoint.json` under `session_meta` and survives restarts.
-- **Session idle eviction**: `EmergeDaemon._get_session` (and `RunnerExecutor._get_session`) call `_evict_idle_sessions` before returning a handle. Sessions whose `last_active_at_ms` is older than `session_idle_ttl_s()` (env `EMERGE_SESSION_IDLE_TTL_S`, default 3600 s; `0` disables) are dropped from the in-memory cache. Disk state (WAL + checkpoint) is untouched, so the next request for the same profile rehydrates globals via WAL replay. Poisoned sessions are never evicted — callers must see the explicit error until the background thread exits.
-- Connector pipelines live in `~/.emerge/connectors/<connector>/pipelines/{read,write}/` (user-space). `tests/connectors/` is test fixture only, not shipped.
-- Pipeline metadata files (`*.yaml`) are strict YAML only. JSON-style object/array payloads in `.yaml` are invalid.
-- Policy state files use atomic writes (temp file + rename). Never write directly.
-- WAL entries with `no_replay=True` are excluded from both replay and crystallization. State setup entries must not use `no_replay`.
-- `OperatorMonitor` auto-starts when a runner is configured (`_get_runner_router() is not None`) OR `EMERGE_OPERATOR_MONITOR=1`. Previously required the env var explicitly. `EventRouter` registers the local operator-events handler when `_operator_monitor is not None` (not env-var-based). `push_fn` parameter is removed. `process_local_file` writes `local_pattern_alert` events directly to `events/events-local.jsonl` in `state_root`. `state_root` is injected by `start_operator_monitor` from `self._state_root`.
-- **Per-runner alert routing**: `DaemonHTTPServer._on_runner_event` writes `pattern_alert` to `events/events-{runner_profile}.jsonl` when `PatternDetector` fires. `OperatorMonitor.process_local_file` writes `local_pattern_alert` to `events/events-local.jsonl`. The old `_push_pattern` / `pattern-alerts-{profile}.json` file format is removed. `watch_emerge.py --runner-profile <name>` watches `events-{name}.jsonl`; agents-team watcher monitors its own file.
-- **Agents-team mode**: `/emerge:monitor` command creates `TeamCreate("emerge-monitors")` and spawns one `{profile}-watcher` subagent per runner. Each watcher runs a persistent Monitor on `events-{profile}.jsonl` and applies the stage→action protocol (explore=silent, canary=notify+choice+timeout, stable=silent exec). New runners can be added dynamically via `Agent(team_name="emerge-monitors", ...)` without recreating the team. Shutdown: `SendMessage(to="all", {type:"shutdown_request"})` → `TeamDelete()`.
-- **TeammateIdle hook** (`hooks/teammate_idle.py`): fires just before an agent teammate goes idle. For `team_name == "emerge-monitors"` + `teammate_name` ending in `-watcher`: exits code 2 with a feedback message telling the agent to restart its `watch_emerge` Monitor. Exit code 2 causes CC to feed the stderr back to the agent as feedback so it continues working. All other agents exit 0 and go idle normally. Output contract: raw stderr + exit 2 (NOT `hookSpecificOutput` — TeammateIdle is not in CC's allowed list).
-- **PermissionDenied hook** (`hooks/permission_denied.py`): fires when CC's auto-mode classifier denies a tool call. For `tool_name` matching `mcp__plugin_.*emerge.*__icc_.*`: returns `{"retry": true}` so CC lets the model retry with explicit permission. Prevents silent flywheel failures when icc_* tools are denied in auto mode. All other tools return `{}` (no opinion).
-- `EventBus`: `~/.emerge/operator-events/<machine_id>/events.jsonl` — append-only. Written via (a) `POST /operator-event` on the remote runner (human ops), (b) `_write_operator_event()` in the daemon after each `icc_exec` with `intent_signature` (CC takeovers, `session_role=monitor_sub`), (c) `scripts/event_bus.py:emit_event()` from pipeline hooks or adapters. `session_role=monitor_sub` events are filtered by `PatternDetector` to prevent AI self-monitoring. `icc_exec` skips the write when `no_replay=True` or `intent_signature` is absent.
-- **Silence principle (operator interruption):** Show a popup (`show_notify`) only when the operator's input genuinely changes the outcome — intent is unclear, or the action is irreversible and high-risk. Never show a popup for: execution started/in-progress/completed, read-only operations (state queries), status updates, or errors CC can resolve autonomously. Default is silence; interrupt only when necessary.
-- **Memory Hub sync queue contract**: `sync-queue.jsonl` carries exactly two event types — `stable` (written by daemon on policy promotion, consumed by `_run_stable_events`) and `pull_requested` (written by `icc_hub sync`, consumed by `_run_stable_events`). Never write other event types to the queue; unconsumed events accumulate without bound.
-- **Memory Hub conflict resolution states**: `pending` → user calls `icc_hub resolve` → `resolved` → emerge_sync applies it → `applied`. "ours" leaves the file at HEAD (no-op). "theirs" uses `git show origin/<branch>:<file>` to write the remote version. "skip" marks applied without any git op. Never re-attempt pull_flow for a connector that had a push conflict in the same cycle.
-- **Memory Hub never syncs**: `state/registry/intents.json`, `state.json`, operator-events, credentials. Only pipeline `.py`/`.yaml` files, `NOTES.md`, and a stripped `spans.json` (stable entries only) are shared.
-- **EventRouter drain-on-start contract**: `EventRouter.start()` synchronously calls handlers for all existing watched files before handing control to watchdog/polling. This ensures no events are lost between daemon restart and watchdog activation.
-- **Cockpit action namespace**: action `type` values use dotted names (`intent.set`, `notes.comment`, `core.tool-call`, `<connector>.<verb>`). Legacy kebab action names are rejected.
-- **Controls queue contract**: controls rendered in connector iframes enqueue via `window.postMessage` (`window.emerge.enqueue()` from `/api/cockpit-sdk.js`) and must never call `/api/submit` directly; queue submit is centralized in cockpit shell.
-- **MCP protocol version**: daemon negotiates version — responds `min(client_version, "2025-11-25")`. Server max is `_SERVER_MAX_PROTOCOL_VERSION = "2025-11-25"`. Tools include `title`, `annotations`, and `outputSchema` per MCP 2025-11-25 spec.
-- **Notification delivery**: `notifications/claude/channel` is silently dropped by CC for plugin MCP servers. All notification paths use working alternatives:
-  - **Cockpit actions**: Monitor tool (`watch_emerge.py`, primary real-time — tails `events.jsonl` for `cockpit_action` events).
-  - **Operator monitor patterns**: `DaemonHTTPServer._on_runner_event` writes `type=pattern_alert` directly to `events/events-{runner_profile}.jsonl`; `OperatorMonitor.process_local_file` writes `type=local_pattern_alert` to `events/events-local.jsonl`. `watch_emerge.py [--runner-profile <name>]` Monitor streams alerts to CC conversation.
-  - **Bridge failure warnings**: `_try_flywheel_bridge` stores failure info on `self._last_bridge_failure`; `icc_exec` handler injects warning via `_append_warning_text` into the tool response.
-  - **Span skeleton ready**: `icc_span_close` response includes `skeleton_path` + `next_step`; PostToolUse hook injects `[Span]` reminder into `additionalContext`.
-- **SessionEnd hook** (`hooks/session_end.py`): clears stale `active_span_id` and `active_span_intent` from `state.json`. Registered in `hooks/hooks.json`. Complements `SessionStart` which also clears stale span state. Belt-and-suspenders cleanup for unresolvable open spans.
-- **Stop/SubagentStop hooks** (`hooks/stop.py`): blocks CC stop when `active_span_id` is present in `state.json`, preventing incomplete flywheel WAL records. Block output: `{"decision": "block", "reason": "...call icc_span_close(outcome='aborted') first"}`. Registered in `hooks/hooks.json` for both `Stop` and `SubagentStop` events with 10-second timeout.
-- **StopFailure hook** (`hooks/stop_failure.py`): fires when CC exits due to error (`rate_limit`, `billing_error`, `authentication_failed`, etc.). Clears `active_span_id`/`active_span_intent` from `state.json` so the next session starts clean. No decision control — cannot block the error. Output: top-level `systemMessage`.
-- **TaskCompleted hook** (`hooks/task_completed.py`): fires when any task is marked completed (TaskUpdate or agent-team teammate finish). Checks for open span; if present, exits code 2 + stderr — blocks task completion and feeds message back to model as feedback. No hookSpecificOutput (not in allowed list). No matcher (per CC docs for TaskCompleted).
-- **SubagentStart hook** (`hooks/subagent_start.py`): fires when a subagent is dispatched. If parent session has `active_span_id`, injects `systemMessage` guardrail: "do NOT call icc_span_close — parent session owns the span". Subagent PostToolUse hooks already record icc_* calls into the span WAL via the shared state.json.
-- **PreToolUse format** (`hooks/pre_tool_use.py`): uses MCP 2025-11-25 `permissionDecision: deny` + `systemMessage` format for blocks (legacy `{"decision": "block"}` removed). Approval path continues to use `additionalContext`.
-- **PostToolUse span injection** (`hooks/post_tool_use.py`): when `icc_exec` runs inside an active span, injects `_span_id` and `_span_intent` into `structuredContent` via `updatedMCPToolOutput`, allowing CC to correlate exec results with flywheel spans without a separate state read.
-- **PostToolUse response parsing** (`hooks/post_tool_use.py`): reads MCP results from `tool_response` (not `tool_result`) so inner `verification_state` values (`verified`/`degraded`) propagate into state/risk tracking correctly.
-- **PostToolUseFailure interrupt handling** (`hooks/post_tool_use_failure.py`): user interrupts (`is_interrupt=true`) do not call `mark_degraded`; only real tool failures degrade verification state and open a risk.
-- **Resource subscriptions**: daemon advertises `resources.subscribe=True` (capability introduced in MCP 2025-03-26 and still used under 2025-11-25 negotiation). After each `state/registry/intents.json` persist via `PolicyEngine` / `IntentRegistry.save`, `PolicyEngine._notify_resources_changed()` forwards `notifications/resources/list_changed` so CC can re-read `policy://current` without polling.
-- **Context injection budgeting**: `format_context(budget_chars=N)` in `StateTracker` allocates at most 1/3 of `budget_chars` to the risk list, sorted by recency (newest first). Risks beyond the budget are collapsed to a count with a pointer to `state://deltas`. This prevents context inflation in high-risk-count sessions.
-- **Recovery token span fields**: `FLYWHEEL_TOKEN` (emitted by `format_recovery_token`) includes `active_span_id` and `active_span_intent` (or `null`). These fields ensure span state survives context compaction via `PreCompact` systemMessage.
-- **PreToolUse 2-part intent**: `pre_tool_use.py` provides a specific error message when `intent_signature` has exactly 2 parts, explaining the required `connector.mode.name` format and prompting the user to add the connector name.
-- **PreToolUse `updatedInput` normalization**: when `intent_signature` contains uppercase letters, `pre_tool_use.py` normalizes to lowercase and returns `updatedInput: {"intent_signature": lowercased}` with `permissionDecision: allow` instead of blocking. Only applied when the normalized value would be valid. Tracked via `_sig_normalized_from`/`_sig_normalized_to` in `main()`.
-- **plugin.json HTTP transport**: `mcpServers.emerge` uses `type: "http"`, `url: "http://localhost:8789/mcp"` (CC plugin schema now requires explicit `type` field in each mcpServer entry). In HTTP mode CC does not spawn the daemon process.
-- **HTTP JSON-RPC notifications**: `POST /mcp` requests whose `method` starts with `notifications/` are one-way — `EmergeDaemon.handle_jsonrpc` returns `None` and `DaemonHTTPServer` responds **202 Accepted** with an empty body (no JSON-RPC response object).
-- **runner_notify MCP tool**: sends popup commands to a runner via daemon SSE. For `type=toast` (fire-and-forget), `request_popup` returns `{ok: True}` immediately without waiting and the runner does not post a popup-result. For all other types, blocks waiting for `/runner/popup-result` callback (correlation ID: `popup_id`). Requires HTTP daemon mode (`_http_server` is not None).
-- **System tray → daemon event path**: `RunnerExecutor._start_tray()` launches a pystray icon on the runner machine (no-op if pystray/Pillow missing or `_team_lead_url` unset). Operator clicking "发送消息" opens `show_input_bubble`; on submit, `_post_operator_message` forwards an `operator_message` event (with `runner_profile`, `text`, `machine_id`, `ts_ms`) via `POST /runner/event`. The daemon's `_on_runner_event` writes the event to `events/events-{runner_profile}.jsonl` with `type` preserved as `"operator_message"` (not normalized to `"runner_event"`). `watch_emerge.py` formats it as `[Operator:<profile>] <text>` for the watcher agent. `PatternDetector` skips `operator_message` events.
-- **hooks.json hook matchers**: `PreToolUse`, `PostToolUse`, `PostToolUseFailure` all use `mcp__plugin_.*emerge.*__icc_.*` to cover all current and future icc_ tools. `tool_audit.py` uses the inverse negative-lookahead. `SessionEnd`, `Stop`, `SubagentStop` are registered in `hooks/hooks.json` (matcher format). `plugin.json` only keeps `SessionStart → runner_sync.py` (runner sync runs separately from session_start.py). `StopFailure`, `TaskCompleted`, and `SubagentStart` are registered with `python3 ${CLAUDE_PLUGIN_ROOT}/hooks/stop_failure.py`, `task_completed.py`, and `subagent_start.py` respectively. `TeammateIdle` (matcher `.*`) registered with `teammate_idle.py`. `PermissionDenied` (matcher `mcp__plugin_.*emerge.*__icc_.*`) registered with `permission_denied.py`. `PermissionRequest` (matcher `mcp__plugin_.*emerge.*__icc_.*`) registered with `permission_request.py`. `InstructionsLoaded`, `WorktreeCreate`, `WorktreeRemove`, `TaskCreated` (all matcher `.*`) registered with `instructions_loaded.py`, `worktree_lifecycle.py`, `worktree_lifecycle.py`, `task_created.py` respectively.
-- **Connector NOTES injection**: `session_start.py` no longer writes `.claude/rules/connector-*.md` stubs. It injects only a compact connector index into startup context. `pre_tool_use.py` injects `~/.emerge/connectors/<connector>/NOTES.md` on-demand (capped to 1200 chars) when the first `icc_exec`/`icc_span_open`/`icc_crystallize` call for that connector is approved, and records connector names in `state.json` `notes_injected` to avoid duplicate injection within the same session.
-- **Cockpit status contract**: `/api/status` returns `{ok, pending, server_online, cc_active, last_cockpit_event_id, last_cockpit_event_ts_ms, last_cockpit_ack_event_id, last_cockpit_ack_ts_ms, cockpit_ack_pending, cockpit_ack_lag_ms, watchers_healthy, watchers_alive_count, watchers_total, watchers_stale_ids}`. `pending` mirrors `cockpit_ack_pending` (latest cockpit event still not acked by watcher). `cc_active` is `true` when the daemon received a `POST /mcp` within the last 120 seconds. `watchers_*` surfaces the watcher heartbeat SLO (see `scripts/watchers.py`). Frontend uses SSE (`/api/sse/status`) as primary status channel; `/api/status` is a 30s fallback poll. `_sse_broadcast()` pushes `{pending: true}` on successful submission.
-- **Watcher heartbeat SLO**: every `watch_emerge.py` process owns a heartbeat file under `state/events/watchers/<watcher_id>.json` (`watcher_id` defaults to `global` / `runner-<profile>` / `local`, overridable via `--watcher-id`). Each tail-loop iteration refreshes `last_loop_ts_ms`, `events_read`, `events_delivered`, `last_event_id`, and on error bumps `consecutive_errors` + `last_error`. The loop wraps every iteration in `try/except` and applies exponential backoff (capped 10 s), so malformed events or transient FS errors never kill the watcher. Cockpit exposes the aggregated summary via `GET /api/control-plane/watchers` (`cmd_control_plane_watchers` in `scripts/admin/control_plane.py`) and the health bits land in `/api/status`. Staleness threshold: `EMERGE_WATCHER_STALE_S` seconds, default `60`.
-- **Policy transition traceability**: `PolicyEngine.apply_evidence` appends a bounded `transition_history` record (default cap `TRANSITION_HISTORY_MAX = 20`) to the intent entry on every stage change (promotions and demotions), and refreshes `last_transition_reason` + `last_transition_ts_ms`. Each record carries `{from_stage, to_stage, reason, attempts, success_rate, verify_rate, human_fix_rate, window_success_rate, consecutive_failures, session_id, target_profile, execution_path, ts_ms}`. On demotions (`explore → rollback`, `canary → explore`, `stable → explore`, `stable → canary`) the same record is also mirrored onto `last_demotion` so cockpit can answer "why did this pipeline regress?" in one read; `rollback → explore` recovery does *not* touch `last_demotion`. The `policy.transition` sink payload carries the full attribution (`from_stage`, `to_stage`, `reason`, `attempts`, `success_rate`, `verify_rate`, `consecutive_failures`, `demotion`, `session_id`, `target_profile`, `ts_ms`); the legacy `new_stage`/`candidate_key` keys are kept as aliases. Cockpit surfaces the audit trail via `GET /api/control-plane/intent-history?intent=<key>` (`cmd_control_plane_intent_history`); list rows in `/api/control-plane/intents` now also carry `last_transition_reason`, `last_transition_ts_ms`, and `last_demotion`.
-- **Cockpit session reset span guard**: `cmd_control_plane_session_reset` checks `active_span_id` in state before resetting. If a span is open, returns `{ok: false, error: "active_span_open"}`. Mirrors the Stop hook safety contract.
-- **`_normalize_state` span + notes preservation**: `_normalize_state` in `state_tracker.py` preserves `active_span_id`, `active_span_intent`, and normalized `notes_injected` from raw state. `SessionStart` and `SessionEnd` hooks explicitly pop active span fields for cleanup.
-- **Hook output schema**: CC's hook validator accepts `hookSpecificOutput` for: `PreToolUse`, `UserPromptSubmit`, `PostToolUse`, `SessionStart`, `FileChanged`, `Setup`, `SubagentStart`, `PostToolUseFailure`, `Notification`, `PermissionRequest`, and `Elicitation`. All other events (`Stop`, `SubagentStop`, `SessionEnd`, `PreCompact`, `InstructionsLoaded`, `WorktreeCreate`, `WorktreeRemove`, `TaskCreated`) must use the **top-level `systemMessage`** field for any context they want to surface, or print `{}` when nothing needs to be reported. Using `hookSpecificOutput` on a non-allowed event triggers `Hook JSON output validation failed: Invalid input`. `PermissionRequest` uses `hookSpecificOutput.hookEventName="PermissionRequest"` + `decision.behavior="allow"|"deny"`. `Elicitation` uses `hookSpecificOutput.hookEventName="Elicitation"` + `action: "accept"|"decline"|"delegate"` + `content: {...}`. `ElicitationResult` is a read-only notification event — return `{}` only, `hookSpecificOutput` has no effect. The block path on `Stop` continues to use top-level `{"decision": "block", "reason": "..."}`. `TaskCompleted` uses exit code 2 + raw stderr text (not JSON). `StopFailure` and `SubagentStart` use top-level `systemMessage`.
-- **Channel notification params shape**: `notifications/claude/channel` requires `params: {content, meta}` only — **never** include `serverName` (or any other extra field). Plugin MCP servers cannot use this channel (silently dropped); use Monitor tool + UserPromptSubmit hook path instead.
-
-## Documentation Update Rules
-
-When making code changes, keep these in sync:
-
-| Change | Update |
+| Change | Must also update |
 |---|---|
-| New/renamed MCP tool or parameter | `emerge_daemon.py` tool schema + `README.md` MCP surface table |
-| New MCP resource URI | `emerge_daemon.py` `_list_resources`/`_read_resource` + `README.md` Resources line + `CLAUDE.md` Architecture section |
-| New env var | `README.md` configuration table in §"Remote runner — operations" |
-| Policy lifecycle threshold change | `README.md` flywheel diagram + Glossary |
-| Hook behavior change | `README.md` component table (Hooks row) + hook flow diagram |
-| New hook matcher pattern or hooks.json entry | `CLAUDE.md` Key Invariants (hooks.json matchers line) |
-| MCP server_max_version bump | `CLAUDE.md` Key Invariants (protocol version line) + `README.md` if protocol version is mentioned |
-| New/deleted skill | `README.md` What ships table + `skills/` directory |
-| Runner protocol change | `README.md` §"Remote runner — operations" + `skills/remote-runner-dev/SKILL.md` |
-| Architecture change | `README.md` architecture diagram + component table |
-| Data-flow or lifecycle diagram semantic change | `README.md` flow diagrams (canonical) + `CLAUDE.md` Architecture/Key Invariants wording |
-| Test count change | `README.md` badge + Quick verification baseline |
-| EventBus or pipeline hook interface change | `skills/operator-monitor-debug/SKILL.md` + `skills/initializing-vertical-flywheel/SKILL.md` |
-| OperatorMonitor env var change | README.md env var table + `skills/operator-monitor-debug/SKILL.md` |
-| Memory Hub config or sync flow change | `README.md` component table + `CLAUDE.md` Architecture section + `CLAUDE.md` Key Invariants |
-| New `icc_hub` action or queue event type | `README.md` MCP Tools table + `CLAUDE.md` Key Invariants (queue contract) + `commands/hub.md` if setup flow is affected |
-| Cockpit API contract change | `scripts/admin/cockpit.py` handler + `scripts/admin/cockpit/src/` consumer + `CLAUDE.md` Architecture section + tests |
-| Admin submodule business logic change | `scripts/admin/{shared,api,control_plane,pipeline,cockpit,runner}.py` owning module + `scripts/repl_admin.py` if public CLI surface changes |
-| Runner push architecture change | `README.md` runner endpoints + `CLAUDE.md` Architecture section |
-| New cockpit tab | `scripts/admin/cockpit/src/App.svelte` tab wiring + `scripts/admin/cockpit/src/components/` implementation + `CLAUDE.md` Cockpit control plane bullet + `README.md` component table |
+| MCP tool, resource URI, or parameter | `emerge_daemon.py` schema + `README.md` MCP table |
+| Policy threshold / lifecycle rule | `README.md` flywheel diagram + Glossary + this file's Invariants |
+| Hook behavior, matcher, or `hooks.json` entry | owning hook file docstring + `README.md` component table + this file's Invariants |
+| Env var | `README.md` §Remote runner config table |
+| Runner protocol / endpoint | `README.md` §Remote runner + `skills/remote-runner-dev/SKILL.md` |
+| Memory Hub flow / `icc_hub` action / queue event | `README.md` + this file + `commands/hub.md` + `skills/` if flywheel-facing |
+| Cockpit API | `scripts/admin/cockpit.py` handler + `scripts/admin/cockpit/src/` consumer + tests |
+| Architecture / data flow | `README.md` diagram (canonical) + this file's Architecture wording |
+| New/deleted skill | `README.md` What-ships table + `skills/` |
+
+If a row here would feel wrong *after* your change (e.g. you renamed a tool but the README MCP table still shows the old name), you have broken the contract with operator-Claude — its reflection and cockpit data will point at things that no longer exist. Fix before merge.

@@ -343,12 +343,22 @@ class SpanTracker:
 
         stable: list[str] = []
         canary: list[str] = []
-        for sig in candidates:
+        demotions: list[tuple[int, str, str, str]] = []  # (ts_ms, sig, to_stage, reason)
+        for sig, entry in candidates.items():
             status = self.get_policy_status(sig)
             if status == "stable":
                 stable.append(sig)
             elif status == "canary":
                 canary.append(sig)
+            if isinstance(entry, dict):
+                demo = entry.get("last_demotion")
+                if isinstance(demo, dict):
+                    demotions.append((
+                        int(demo.get("ts_ms", 0) or 0),
+                        sig,
+                        str(demo.get("to_stage", "") or ""),
+                        str(demo.get("reason", "") or ""),
+                    ))
 
         recent: dict[str, dict[str, int]] = {}
         wal = self._wal_path()
@@ -384,9 +394,20 @@ class SpanTracker:
         if recent:
             recent_rows: list[str] = []
             for sig in sorted(recent)[:5]:
-                entry = recent[sig]
-                recent_rows.append(f"{sig} {entry['ok']}ok/{entry['fail']}fail")
+                _rec = recent[sig]
+                recent_rows.append(f"{sig} {_rec['ok']}ok/{_rec['fail']}fail")
             parts.append("Recent: " + ", ".join(recent_rows))
+        if demotions:
+            # Newest demotions first — next session should see the freshest failure reasons.
+            demotions.sort(key=lambda x: x[0], reverse=True)
+            demo_rows: list[str] = []
+            for _ts, sig, to_stage, reason in demotions[:3]:
+                tag = to_stage or "demoted"
+                if reason:
+                    demo_rows.append(f"{sig}→{tag} ({reason})")
+                else:
+                    demo_rows.append(f"{sig}→{tag}")
+            parts.append("Demoted: " + "; ".join(demo_rows))
         if not parts:
             return ""
         return self._cap_reflection_text("Muscle memory\n" + "\n".join(parts))

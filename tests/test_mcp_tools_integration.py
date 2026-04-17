@@ -2241,9 +2241,12 @@ def test_span_close_generates_skeleton_at_stable(tmp_path, monkeypatch):
                         "has_side_effects": True, "ts_ms": 1}) + "\n"
         )
         daemon.call_tool("icc_span_close", {"span_id": sid, "outcome": "success"})
-    pending = connector_root / "lark" / "pipelines" / "write" / "_pending" / "create-doc.py"
-    assert pending.exists(), "skeleton must be generated at stable"
-    assert "def run_write" in pending.read_text()
+    # Default auto-activates: skeleton is moved to real dir. The behavior we're
+    # verifying here is "at stable, a pipeline .py with run_write is produced";
+    # auto-activation is covered by test_span_close_at_stable_auto_activates_pipeline.
+    real = connector_root / "lark" / "pipelines" / "write" / "create-doc.py"
+    assert real.exists(), "pipeline .py must exist at stable (auto-activated)"
+    assert "def run_write" in real.read_text()
 
 
 # ── icc_span_approve ──────────────────────────────────────────────────────────
@@ -2288,6 +2291,133 @@ def test_span_approve_moves_pending_and_generates_yaml(tmp_path, monkeypatch):
     import yaml
     meta = yaml.safe_load(real_yaml.read_text())
     assert meta["intent_signature"] == "lark.write.create-doc"
+
+
+def test_span_close_at_stable_auto_activates_pipeline(tmp_path, monkeypatch):
+    """At stable with a generated skeleton, icc_span_close must auto-activate
+    the pipeline (move _pending/ → real dir + YAML) without requiring manual
+    icc_span_approve. CLAUDE.md North Star: auto-promote, don't gate."""
+    import json
+    daemon, _hook = _make_span_daemon(tmp_path, monkeypatch)
+    connector_root = tmp_path / "connectors"
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
+    monkeypatch.delenv("EMERGE_REQUIRE_APPROVE", raising=False)
+
+    import scripts.policy_engine as pe
+    monkeypatch.setattr(pe, "PROMOTE_MIN_ATTEMPTS", 1)
+    monkeypatch.setattr(pe, "PROMOTE_MIN_SUCCESS_RATE", 1.0)
+    monkeypatch.setattr(pe, "PROMOTE_MAX_HUMAN_FIX_RATE", 1.0)
+    monkeypatch.setattr(pe, "STABLE_MIN_ATTEMPTS", 2)
+    monkeypatch.setattr(pe, "STABLE_MIN_SUCCESS_RATE", 1.0)
+
+    # First success: canary
+    open1 = daemon.call_tool("icc_span_open", {"intent_signature": "lark.write.auto-activate"})
+    daemon.call_tool("icc_span_close", {
+        "intent_signature": "lark.write.auto-activate", "outcome": "success",
+    })
+    # Second success: stable → skeleton generated → auto-activate
+    daemon.call_tool("icc_span_open", {"intent_signature": "lark.write.auto-activate"})
+    resp = daemon.call_tool("icc_span_close", {
+        "intent_signature": "lark.write.auto-activate", "outcome": "success",
+    })
+
+    real_py = connector_root / "lark" / "pipelines" / "write" / "auto-activate.py"
+    real_yaml = connector_root / "lark" / "pipelines" / "write" / "auto-activate.yaml"
+    pending_py = connector_root / "lark" / "pipelines" / "write" / "_pending" / "auto-activate.py"
+    assert real_py.exists(), "pipeline .py must auto-activate to real dir"
+    assert real_yaml.exists(), "pipeline .yaml must auto-generate on activation"
+    assert not pending_py.exists(), "skeleton must be removed from _pending after auto-activate"
+
+    body = json.loads(resp["content"][0]["text"])
+    assert body.get("auto_activated") is True
+    # The next_step should no longer tell the model to call icc_span_approve.
+    assert "icc_span_approve" not in body.get("next_step", "")
+
+
+def test_stable_bridge_auto_demotes_on_repeated_failure(tmp_path, monkeypatch):
+    """End-to-end: a stable pipeline whose bridge crashes twice in a row must
+    auto-demote to canary so the flywheel stops burning LLM on a broken path.
+    CLAUDE.md North Star: auto-demote the broken-but-silently-stable state."""
+    import json
+    daemon, _hook = _make_span_daemon(tmp_path, monkeypatch)
+    connector_root = tmp_path / "connectors"
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
+    monkeypatch.delenv("EMERGE_REQUIRE_APPROVE", raising=False)
+
+    import scripts.policy_engine as pe
+    import scripts.policy_config as pc
+    monkeypatch.setattr(pe, "PROMOTE_MIN_ATTEMPTS", 1)
+    monkeypatch.setattr(pe, "PROMOTE_MIN_SUCCESS_RATE", 1.0)
+    monkeypatch.setattr(pe, "PROMOTE_MAX_HUMAN_FIX_RATE", 1.0)
+    monkeypatch.setattr(pe, "STABLE_MIN_ATTEMPTS", 2)
+    monkeypatch.setattr(pe, "STABLE_MIN_SUCCESS_RATE", 1.0)
+    monkeypatch.setattr(pc, "BRIDGE_BROKEN_THRESHOLD", 2)
+
+    # Drive an intent to stable with auto-activate producing a working skeleton.
+    daemon.call_tool("icc_span_open", {"intent_signature": "lark.write.broken"})
+    daemon.call_tool("icc_span_close", {"intent_signature": "lark.write.broken", "outcome": "success"})
+    daemon.call_tool("icc_span_open", {"intent_signature": "lark.write.broken"})
+    daemon.call_tool("icc_span_close", {"intent_signature": "lark.write.broken", "outcome": "success"})
+
+    # Overwrite the activated pipeline with one that raises on run_write.
+    real_py = connector_root / "lark" / "pipelines" / "write" / "broken.py"
+    assert real_py.exists(), "precondition: auto-activate must have produced a pipeline"
+    real_py.write_text(
+        "def run_write(metadata, args):\n"
+        "    raise RuntimeError('simulated API drift — pipeline broken')\n"
+        "def verify_write(metadata, args, action_result):\n"
+        "    return {'ok': bool(action_result.get('ok'))}\n",
+        encoding="utf-8",
+    )
+
+    # First bridge call: fails. Stage still stable (streak=1).
+    resp1 = daemon.call_tool("icc_span_open", {"intent_signature": "lark.write.broken"})
+    body1 = json.loads(resp1["content"][0]["text"])
+    assert body1.get("bridge") is not True, "bridge must have failed; call should not report bridge success"
+    from scripts.intent_registry import IntentRegistry
+    entry = IntentRegistry.get(daemon._state_root, "lark.write.broken")
+    assert entry["stage"] == "stable"
+    assert entry["bridge_failure_streak"] == 1
+
+    daemon.call_tool("icc_span_close", {"intent_signature": "lark.write.broken", "outcome": "failure"})
+
+    # Second bridge call: fails again → threshold met → demote.
+    daemon.call_tool("icc_span_open", {"intent_signature": "lark.write.broken"})
+    entry = IntentRegistry.get(daemon._state_root, "lark.write.broken")
+    assert entry["stage"] == "canary", \
+        f"stable pipeline with 2 consecutive bridge failures must demote; got {entry['stage']}"
+    assert entry["last_transition_reason"] == "bridge_broken"
+    assert entry["last_demotion"]["to_stage"] == "canary"
+    assert entry["last_demotion"]["reason"] == "bridge_broken"
+
+
+def test_span_close_auto_activate_respects_opt_out_env(tmp_path, monkeypatch):
+    """EMERGE_REQUIRE_APPROVE=1 disables auto-activation — kept as safety hatch."""
+    import json
+    daemon, _hook = _make_span_daemon(tmp_path, monkeypatch)
+    connector_root = tmp_path / "connectors"
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
+    monkeypatch.setenv("EMERGE_REQUIRE_APPROVE", "1")
+
+    import scripts.policy_engine as pe
+    monkeypatch.setattr(pe, "PROMOTE_MIN_ATTEMPTS", 1)
+    monkeypatch.setattr(pe, "PROMOTE_MIN_SUCCESS_RATE", 1.0)
+    monkeypatch.setattr(pe, "PROMOTE_MAX_HUMAN_FIX_RATE", 1.0)
+    monkeypatch.setattr(pe, "STABLE_MIN_ATTEMPTS", 2)
+    monkeypatch.setattr(pe, "STABLE_MIN_SUCCESS_RATE", 1.0)
+
+    daemon.call_tool("icc_span_open", {"intent_signature": "lark.write.gated"})
+    daemon.call_tool("icc_span_close", {"intent_signature": "lark.write.gated", "outcome": "success"})
+    daemon.call_tool("icc_span_open", {"intent_signature": "lark.write.gated"})
+    resp = daemon.call_tool("icc_span_close", {"intent_signature": "lark.write.gated", "outcome": "success"})
+
+    pending_py = connector_root / "lark" / "pipelines" / "write" / "_pending" / "gated.py"
+    real_py = connector_root / "lark" / "pipelines" / "write" / "gated.py"
+    assert pending_py.exists(), "opt-out path must keep skeleton in _pending"
+    assert not real_py.exists(), "opt-out path must not auto-activate"
+    body = json.loads(resp["content"][0]["text"])
+    assert body.get("auto_activated") is not True
+    assert "icc_span_approve" in body.get("next_step", "")
 
 
 def test_span_approve_errors_when_not_stable(tmp_path, monkeypatch):

@@ -26,6 +26,7 @@ from typing import Any, Callable
 
 from scripts.intent_registry import IntentRegistry, default_intent_entry
 from scripts.policy_config import (
+    BRIDGE_BROKEN_THRESHOLD,
     PIPELINE_KEY_RE as _INTENT_KEY_RE,
     PROMOTE_MAX_HUMAN_FIX_RATE,
     PROMOTE_MIN_ATTEMPTS,
@@ -334,6 +335,99 @@ class PolicyEngine:
             intents[intent_signature] = entry
             IntentRegistry.save(state_root, registry)
         self._notify_resources_changed()
+        return dict(entry)
+
+    def record_bridge_outcome(
+        self,
+        intent_signature: str,
+        *,
+        success: bool,
+        reason: str | None = None,
+        ts_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Record a flywheel bridge execution outcome.
+
+        Bridge outcomes are orthogonal to exec/span evidence: a successful
+        bridge run does not pad success_rate (it never paid LLM cost, so
+        there's nothing new to learn), and a failed bridge run does not bump
+        ``consecutive_failures`` (the subsequent LLM fallback records that
+        separately through ``apply_evidence``).
+
+        What bridge outcomes *do* track is whether the crystallized pipeline
+        itself still works. If the bridge fails but LLM fallback succeeds,
+        ``apply_evidence`` registers a net success for the intent and stage
+        stays stable — yet every call still pays LLM cost. This method
+        detects that state and forces ``stable → canary`` with reason
+        ``bridge_broken`` after ``BRIDGE_BROKEN_THRESHOLD`` consecutive
+        failures, re-opening the intent for re-crystallization.
+
+        Unknown intents are a no-op: intent creation is the job of
+        ``apply_evidence``.
+        """
+        if not intent_signature or not _INTENT_KEY_RE.match(intent_signature):
+            return {}
+        state_root = self._get_state_root()
+        ts_ms = int(ts_ms if ts_ms is not None else time.time() * 1000)
+        demoted = False
+        with self._lock:
+            registry = IntentRegistry.load(state_root)
+            intents = registry["intents"]
+            entry = intents.get(intent_signature)
+            if not isinstance(entry, dict):
+                return {}
+            entry.setdefault("bridge_failure_streak", 0)
+            if success:
+                entry["bridge_failure_streak"] = 0
+            else:
+                entry["bridge_failure_streak"] = int(entry["bridge_failure_streak"]) + 1
+            streak = int(entry["bridge_failure_streak"])
+            current_stage = str(entry.get("stage", "explore"))
+
+            if streak >= BRIDGE_BROKEN_THRESHOLD and current_stage == "stable":
+                entry["stage"] = "canary"
+                entry["rollout_pct"] = 20
+                entry["last_transition_reason"] = "bridge_broken"
+                entry["attempts_at_transition"] = int(entry.get("attempts", 0))
+                entry["last_transition_ts_ms"] = ts_ms
+                history_entry = {
+                    "ts_ms": ts_ms,
+                    "from_stage": "stable",
+                    "to_stage": "canary",
+                    "reason": "bridge_broken",
+                    "attempts": int(entry.get("attempts", 0)),
+                    "success_rate": float(entry.get("success_rate", 0.0)),
+                    "verify_rate": float(entry.get("verify_rate", 0.0)),
+                    "human_fix_rate": float(entry.get("human_fix_rate", 0.0)),
+                    "window_success_rate": float(entry.get("window_success_rate", 0.0)),
+                    "consecutive_failures": int(entry.get("consecutive_failures", 0)),
+                    "session_id": self._get_session_id() or None,
+                    "target_profile": entry.get("target_profile"),
+                    "execution_path": None,
+                    "bridge_failure_reason": reason or "",
+                }
+                history = list(entry.get("transition_history") or [])
+                history.append(history_entry)
+                entry["transition_history"] = history[-TRANSITION_HISTORY_MAX:]
+                entry["last_demotion"] = dict(history_entry)
+                demoted = True
+
+            entry["updated_at_ms"] = ts_ms
+            intents[intent_signature] = entry
+            IntentRegistry.save(state_root, registry)
+
+        if demoted:
+            self._emit_sink("policy.transition", {
+                "candidate_key": intent_signature,
+                "intent_signature": intent_signature,
+                "from_stage": "stable",
+                "to_stage": "canary",
+                "new_stage": "canary",
+                "reason": "bridge_broken",
+                "demotion": True,
+                "session_id": self._get_session_id(),
+                "ts_ms": ts_ms,
+            })
+            self._notify_resources_changed()
         return dict(entry)
 
     # ------------------------------------------------------------------ internals

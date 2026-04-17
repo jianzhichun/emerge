@@ -239,11 +239,13 @@ def test_stable_rolls_back_on_window_failure_rate(tmp_path: Path):
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
         daemon = EmergeDaemon(root=ROOT)
+        # Use an intent with no crystallized pipeline so the flywheel bridge
+        # never short-circuits — exec() evidence drives stage transitions directly.
         common = {
             "mode": "inline_code",
             "target_profile": "mycader-1.zwcad",
-            "intent_signature": "zwcad.write.add-wall",
-            "script_ref": "connectors/cade/actions/zwcad_add_wall.py",
+            "intent_signature": "zwcad.write.window-rate-test",
+            "script_ref": "connectors/cade/actions/zwcad_window_rate_test.py",
         }
 
         for _ in range(20):
@@ -259,7 +261,7 @@ def test_stable_rolls_back_on_window_failure_rate(tmp_path: Path):
 
         reg = _registry_path(tmp_path / "state")
         data = json.loads(reg.read_text(encoding="utf-8"))
-        key = "zwcad.write.add-wall"
+        key = "zwcad.write.window-rate-test"
         assert data["intents"][key]["stage"] == "explore"
         assert data["intents"][key]["last_transition_reason"] == "window_failure_rate"
     finally:

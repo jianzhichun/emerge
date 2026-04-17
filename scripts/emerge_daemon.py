@@ -124,6 +124,7 @@ class EmergeDaemon:
             sink=lambda: self._sink,
             run_pipeline=self._span_run_pipeline,
             record_pipeline_event=self._flywheel.record_pipeline_event,
+            record_bridge_outcome=self._policy_engine.record_bridge_outcome,
             tool_error=self._tool_error,
             tool_ok_json=self._tool_ok_json,
         )
@@ -245,10 +246,24 @@ class EmergeDaemon:
                 "mode": mode,
                 "reason": str(_bridge_exc),
             }
+            # Record bridge-only evidence so repeated bridge failures demote
+            # the pipeline from stable → canary (see PolicyEngine.record_bridge_outcome).
+            # This is separate from attempt-counter evidence: the LLM fallback's
+            # own success/failure still feeds apply_evidence as usual.
+            try:
+                self._policy_engine.record_bridge_outcome(
+                    base_pipeline_id, success=False, reason=str(_bridge_exc),
+                )
+            except Exception:
+                pass
             return None
         result["bridge_promoted"] = True
         try:
             self._sink.emit("flywheel.bridge.promoted", {"pipeline_id": base_pipeline_id})
+        except Exception:
+            pass
+        try:
+            self._policy_engine.record_bridge_outcome(base_pipeline_id, success=True)
         except Exception:
             pass
         return result
