@@ -330,7 +330,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 | Memory Hub sync agent    | `scripts/emerge_sync.py`, `scripts/hub_config.py` — bidirectional connector asset sync via orphan-branch git repo; `icc_hub` MCP tool in daemon |
 | Test connector (mock)    | `tests/connectors/mock/pipelines/`                                                                                                             |
 | Slash commands           | `commands/` (`init`, `cockpit`, `monitor`, `runner-status`, `import`, `export`, `hub`)                                                          |
-| Skills                   | `skills/` (`initializing-vertical-flywheel`, `remote-runner-dev`, `operator-monitor-debug`, `policy-optimization`, `reflection-deep-dive`) |
+| Skills                   | `skills/` (`initializing-vertical-flywheel`, `distilling-operator-flows`, `remote-runner-dev`, `operator-monitor-debug`, `policy-optimization`, `reflection-deep-dive`) |
 | Reference (submodule)    | `references/claude-code`                                                                                                                       |
 
 
@@ -340,6 +340,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 | Command          | Description                                                                                      |
 | ---------------- | ------------------------------------------------------------------------------------------------ |
 | `/init`          | Initialize a vertical flywheel from natural language context                                     |
+| `/monitor`       | Agents-team monitor mode — spawn per-runner watcher agents with stage→action popup protocol      |
 | `/cockpit`       | Browser control plane — SSE real-time status, intent overview (`/api/policy` returns `intents` + `intent_count`), delta/risk/span/exec panels, audit trail, session mgmt, reflection-cache observability, and runner monitor state (Monitors tab). Action types are registry-driven (`/api/action-types`) and controls enqueue via `window.emerge.enqueue()` (`/api/cockpit-sdk.js`) into the shell queue; only the shell queue can submit to `/api/submit`. Submits are validated/enriched, written as `cockpit_action` events (`event_id`) to `events/events.jsonl`, delivered to the agent in real time via `watch_emerge.py`, and acked in `events/cockpit-action-acks.jsonl` for delivery visibility. |
 | `/runner-status` | Show remote runner health status                                                                 |
 | `/import`        | Import a connector asset package zip into local connector/intent state                           |
