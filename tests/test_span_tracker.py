@@ -239,6 +239,33 @@ def test_span_reflection_surfaces_bridge_exception_fingerprint(tracker):
     assert "NameError" in reflection, "exception fingerprint must surface in reflection"
 
 
+def test_span_reflection_surfaces_synthesis_skipped_reason(tracker):
+    """Crystallizer refusals must reach the next session — otherwise an
+    intent stuck on canary with no pipeline has no way to self-heal."""
+    from scripts.intent_registry import registry_path
+    import json
+
+    key = "lark.read.list-docs"
+    reg = registry_path(tracker._state_root)
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    reg.write_text(json.dumps({
+        "intents": {
+            key: {
+                "intent_signature": key,
+                "stage": "canary",
+                "attempts": 3,
+                "successes": 3,
+                "synthesis_skipped_reason": "missing___result_assignment",
+            }
+        }
+    }), encoding="utf-8")
+
+    reflection = tracker.format_reflection()
+    assert "Synthesis blocked:" in reflection
+    assert key in reflection
+    assert "missing___result_assignment" in reflection
+
+
 def test_format_reflection_uses_policy_status(tracker, monkeypatch):
     monkeypatch.setattr("scripts.policy_engine.PROMOTE_MIN_ATTEMPTS", 1)
     monkeypatch.setattr("scripts.policy_engine.PROMOTE_MIN_SUCCESS_RATE", 1.0)

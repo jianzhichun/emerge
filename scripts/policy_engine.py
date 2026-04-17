@@ -439,6 +439,54 @@ class PolicyEngine:
             self._notify_resources_changed()
         return dict(entry)
 
+    def register_composite(
+        self,
+        intent_signature: str,
+        *,
+        children: list[str],
+        description: str = "",
+        ts_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Register a composite intent whose stage inherits min(children.stage).
+
+        Composite structure (``composed_from``) is not evidence — but the
+        inherited ``stage`` must still flow through PolicyEngine so the
+        single-writer invariant holds. Callers pass the ordered child list and
+        a description; the engine computes the weakest child's stage and
+        writes atomically under the policy lock.
+        """
+        if not intent_signature or not _INTENT_KEY_RE.match(intent_signature):
+            return {}
+        if not children:
+            return {}
+        ts_ms = int(ts_ms if ts_ms is not None else time.time() * 1000)
+        rank = {"rollback": -1, "explore": 0, "canary": 1, "stable": 2}
+        state_root = self._get_state_root()
+        with self._lock:
+            registry = IntentRegistry.load(state_root)
+            intents = registry["intents"]
+            entry = intents.get(intent_signature) or default_intent_entry()
+            child_stages = [str(intents[c].get("stage", "explore")) for c in children if c in intents]
+            min_stage = min(child_stages, key=lambda s: rank.get(s, 0)) if child_stages else "explore"
+            from_stage = str(entry.get("stage", "explore"))
+            entry["composed_from"] = list(children)
+            entry["stage"] = min_stage
+            if description:
+                entry["description"] = description
+            entry["updated_at_ms"] = ts_ms
+            intents[intent_signature] = entry
+            IntentRegistry.save(state_root, registry)
+        if from_stage != min_stage:
+            self._emit_sink("policy.composite_registered", {
+                "intent_signature": intent_signature,
+                "from_stage": from_stage,
+                "to_stage": min_stage,
+                "children": list(children),
+                "ts_ms": ts_ms,
+            })
+        self._notify_resources_changed()
+        return dict(entry)
+
     # ------------------------------------------------------------------ internals
 
     def _emit_sink(self, event: str, payload: dict) -> None:

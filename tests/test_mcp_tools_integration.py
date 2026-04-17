@@ -3980,3 +3980,81 @@ def test_icc_compose_rejects_missing_children(tmp_path):
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_icc_compose_rejects_cycle(tmp_path):
+    """Registering a child that transitively reaches the parent must fail —
+    otherwise _run_composite_bridge recurses until the stack overflows."""
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "compose-cycle"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        state_root = tmp_path / "state"
+        _seed_stable_intent(state_root, "child.read.a")
+        _seed_stable_intent(state_root, "child.read.b")
+
+        # Build A = [child.a, child.b]
+        r1 = daemon.call_tool("icc_compose", {
+            "intent_signature": "combo.workflow.a",
+            "children": ["child.read.a", "child.read.b"],
+        })
+        assert r1.get("isError") is not True, r1
+
+        # B = [combo.workflow.a, child.a]
+        r2 = daemon.call_tool("icc_compose", {
+            "intent_signature": "combo.workflow.b",
+            "children": ["combo.workflow.a", "child.read.a"],
+        })
+        assert r2.get("isError") is not True, r2
+
+        # Attempt to make A = [combo.workflow.b, ...] → cycle
+        bad = daemon.call_tool("icc_compose", {
+            "intent_signature": "combo.workflow.a",
+            "children": ["combo.workflow.b", "child.read.b"],
+        })
+        assert bad.get("isError") is True
+        assert "cycle" in bad["content"][0]["text"].lower()
+
+        # Self-reference on an existing composite is also rejected (non-existing
+        # self-refs get caught earlier by the missing-children check).
+        self_ref = daemon.call_tool("icc_compose", {
+            "intent_signature": "combo.workflow.a",
+            "children": ["combo.workflow.a", "child.read.b"],
+        })
+        assert self_ref.get("isError") is True
+        assert "cycle" in self_ref["content"][0]["text"].lower()
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_icc_compose_stage_flows_through_policy_engine(tmp_path):
+    """Composite stage writes must route through PolicyEngine.register_composite
+    so the single-writer invariant on 'stage' is preserved."""
+    os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
+    os.environ["EMERGE_SESSION_ID"] = "compose-policy-writer"
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+        state_root = tmp_path / "state"
+        _seed_stable_intent(state_root, "svc.read.one")
+        _seed_stable_intent(state_root, "svc.write.two")
+
+        calls: list[dict[str, Any]] = []
+        original = daemon._policy_engine.register_composite
+        def spy(*a, **kw):
+            calls.append({"args": a, "kwargs": kw})
+            return original(*a, **kw)
+        daemon._policy_engine.register_composite = spy  # type: ignore[method-assign]
+
+        res = daemon.call_tool("icc_compose", {
+            "intent_signature": "combo.workflow.policy",
+            "children": ["svc.read.one", "svc.write.two"],
+            "description": "policy-routed composite",
+        })
+        assert res.get("isError") is not True, res
+        assert len(calls) == 1, "register_composite must be the single write path"
+        assert calls[0]["kwargs"]["children"] == ["svc.read.one", "svc.write.two"]
+        assert res["structuredContent"]["stage"] == "stable"
+    finally:
+        os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)

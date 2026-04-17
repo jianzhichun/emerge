@@ -650,7 +650,6 @@ class EmergeDaemon:
                 "a single child is just the child itself"
             )
 
-        from scripts.intent_registry import IntentRegistry, default_intent_entry
         from scripts.policy_config import PIPELINE_KEY_RE
         if not PIPELINE_KEY_RE.match(parent):
             return self._tool_error(
@@ -670,25 +669,39 @@ class EmergeDaemon:
                 f"icc_compose: children must exist before composition — missing: {missing}"
             )
 
-        # Composite stage inherits the weakest child. A single explore child
-        # pulls the whole composite to explore, which means the bridge won't
-        # short-circuit until every piece is proven.
-        _rank = {"rollback": -1, "explore": 0, "canary": 1, "stable": 2}
-        child_stages = [str(intents[c].get("stage", "explore")) for c in children]
-        min_stage = min(child_stages, key=lambda s: _rank.get(s, 0))
+        # Cycle detection: composites can nest (child → grandchild via
+        # composed_from). Reject any proposed edge that would produce a cycle,
+        # otherwise _run_composite_bridge recurses until the stack blows.
+        def _reaches(node: str, target: str, seen: set[str]) -> bool:
+            if node == target:
+                return True
+            if node in seen:
+                return False
+            seen.add(node)
+            entry = intents.get(node)
+            if not isinstance(entry, dict):
+                return False
+            for nxt in entry.get("composed_from") or []:
+                if _reaches(str(nxt), target, seen):
+                    return True
+            return False
 
-        entry = intents.get(parent) or default_intent_entry()
-        entry["composed_from"] = children
-        entry["stage"] = min_stage
-        entry["description"] = str(arguments.get("description", entry.get("description", "") or "")).strip()
-        import time as _time
-        entry["updated_at_ms"] = int(_time.time() * 1000)
-        intents[parent] = entry
-        IntentRegistry.save(self._state_root, reg)
-        try:
-            self._policy_engine._notify_resources_changed()
-        except Exception:
-            pass
+        for c in children:
+            if c == parent or _reaches(c, parent, set()):
+                return self._tool_error(
+                    f"icc_compose: child {c!r} would create a cycle — "
+                    f"{parent!r} already reachable from it"
+                )
+
+        # Route the composite registration through PolicyEngine so ``stage`` is
+        # still written by the single lifecycle writer — composite structure is
+        # not evidence, but the inherited stage must flow through the same
+        # code path to preserve the invariant.
+        description = str(arguments.get("description", "") or "").strip()
+        entry = self._policy_engine.register_composite(
+            parent, children=children, description=description,
+        )
+        min_stage = str(entry.get("stage", "explore"))
 
         payload = {
             "ok": True,

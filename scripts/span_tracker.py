@@ -344,6 +344,7 @@ class SpanTracker:
         stable: list[str] = []
         canary: list[str] = []
         demotions: list[tuple[int, str, str, str, str]] = []  # (ts_ms, sig, to_stage, reason, fingerprint)
+        synthesis_skipped: list[tuple[str, str]] = []  # (sig, reason)
         for sig, entry in candidates.items():
             status = self.get_policy_status(sig)
             if status == "stable":
@@ -360,6 +361,9 @@ class SpanTracker:
                         str(demo.get("reason", "") or ""),
                         str(demo.get("bridge_failure_exception", "") or ""),
                     ))
+                skipped = str(entry.get("synthesis_skipped_reason", "") or "")
+                if skipped:
+                    synthesis_skipped.append((sig, skipped))
 
         recent: dict[str, dict[str, int]] = {}
         wal = self._wal_path()
@@ -412,6 +416,11 @@ class SpanTracker:
                 else:
                     demo_rows.append(f"{sig}→{tag}")
             parts.append("Demoted: " + "; ".join(demo_rows))
+        if synthesis_skipped:
+            # Surface so next session knows WHY crystallization refused — otherwise
+            # the intent stays stuck as canary with no pipeline forever.
+            skipped_rows = [f"{sig} ({reason})" for sig, reason in sorted(synthesis_skipped)[:3]]
+            parts.append("Synthesis blocked: " + "; ".join(skipped_rows))
         if not parts:
             return ""
         return self._cap_reflection_text("Muscle memory\n" + "\n".join(parts))
