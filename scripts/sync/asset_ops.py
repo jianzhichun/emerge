@@ -110,7 +110,21 @@ def export_vertical(
 
 
 def export_spans_json(connector: str, dst: Path) -> None:
-    """Merge local stable spans into the worktree spans.json. Remote-only spans are preserved."""
+    """Merge local learning-signal spans into the worktree spans.json.
+
+    Exports three categories of intent (each qualifies independently):
+      1. **Stable** — remote machines can trust the pipeline exists.
+      2. **synthesis_skipped_reason** — crystallizer refused (e.g. WAL never
+         assigned ``__result``/``__action``). Remote machines writing the same
+         WAL shape will hit the same refusal; surfacing the reason lets the
+         next session fix it preemptively.
+      3. **bridge_broken demotion** — a stable pipeline whose runtime broke
+         enough times to auto-demote. Other machines shouldn't trust a crystal
+         that's locally known bad.
+
+    Remote-only spans are preserved. The projection carries ONLY diagnostic
+    fields — never credentials, counters, or per-session state.
+    """
     from scripts.policy_config import default_state_root, STABLE_MIN_ATTEMPTS, STABLE_MIN_SUCCESS_RATE
     from scripts.intent_registry import IntentRegistry
     state_root = Path(os.environ.get("EMERGE_STATE_ROOT") or str(default_state_root()))
@@ -128,13 +142,31 @@ def export_spans_json(connector: str, dst: Path) -> None:
         is_stable = stage == "stable" or (
             attempts >= STABLE_MIN_ATTEMPTS and success_rate >= STABLE_MIN_SUCCESS_RATE
         )
-        if not is_stable:
+        skipped_reason = str(entry.get("synthesis_skipped_reason", "") or "").strip()
+        demo = entry.get("last_demotion")
+        demo_reason = ""
+        demo_to_stage = ""
+        if isinstance(demo, dict):
+            demo_reason = str(demo.get("reason", "") or "").strip()
+            demo_to_stage = str(demo.get("to_stage", "") or "").strip()
+        has_bridge_demotion = demo_reason == "bridge_broken"
+
+        if not (is_stable or skipped_reason or has_bridge_demotion):
             continue
-        local_spans[key] = {
+
+        projected: dict[str, Any] = {
             "intent_signature": entry.get("intent_signature", key),
-            "stage": "stable",
+            "stage": stage or "explore",
             "last_ts_ms": entry.get("last_ts_ms", 0),
         }
+        if skipped_reason:
+            projected["synthesis_skipped_reason"] = skipped_reason
+        if has_bridge_demotion:
+            projected["last_demotion"] = {
+                "reason": demo_reason,
+                "to_stage": demo_to_stage,
+            }
+        local_spans[key] = projected
 
     existing_path = dst / "spans.json"
     existing_spans: dict[str, Any] = {}
@@ -185,7 +217,18 @@ def import_vertical(
 
 
 def import_spans_json(src: Path, dst: Path) -> None:
-    """Merge remote spans.json into local spans.json. Remote wins on newer last_ts_ms."""
+    """Merge remote spans.json into local spans.json. Remote wins on newer last_ts_ms.
+
+    Also propagates diagnostic fields (``synthesis_skipped_reason``,
+    ``last_demotion.reason``) from remote into the LOCAL IntentRegistry when
+    (a) the intent already exists locally and (b) the remote record is newer
+    by ``last_ts_ms``. This is what makes cross-machine lessons reach the next
+    session's reflection — spans.json alone is never read by
+    ``span_tracker.format_reflection``, which scans IntentRegistry.
+
+    Invariant preserved: never writes ``stage`` or counters — only diagnostic
+    fields PolicyEngine never mutates on its own lifecycle path.
+    """
     remote_path = src / "spans.json"
     if not remote_path.exists():
         return
@@ -209,6 +252,48 @@ def import_spans_json(src: Path, dst: Path) -> None:
             merged[key] = entry
 
     write_json(local_path, {"spans": merged})
+
+    _propagate_diagnostics_to_registry(remote_spans)
+
+
+def _propagate_diagnostics_to_registry(remote_spans: dict[str, Any]) -> None:
+    """Write remote diagnostic fields (skipped_reason, bridge_broken demotion)
+    into local IntentRegistry entries that already exist. Non-stage, non-counter
+    fields only — preserves PolicyEngine's single-writer invariant on ``stage``.
+    """
+    from scripts.policy_config import default_state_root
+    from scripts.intent_registry import IntentRegistry
+
+    state_root = Path(os.environ.get("EMERGE_STATE_ROOT") or str(default_state_root()))
+    data = IntentRegistry.load(state_root)
+    intents = data.get("intents", {})
+    changed = False
+    for key, remote_entry in remote_spans.items():
+        if not isinstance(remote_entry, dict):
+            continue
+        local_entry = intents.get(key)
+        if not isinstance(local_entry, dict):
+            continue  # never synthesize new intents from hub — local must have attempted it
+        remote_ts = int(remote_entry.get("last_ts_ms", 0) or 0)
+        local_ts = int(local_entry.get("last_ts_ms", 0) or 0)
+        if remote_ts <= local_ts:
+            continue
+        remote_skipped = str(remote_entry.get("synthesis_skipped_reason", "") or "").strip()
+        if remote_skipped and remote_skipped != (local_entry.get("synthesis_skipped_reason") or ""):
+            local_entry["synthesis_skipped_reason"] = remote_skipped
+            changed = True
+        remote_demo = remote_entry.get("last_demotion")
+        if isinstance(remote_demo, dict) and str(remote_demo.get("reason", "")) == "bridge_broken":
+            local_demo = local_entry.get("last_demotion")
+            if not isinstance(local_demo, dict) or str(local_demo.get("reason", "")) != "bridge_broken":
+                local_entry["last_demotion"] = {
+                    "reason": "bridge_broken",
+                    "to_stage": str(remote_demo.get("to_stage", "") or ""),
+                    "imported_from_hub": True,
+                }
+                changed = True
+    if changed:
+        IntentRegistry.save(state_root, data)
 
 
 def write_json(path: Path, data: Any) -> None:

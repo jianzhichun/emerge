@@ -651,3 +651,253 @@ def test_run_event_loop_pull_cycle_fires_on_timer(tmp_path, monkeypatch):
     assert pulled.wait(timeout=4.0), "pull cycle never fired"
     stop.set()
     t.join(timeout=2)
+
+
+# ---------------------------------------------------------------------------
+# Cross-machine learn-forever signals (synthesis_skipped, bridge_broken)
+# ---------------------------------------------------------------------------
+
+
+def _canary_entry_with_skipped(intent_key: str, reason: str, last_ts_ms: int = 2000) -> dict:
+    """A canary intent that crystallizer refused — the signal we want cross-machine."""
+    return {
+        "intent_signature": intent_key,
+        "stage": "canary",
+        "attempts": 3,
+        "successes": 3,
+        "synthesis_skipped_reason": reason,
+        "last_ts_ms": last_ts_ms,
+    }
+
+
+def _stable_entry_with_bridge_demotion(intent_key: str, last_ts_ms: int = 3000) -> dict:
+    """A stable intent that auto-demoted due to bridge_broken — other machines should be warned."""
+    return {
+        "intent_signature": intent_key,
+        "stage": "canary",  # post-demotion
+        "attempts": 8,
+        "successes": 6,
+        "last_ts_ms": last_ts_ms,
+        "last_demotion": {
+            "reason": "bridge_broken",
+            "to_stage": "canary",
+            "from_stage": "stable",
+        },
+    }
+
+
+def test_export_includes_synthesis_skipped_from_canary(connector_home):
+    """synthesis_skipped_reason on a canary intent must cross into hub spans.json."""
+    connectors, worktree, state_root = connector_home
+    (connectors / "gmail").mkdir(parents=True)
+    candidates = {
+        "intents": {
+            "gmail.read.parse": _canary_entry_with_skipped(
+                "gmail.read.parse", "wal_missing_result_assignment", last_ts_ms=2000
+            ),
+        }
+    }
+    _intents_path(state_root).write_text(json.dumps(candidates), encoding="utf-8")
+
+    export_vertical("gmail", connectors_root_path=connectors, hub_worktree=worktree)
+
+    spans = json.loads(
+        (worktree / "connectors" / "gmail" / "spans.json").read_text(encoding="utf-8")
+    )["spans"]
+    assert "gmail.read.parse" in spans
+    assert spans["gmail.read.parse"]["synthesis_skipped_reason"] == "wal_missing_result_assignment"
+    assert spans["gmail.read.parse"]["stage"] == "canary"
+
+
+def test_export_includes_bridge_broken_demotion(connector_home):
+    """last_demotion.reason == 'bridge_broken' must cross-machine as a warning signal."""
+    connectors, worktree, state_root = connector_home
+    (connectors / "cad").mkdir(parents=True)
+    candidates = {
+        "intents": {
+            "cad.write.insert-block": _stable_entry_with_bridge_demotion(
+                "cad.write.insert-block", last_ts_ms=3000
+            ),
+        }
+    }
+    _intents_path(state_root).write_text(json.dumps(candidates), encoding="utf-8")
+
+    export_vertical("cad", connectors_root_path=connectors, hub_worktree=worktree)
+
+    spans = json.loads(
+        (worktree / "connectors" / "cad" / "spans.json").read_text(encoding="utf-8")
+    )["spans"]
+    assert "cad.write.insert-block" in spans
+    demo = spans["cad.write.insert-block"]["last_demotion"]
+    assert demo["reason"] == "bridge_broken"
+    assert demo["to_stage"] == "canary"
+
+
+def test_export_excludes_unremarkable_explore(connector_home):
+    """Explore entries with no skipped-reason and no bridge demotion must NOT leak into hub."""
+    connectors, worktree, state_root = connector_home
+    (connectors / "gmail").mkdir(parents=True)
+    candidates = {
+        "intents": {
+            "gmail.read.noise": _explore_span_entry("gmail.read.noise", last_ts_ms=500),
+        }
+    }
+    _intents_path(state_root).write_text(json.dumps(candidates), encoding="utf-8")
+
+    export_vertical("gmail", connectors_root_path=connectors, hub_worktree=worktree)
+
+    spans_path = worktree / "connectors" / "gmail" / "spans.json"
+    if spans_path.exists():
+        spans = json.loads(spans_path.read_text(encoding="utf-8"))["spans"]
+        assert "gmail.read.noise" not in spans
+
+
+def test_import_propagates_synthesis_skipped_to_local_registry(connector_home):
+    """After import, a remote skipped_reason must land on the local IntentRegistry entry
+    so the next session's reflection surfaces it — spans.json alone is invisible to reflection."""
+    connectors, worktree, state_root = connector_home
+
+    # Local already has the intent (older, no skipped reason)
+    candidates = {
+        "intents": {
+            "gmail.read.parse": {
+                "intent_signature": "gmail.read.parse",
+                "stage": "canary",
+                "attempts": 3,
+                "successes": 3,
+                "last_ts_ms": 1000,
+            },
+        }
+    }
+    _intents_path(state_root).write_text(json.dumps(candidates), encoding="utf-8")
+
+    # Remote (hub) has newer entry with a skipped_reason
+    hub_dir = worktree / "connectors" / "gmail"
+    hub_dir.mkdir(parents=True)
+    remote_spans = {
+        "spans": {
+            "gmail.read.parse": {
+                "intent_signature": "gmail.read.parse",
+                "stage": "canary",
+                "last_ts_ms": 2000,
+                "synthesis_skipped_reason": "wal_missing_result_assignment",
+            }
+        }
+    }
+    (hub_dir / "spans.json").write_text(json.dumps(remote_spans), encoding="utf-8")
+
+    import_vertical("gmail", connectors_root_path=connectors, hub_worktree=worktree)
+
+    local = json.loads(_intents_path(state_root).read_text(encoding="utf-8"))
+    entry = local["intents"]["gmail.read.parse"]
+    assert entry["synthesis_skipped_reason"] == "wal_missing_result_assignment"
+    # Invariant: stage must NOT be overwritten from hub (single-writer lives in PolicyEngine)
+    assert entry["stage"] == "canary"
+    # Counters also untouched by hub import
+    assert entry["attempts"] == 3
+
+
+def test_import_does_not_create_intent_from_hub(connector_home):
+    """Hub must never materialize a NEW local intent — only propagates diagnostics to existing ones.
+    Rationale: a local machine that has never attempted the intent gets no value from the warning
+    until it does attempt, and creating phantom entries pollutes IntentRegistry."""
+    connectors, worktree, state_root = connector_home
+    _intents_path(state_root).write_text(json.dumps({"intents": {}}), encoding="utf-8")
+
+    hub_dir = worktree / "connectors" / "gmail"
+    hub_dir.mkdir(parents=True)
+    remote_spans = {
+        "spans": {
+            "gmail.read.unknown": {
+                "intent_signature": "gmail.read.unknown",
+                "stage": "stable",
+                "last_ts_ms": 5000,
+                "synthesis_skipped_reason": "wal_missing_result_assignment",
+            }
+        }
+    }
+    (hub_dir / "spans.json").write_text(json.dumps(remote_spans), encoding="utf-8")
+
+    import_vertical("gmail", connectors_root_path=connectors, hub_worktree=worktree)
+
+    local = json.loads(_intents_path(state_root).read_text(encoding="utf-8"))
+    assert "gmail.read.unknown" not in local["intents"]
+
+
+def test_import_skips_stale_remote(connector_home):
+    """If local last_ts_ms >= remote, the remote diagnostic must NOT overwrite — local is fresher."""
+    connectors, worktree, state_root = connector_home
+
+    candidates = {
+        "intents": {
+            "gmail.read.parse": {
+                "intent_signature": "gmail.read.parse",
+                "stage": "canary",
+                "attempts": 3,
+                "successes": 3,
+                "last_ts_ms": 5000,  # local is newer
+                "synthesis_skipped_reason": "local_reason",
+            },
+        }
+    }
+    _intents_path(state_root).write_text(json.dumps(candidates), encoding="utf-8")
+
+    hub_dir = worktree / "connectors" / "gmail"
+    hub_dir.mkdir(parents=True)
+    remote_spans = {
+        "spans": {
+            "gmail.read.parse": {
+                "intent_signature": "gmail.read.parse",
+                "stage": "canary",
+                "last_ts_ms": 1000,
+                "synthesis_skipped_reason": "remote_reason",
+            }
+        }
+    }
+    (hub_dir / "spans.json").write_text(json.dumps(remote_spans), encoding="utf-8")
+
+    import_vertical("gmail", connectors_root_path=connectors, hub_worktree=worktree)
+
+    local = json.loads(_intents_path(state_root).read_text(encoding="utf-8"))
+    assert local["intents"]["gmail.read.parse"]["synthesis_skipped_reason"] == "local_reason"
+
+
+def test_import_propagates_bridge_broken_demotion(connector_home):
+    """Remote bridge_broken demotion must land on local entry with imported_from_hub marker."""
+    connectors, worktree, state_root = connector_home
+
+    candidates = {
+        "intents": {
+            "cad.write.insert-block": {
+                "intent_signature": "cad.write.insert-block",
+                "stage": "stable",
+                "attempts": 10,
+                "successes": 10,
+                "last_ts_ms": 500,
+            },
+        }
+    }
+    _intents_path(state_root).write_text(json.dumps(candidates), encoding="utf-8")
+
+    hub_dir = worktree / "connectors" / "cad"
+    hub_dir.mkdir(parents=True)
+    remote_spans = {
+        "spans": {
+            "cad.write.insert-block": {
+                "intent_signature": "cad.write.insert-block",
+                "stage": "canary",
+                "last_ts_ms": 2000,
+                "last_demotion": {"reason": "bridge_broken", "to_stage": "canary"},
+            }
+        }
+    }
+    (hub_dir / "spans.json").write_text(json.dumps(remote_spans), encoding="utf-8")
+
+    import_vertical("cad", connectors_root_path=connectors, hub_worktree=worktree)
+
+    local = json.loads(_intents_path(state_root).read_text(encoding="utf-8"))
+    entry = local["intents"]["cad.write.insert-block"]
+    assert entry["last_demotion"]["reason"] == "bridge_broken"
+    assert entry["last_demotion"]["imported_from_hub"] is True
+    # Local stage must NOT be rewritten by hub import
+    assert entry["stage"] == "stable"
