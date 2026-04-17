@@ -67,7 +67,7 @@ def test_sse_broadcast_pending_on_submit(tmp_path, monkeypatch):
 
     time.sleep(0.3)
 
-    body = json.dumps({"actions": [{"type": "pipeline.delete", "key": "x"}]}).encode()
+    body = json.dumps({"actions": [{"type": "intent.delete", "key": "x"}]}).encode()
     req = urllib.request.Request(
         f"{url}/api/submit", data=body,
         headers={"Content-Type": "application/json"}, method="POST"

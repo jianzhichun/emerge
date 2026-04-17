@@ -13,8 +13,8 @@ def test_builtin_action_types_registered() -> None:
     from scripts.admin.actions import ActionRegistry
 
     known = set(ActionRegistry.known_types())
-    assert "pipeline.set" in known
-    assert "pipeline.delete" in known
+    assert "intent.set" in known
+    assert "intent.delete" in known
     assert "notes.comment" in known
     assert "notes.edit" in known
     assert "core.tool-call" in known
@@ -26,7 +26,7 @@ def test_validate_rejects_unknown_and_accepts_known() -> None:
     from scripts.admin.actions import ActionRegistry
 
     assert ActionRegistry.validate({"type": "unknown.action"}) is not None
-    assert ActionRegistry.validate({"type": "pipeline.delete", "key": "x"}) is None
+    assert ActionRegistry.validate({"type": "intent.delete", "key": "x"}) is None
 
 
 def test_enrich_notes_comment_includes_notes_context(tmp_path: Path, monkeypatch) -> None:

@@ -265,9 +265,9 @@ def test_icc_exec_bridge_path_writes_operator_event(tmp_path):
     before = sum(1 for _ in event_path.read_text(encoding="utf-8").splitlines() if _.strip()) if event_path.exists() else 0
 
     daemon = EmergeDaemon(root=tmp_path)
-    # Inject a stable pipeline entry so the bridge fires
+    # Inject a stable intent entry so the bridge fires
     from scripts.policy_config import default_exec_root
-    reg_path = Path(str(default_exec_root())) / "pipelines-registry.json"
+    reg_path = Path(str(default_exec_root())) / "intents.json"
     existing = {}
     if reg_path.exists():
         import json as _j
@@ -275,10 +275,10 @@ def test_icc_exec_bridge_path_writes_operator_event(tmp_path):
             existing = _j.loads(reg_path.read_text())
         except Exception:
             pass
-    existing.setdefault("pipelines", {})
-    existing["pipelines"]["test-bridge.write.event-check"] = {"status": "stable"}
+    existing.setdefault("intents", {})
+    existing["intents"]["test-bridge.write.event-check"] = {"stage": "stable"}
     # Write to a tmp registry that won't affect real state
-    tmp_reg = tmp_path / "pipelines-registry.json"
+    tmp_reg = tmp_path / "intents.json"
     atomic_write_json(tmp_reg, existing)
     # Patch daemon to use tmp registry
     daemon._state_root = tmp_path

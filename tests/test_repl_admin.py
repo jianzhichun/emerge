@@ -120,9 +120,9 @@ def test_repl_admin_policy_status_reports_pipeline_registry(tmp_path: Path):
 
         policy = _run_admin(["policy-status"], env)
         assert policy["session_id"] == "admin-session"
-        assert policy["pipeline_count"] >= 1
+        assert policy["intent_count"] >= 1
         assert policy["thresholds"]["promote_min_attempts"] == 20
-        keys = [item["key"] for item in policy["pipelines"]]
+        keys = [item["key"] for item in policy["intents"]]
         assert "zwcad.write.add-wall" in keys
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
@@ -154,7 +154,7 @@ def test_repl_admin_policy_status_pretty_output(tmp_path: Path):
         pretty = _run_admin_raw(["policy-status", "--pretty"], env)
         assert "Session:" in pretty
         assert "Thresholds:" in pretty
-        assert "Pipelines:" in pretty
+        assert "Intents:" in pretty
         assert "zwcad.write.add-wall" in pretty
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
@@ -175,11 +175,11 @@ def test_repl_admin_policy_status_handles_corrupt_registry(tmp_path: Path):
     env["EMERGE_STATE_ROOT"] = str(tmp_path)
     env["EMERGE_SESSION_ID"] = "corrupt"
     # registry lives at state_root level (not under session_dir)
-    (tmp_path / "pipelines-registry.json").write_text("{bad json", encoding="utf-8")
+    (tmp_path / "intents.json").write_text("{bad json", encoding="utf-8")
     out = _run_admin(["policy-status"], env)
     assert out["registry_exists"] is True
-    assert out["registry_corrupt"] is True
-    assert out["pipeline_count"] == 0
+    assert out["registry_corrupt"] is False
+    assert out["intent_count"] == 0
 
 
 def test_repl_admin_policy_status_includes_policy_execution_metrics(tmp_path: Path):
@@ -197,7 +197,7 @@ def test_repl_admin_policy_status_includes_policy_execution_metrics(tmp_path: Pa
         )
 
         policy = _run_admin(["policy-status"], env)
-        by_key = {item["key"]: item for item in policy["pipelines"]}
+        by_key = {item["key"]: item for item in policy["intents"]}
         stop_key = "mock.write.add-wall"
         rb_key = "mock.write.add-wall-rollback"
         assert by_key[stop_key]["policy_enforced_count"] >= 1
@@ -342,10 +342,10 @@ def test_connector_export_produces_zip(tmp_path):
 
     state_root = tmp_path / "repl"
     state_root.mkdir()
-    (state_root / "pipelines-registry.json").write_text(json.dumps({
-        "pipelines": {
-            "mycon.read.state": {"status": "explore", "rollout_pct": 0},
-            "other.read.state": {"status": "stable", "rollout_pct": 100},
+    (state_root / "intents.json").write_text(json.dumps({
+        "intents": {
+            "mycon.read.state": {"stage": "explore", "rollout_pct": 0},
+            "other.read.state": {"stage": "stable", "rollout_pct": 100},
         }
     }))
 
@@ -363,15 +363,15 @@ def test_connector_export_produces_zip(tmp_path):
     with zipfile.ZipFile(out_zip, "r") as zf:
         names = zf.namelist()
         assert "manifest.json" in names
-        assert "pipelines-registry.json" in names
+        assert "intents.json" in names
         assert "connectors/mycon/pipelines/read/state.py" in names
         assert "connectors/mycon/pipelines/read/state.yaml" in names
         assert not any("__pycache__" in n for n in names)
         manifest = json.loads(zf.read("manifest.json"))
         assert manifest["name"] == "mycon"
-        reg = json.loads(zf.read("pipelines-registry.json"))
-        assert "mycon.read.state" in reg["pipelines"]
-        assert "other.read.state" not in reg["pipelines"]
+        reg = json.loads(zf.read("intents.json"))
+        assert "mycon.read.state" in reg["intents"]
+        assert "other.read.state" not in reg["intents"]
 
 
 def test_connector_export_missing_connector_returns_error(tmp_path):
@@ -401,8 +401,8 @@ def _make_pkg(tmp_path: Path, connector: str = "mycon") -> Path:
 
     state_root = tmp_path / "src_repl"
     state_root.mkdir(exist_ok=True)
-    (state_root / "pipelines-registry.json").write_text(json.dumps({
-        "pipelines": {f"{connector}.read.state": {"status": "explore", "rollout_pct": 0}}
+    (state_root / "intents.json").write_text(json.dumps({
+        "intents": {f"{connector}.read.state": {"stage": "explore", "rollout_pct": 0}}
     }))
 
     out_zip = tmp_path / f"{connector}-pkg.zip"
@@ -423,7 +423,7 @@ def test_connector_import_extracts_files_and_merges_registry(tmp_path):
     dest_connector_root.mkdir()
     dest_state_root = tmp_path / "dest_repl"
     dest_state_root.mkdir()
-    (dest_state_root / "pipelines-registry.json").write_text(json.dumps({"pipelines": {}}))
+    (dest_state_root / "intents.json").write_text(json.dumps({"intents": {}}))
 
     result = repl_admin.cmd_connector_import(
         pkg=str(pkg),
@@ -435,11 +435,11 @@ def test_connector_import_extracts_files_and_merges_registry(tmp_path):
     assert result["ok"] is True
     assert result["connector"] == "mycon"
     assert (dest_connector_root / "mycon" / "pipelines" / "read" / "state.py").exists()
-    assert "mycon.read.state" in result["pipelines_merged"]
-    assert result["pipelines_skipped"] == []
+    assert "mycon.read.state" in result["intents_merged"]
+    assert result["intents_skipped"] == []
 
-    reg = json.loads((dest_state_root / "pipelines-registry.json").read_text())
-    assert "mycon.read.state" in reg["pipelines"]
+    reg = json.loads((dest_state_root / "intents.json").read_text())
+    assert "mycon.read.state" in reg["intents"]
 
 
 def test_connector_import_conflict_no_overwrite_returns_error(tmp_path):
@@ -474,8 +474,8 @@ def test_connector_import_overwrite_replaces_files_and_registry(tmp_path):
 
     dest_state_root = tmp_path / "dest_repl"
     dest_state_root.mkdir()
-    (dest_state_root / "pipelines-registry.json").write_text(json.dumps({
-        "pipelines": {"mycon.read.state": {"status": "stable", "rollout_pct": 100}}
+    (dest_state_root / "intents.json").write_text(json.dumps({
+        "intents": {"mycon.read.state": {"stage": "stable", "rollout_pct": 100}}
     }))
 
     result = repl_admin.cmd_connector_import(
@@ -487,8 +487,8 @@ def test_connector_import_overwrite_replaces_files_and_registry(tmp_path):
 
     assert result["ok"] is True
     assert existing_file.read_text() == "# state"
-    reg = json.loads((dest_state_root / "pipelines-registry.json").read_text())
-    assert reg["pipelines"]["mycon.read.state"]["status"] == "explore"
+    reg = json.loads((dest_state_root / "intents.json").read_text())
+    assert reg["intents"]["mycon.read.state"]["stage"] == "explore"
 
 
 def test_cli_connector_export(tmp_path):
@@ -501,7 +501,7 @@ def test_cli_connector_export(tmp_path):
 
     state_root = tmp_path / "repl"
     state_root.mkdir()
-    (state_root / "pipelines-registry.json").write_text(json.dumps({"pipelines": {}}))
+    (state_root / "intents.json").write_text(json.dumps({"intents": {}}))
 
     out_zip = tmp_path / "mycon-pkg.zip"
     env = {
@@ -526,8 +526,8 @@ def test_cli_connector_import(tmp_path):
     (connector_dir / "state.yaml").write_text("pipeline: state")
     src_state_root = tmp_path / "src_repl"
     src_state_root.mkdir()
-    (src_state_root / "pipelines-registry.json").write_text(json.dumps({
-        "pipelines": {"mycon.read.state": {"status": "explore", "rollout_pct": 0}}
+    (src_state_root / "intents.json").write_text(json.dumps({
+        "intents": {"mycon.read.state": {"stage": "explore", "rollout_pct": 0}}
     }))
     pkg = tmp_path / "mycon-pkg.zip"
     repl_admin.cmd_connector_export(
@@ -541,7 +541,7 @@ def test_cli_connector_import(tmp_path):
     dest_connector_root.mkdir()
     dest_state_root = tmp_path / "dest_repl"
     dest_state_root.mkdir()
-    (dest_state_root / "pipelines-registry.json").write_text(json.dumps({"pipelines": {}}))
+    (dest_state_root / "intents.json").write_text(json.dumps({"intents": {}}))
 
     env = {
         **os.environ,
@@ -643,7 +643,7 @@ def test_enrich_actions_injects_notes_content_for_notes_comment(tmp_path):
 def test_enrich_actions_passes_through_non_notes_actions(tmp_path):
     """_enrich_actions leaves non-notes.comment actions unchanged."""
     actions = [
-        {"type": "pipeline.set", "key": "zwcad.read.state", "fields": {"status": "canary"}},
+        {"type": "intent.set", "key": "zwcad.read.state", "fields": {"stage": "canary"}},
         {"type": "core.crystallize", "connector": "zwcad", "component": "preview"},
     ]
     result = _enrich_actions(actions)
@@ -688,7 +688,7 @@ def test_enrich_actions_adds_deterministic_instruction_for_tool_call():
                 },
             },
             "auto": {"mode": "auto", "crystallize_when_synthesis_ready": True},
-            "flywheel": {"status": "canary", "synthesis_ready": True},
+            "flywheel": {"stage": "canary", "synthesis_ready": True},
         }
     ]
     result = _enrich_actions(actions)

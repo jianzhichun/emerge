@@ -30,7 +30,7 @@ def main() -> None:
         f"[emerge/CwdChanged] Working directory changed: {old_cwd} → {new_cwd}\n"
         "emerge session context was anchored to the original CWD. "
         "If you intend to work in this new directory, be aware that:\n"
-        "- Flywheel spans and pipeline intents still reference the original session.\n"
+        "- Flywheel spans and intent state still reference the original session.\n"
         "- Use the new project's connector names explicitly in intent_signature.\n"
         f"New CWD: {new_cwd}"
     )

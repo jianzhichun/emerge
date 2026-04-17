@@ -146,7 +146,7 @@ def git_setup_worktree(worktree: Path, remote: str, branch: str, author: str) ->
 def build_conflict_entries(
     conflict_files: list[str],
     connector: str,
-    pipelines_registry: dict[str, Any] | None = None,
+    intents_registry: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Build structured conflict entries with metadata for AI analysis."""
     entries = []
@@ -161,10 +161,10 @@ def build_conflict_entries(
             "ours_ts_ms": int(time.time() * 1000),
             "theirs_ts_ms": 0,
         }
-        if pipelines_registry:
+        if intents_registry:
             mode = "write" if "/write/" in file_path else "read"
             pipeline_key = f"{connector}.{mode}.{Path(file_path).stem}"
-            reg_entry = pipelines_registry.get("pipelines", {}).get(pipeline_key)
+            reg_entry = intents_registry.get("intents", {}).get(pipeline_key)
             if isinstance(reg_entry, dict):
                 entry["ours_success_rate"] = reg_entry.get("success_rate", 0.0)
                 entry["ours_attempts"] = reg_entry.get("attempts", 0)

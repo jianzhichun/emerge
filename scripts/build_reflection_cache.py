@@ -15,7 +15,7 @@ from scripts.span_tracker import SpanTracker
 
 
 def _build_deep_summary(tracker: SpanTracker, max_items: int = 8) -> str:
-    candidates = tracker._load_candidates().get("spans", {})
+    candidates = tracker._load_candidates().get("intents", {})
     if not candidates:
         return ""
 

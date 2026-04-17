@@ -87,7 +87,7 @@ def test_watch_emerge_global_writes_cockpit_ack(tmp_path):
         "type": "cockpit_action",
         "event_id": event_id,
         "ts_ms": 1000,
-        "actions": [{"type": "pipeline.delete", "key": "x"}],
+        "actions": [{"type": "intent.delete", "key": "x"}],
     })
     time.sleep(0.7)
     proc.terminate()

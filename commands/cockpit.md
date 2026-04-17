@@ -40,7 +40,7 @@ Always invoke the admin CLI via the **Emerge plugin root** (not the user's open 
    - Controls **must not** call `/api/submit` directly.
    - Controls enqueue actions via `postMessage` to parent shell only (`window.emerge.enqueue(...)` from `/api/cockpit-sdk.js`).
    - Operator reviews queue and submits once from Cockpit's queue panel (single submit path).
-   - Valid action types are discoverable from `GET /api/action-types` and use dotted names (`pipeline.set`, `notes.comment`, `core.tool-call`, etc.).
+   - Valid action types are discoverable from `GET /api/action-types` and use dotted names (`intent.set`, `notes.comment`, `core.tool-call`, etc.).
 
 4. **Start global Monitor** (team lead session):
    ```

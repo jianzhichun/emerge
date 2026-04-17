@@ -33,8 +33,8 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" runner-status --pretty
 cat ~/.emerge/operator-events/<machine_id>/events.jsonl | tail -20
 ```
 
-If the file is empty or missing: the `ObserverPlugin` listener is not firing events.
-- Check that `ObserverPlugin.start()` was called (look for it in the runner log via `GET /logs?n=50`)
+If the file is empty or missing: the event producer is not firing events.
+- Check that the relevant producer path is active (`POST /operator-event`, pipeline `start()` hook with `event_bus.emit_event`, or `_write_operator_event` from `icc_exec`)
 - On macOS, verify the process has Accessibility permission (`System Preferences → Privacy → Accessibility`)
 - On Windows, check that the process has UIAutomation access and is not running in a low-integrity context
 
@@ -82,7 +82,7 @@ Check:
 
 | Symptom | Fix |
 |---------|-----|
-| EventBus empty | Verify `ObserverPlugin.start()` called; check OS accessibility permissions |
+| EventBus empty | Verify event producer path (`/operator-event`, pipeline `start()`, or `icc_exec`) and OS accessibility permissions |
 | PatternDetector never fires | Lower `FREQ_THRESHOLD` or check event `session_role` field |
 | Elicitation never appears | Verify daemon has elicitation capability in MCP handshake; check thread is non-main |
 | Pattern alert not delivered | Verify `watch_emerge.py --runner-profile <p>` Monitor is running; check `events-{profile}.jsonl` for `pattern_alert` entries |

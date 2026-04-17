@@ -235,17 +235,17 @@ def render_policy_status_pretty(data: dict) -> str:
     for key in sorted(thresholds.keys()):
         lines.append(f"- {key}: {thresholds[key]}")
     lines.append("")
-    lines.append("Pipelines:")
-    pipelines = data.get("pipelines", [])
-    if not pipelines:
+    lines.append("Intents:")
+    intents = data.get("intents", [])
+    if not intents:
         lines.append("- (none)")
     else:
-        for item in pipelines:
+        for item in intents:
             lines.append(f"- key: {item.get('key', '')}")
             desc = item.get("description", "")
             if desc:
                 lines.append(f"  description: {desc}")
-            lines.append(f"  status: {item.get('status', '')}  source: {item.get('source', 'exec')}")
+            lines.append(f"  stage: {item.get('stage', '')}")
             lines.append(f"  rollout_pct: {item.get('rollout_pct', 0)}")
             lines.append(f"  success_rate: {item.get('success_rate', 0)}")
             lines.append(f"  verify_rate: {item.get('verify_rate', 0)}")

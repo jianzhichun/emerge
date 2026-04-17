@@ -1,17 +1,17 @@
 import { writable } from 'svelte/store';
 import { api, ApiRequestError } from '../lib/api';
-import type { PolicyPipeline, PolicyResponse, PolicyThresholds } from '../lib/types';
+import type { PolicyIntent, PolicyResponse, PolicyThresholds } from '../lib/types';
 
 export interface PolicyStoreState {
   error: string | null;
   thresholds: PolicyThresholds;
-  pipelines: PolicyPipeline[];
+  intents: PolicyIntent[];
 }
 
 const initialState: PolicyStoreState = {
   error: null,
   thresholds: {},
-  pipelines: []
+  intents: []
 };
 
 function toErrorMessage(error: unknown): string {
@@ -36,7 +36,7 @@ function createPolicyStore() {
           ...state,
           error: null,
           thresholds: payload.thresholds ?? {},
-          pipelines: payload.pipelines ?? []
+          intents: payload.intents ?? []
         }));
         return payload;
       } catch (error) {

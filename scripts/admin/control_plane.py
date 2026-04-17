@@ -20,13 +20,6 @@ if str(_ROOT) not in sys.path:
 
 from scripts.admin.shared import _resolve_repl_root, _resolve_state_root  # noqa: E402
 from scripts.policy_config import (  # noqa: E402
-    PROMOTE_MAX_HUMAN_FIX_RATE,
-    PROMOTE_MIN_ATTEMPTS,
-    PROMOTE_MIN_SUCCESS_RATE,
-    ROLLBACK_CONSECUTIVE_FAILURES,
-    STABLE_MIN_ATTEMPTS,
-    STABLE_MIN_SUCCESS_RATE,
-    atomic_write_json,
     default_exec_root,
     default_hook_state_root,
     derive_profile_token,
@@ -34,6 +27,8 @@ from scripts.policy_config import (  # noqa: E402
     pin_plugin_data_path_if_present,
 )
 from scripts.state_tracker import StateTracker, load_tracker, save_tracker  # noqa: E402
+from scripts.intent_registry import IntentRegistry  # noqa: E402
+from scripts.policy_engine import derive_stage  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -116,32 +111,6 @@ def cmd_control_plane_sessions(
 
 
 # ---------------------------------------------------------------------------
-# Span policy helper
-# ---------------------------------------------------------------------------
-
-def _span_policy_label(entry: dict) -> str:
-    """Compute span policy from entry fields — mirrors SpanTracker.get_policy_status logic."""
-    if entry.get("frozen"):
-        return "explore"
-    att = int(entry.get("attempts", 0))
-    succ = int(entry.get("successes", 0))
-    consecutive_failures = int(entry.get("consecutive_failures", 0))
-    human_fixes = int(entry.get("human_fixes", 0))
-    if consecutive_failures >= ROLLBACK_CONSECUTIVE_FAILURES:
-        return "rollback"
-    if att == 0:
-        return "explore"
-    rate = succ / att
-    human_fix_rate = human_fixes / att
-    if att >= STABLE_MIN_ATTEMPTS and rate >= STABLE_MIN_SUCCESS_RATE:
-        return "stable"
-    if (att >= PROMOTE_MIN_ATTEMPTS and rate >= PROMOTE_MIN_SUCCESS_RATE
-            and human_fix_rate <= PROMOTE_MAX_HUMAN_FIX_RATE):
-        return "canary"
-    return "explore"
-
-
-# ---------------------------------------------------------------------------
 # Control-plane read API
 # ---------------------------------------------------------------------------
 
@@ -163,49 +132,38 @@ def cmd_control_plane_state() -> dict:
 
 
 def cmd_control_plane_intents() -> dict:
-    """Merged intent list from pipelines-registry + span-candidates + exec candidates."""
-    from scripts.admin.pipeline import cmd_policy_status
-    policy = cmd_policy_status()
-    intents: dict[str, dict] = {}
-    for p in policy.get("pipelines", []):
-        key = p.get("key", "")
-        if not key:
-            continue
-        intents[key] = {
-            "intent_signature": key,
-            "source": "exec",
-            "policy_status": p.get("status", "explore"),
-            "success_rate": p.get("success_rate"),
-            "human_fix_rate": p.get("human_fix_rate"),
-            "consecutive_failures": p.get("consecutive_failures", 0),
-            "frozen": p.get("frozen", False),
-            "updated_at_ms": p.get("updated_at_ms", 0),
-        }
+    """Global intent list from intents.json (single source of truth).
+
+    Clean-break contract: each row surfaces the canonical ``stage`` field
+    written by :class:`scripts.policy_engine.PolicyEngine`. Legacy
+    ``policy_status`` naming has been removed.
+    """
     state_root = _resolve_state_root()
-    span_cand_path = state_root / "span-candidates.json"
-    if span_cand_path.exists():
-        try:
-            sc = json.loads(span_cand_path.read_text(encoding="utf-8"))
-            for key, entry in sc.get("spans", {}).items():
-                att = int(entry.get("attempts", 0))
-                succ = int(entry.get("successes", 0))
-                if key in intents:
-                    intents[key]["source"] = "both"
-                    intents[key]["span_status"] = _span_policy_label(entry)
-                else:
-                    intents[key] = {
-                        "intent_signature": key,
-                        "source": "span",
-                        "policy_status": _span_policy_label(entry),
-                        "success_rate": round(succ / att, 4) if att else None,
-                        "human_fix_rate": None,
-                        "consecutive_failures": int(entry.get("consecutive_failures", 0)),
-                        "frozen": entry.get("frozen", False),
-                        "updated_at_ms": int(entry.get("last_ts_ms", 0)),
-                    }
-        except Exception:
-            pass
-    return {"ok": True, "intents": list(intents.values())}
+    data = IntentRegistry.load(state_root)
+    intents = []
+    for key, entry in data.get("intents", {}).items():
+        if not isinstance(entry, dict):
+            continue
+        stage = entry.get("stage")
+        if not stage:
+            # Lazy fallback for rows written before PolicyEngine: re-derive
+            # read-only from counters. PolicyEngine remains the only writer.
+            stage = derive_stage(entry)
+        intents.append(
+            {
+                "intent_signature": key,
+                "stage": stage,
+                "success_rate": entry.get("success_rate"),
+                "verify_rate": entry.get("verify_rate"),
+                "human_fix_rate": entry.get("human_fix_rate"),
+                "consecutive_failures": entry.get("consecutive_failures", 0),
+                "frozen": entry.get("frozen", False),
+                "updated_at_ms": entry.get("updated_at_ms", 0),
+                "persistent": entry.get("persistent", False),
+                "description": entry.get("description", ""),
+            }
+        )
+    return {"ok": True, "intents": intents}
 
 
 def cmd_control_plane_session(session_id: str | None = None) -> dict:
@@ -418,16 +376,15 @@ def cmd_control_plane_spans(limit: int = 50, intent: str = "", intent_prefix: st
 
 
 def cmd_control_plane_span_candidates() -> dict:
-    """All span candidate entries."""
+    """All tracked intent entries.
+
+    The endpoint name is kept for URL stability, but the payload uses the
+    canonical ``intents`` key. The legacy ``candidates`` alias has been
+    removed as part of the clean-break refactor.
+    """
     state_root = _resolve_state_root()
-    path = state_root / "span-candidates.json"
-    if not path.exists():
-        return {"ok": True, "candidates": {}}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return {"ok": True, "candidates": data.get("spans", {})}
-    except Exception:
-        return {"ok": True, "candidates": {}}
+    data = IntentRegistry.load(state_root)
+    return {"ok": True, "intents": data.get("intents", {})}
 
 
 def cmd_control_plane_reflection_cache(ttl_ms: int = 15 * 60 * 1000) -> dict:
@@ -606,27 +563,21 @@ def cmd_control_plane_risk_add(text: str, intent_signature: str = "") -> dict:
 
 def cmd_control_plane_policy_freeze(key: str) -> dict:
     state_root = _resolve_state_root()
-    registry_path = state_root / "pipelines-registry.json"
-    if not registry_path.exists():
-        return {"ok": False, "error": "no pipelines-registry.json"}
-    data = json.loads(registry_path.read_text(encoding="utf-8"))
-    if key not in data.get("pipelines", {}):
-        return {"ok": False, "error": f"pipeline {key!r} not found"}
-    data["pipelines"][key]["frozen"] = True
-    atomic_write_json(registry_path, data)
+    data = IntentRegistry.load(state_root)
+    if key not in data.get("intents", {}):
+        return {"ok": False, "error": f"intent {key!r} not found"}
+    data["intents"][key]["frozen"] = True
+    IntentRegistry.save(state_root, data)
     return {"ok": True, "key": key, "frozen": True}
 
 
 def cmd_control_plane_policy_unfreeze(key: str) -> dict:
     state_root = _resolve_state_root()
-    registry_path = state_root / "pipelines-registry.json"
-    if not registry_path.exists():
-        return {"ok": False, "error": "no pipelines-registry.json"}
-    data = json.loads(registry_path.read_text(encoding="utf-8"))
-    if key not in data.get("pipelines", {}):
-        return {"ok": False, "error": f"pipeline {key!r} not found"}
-    data["pipelines"][key]["frozen"] = False
-    atomic_write_json(registry_path, data)
+    data = IntentRegistry.load(state_root)
+    if key not in data.get("intents", {}):
+        return {"ok": False, "error": f"intent {key!r} not found"}
+    data["intents"][key]["frozen"] = False
+    IntentRegistry.save(state_root, data)
     return {"ok": True, "key": key, "frozen": False}
 
 

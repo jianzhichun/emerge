@@ -178,6 +178,50 @@ class PipelineEngine:
             "rollback_result": rollback_result,
         }
 
+    def has_persistent_hooks(self, intent_signature: str) -> bool:
+        """Return True when a pipeline defines start()/stop() hooks."""
+        connector, mode, pipeline = self._parse_intent_signature(intent_signature)
+        _, module = self._load_pipeline(connector, mode, pipeline)
+        return callable(getattr(module, "start", None)) or callable(
+            getattr(module, "stop", None)
+        )
+
+    def start_pipeline(self, intent_signature: str, ctx: dict[str, Any] | None = None) -> bool:
+        """Run optional start() hook for a pipeline; returns whether hook existed."""
+        connector, mode, pipeline = self._parse_intent_signature(intent_signature)
+        metadata, module = self._load_pipeline(connector, mode, pipeline)
+        start_fn = getattr(module, "start", None)
+        if not callable(start_fn):
+            return False
+        start_fn(
+            ctx={
+                **(ctx or {}),
+                "metadata": metadata,
+                "connector": connector,
+                "mode": mode,
+                "pipeline": pipeline,
+            }
+        )
+        return True
+
+    def stop_pipeline(self, intent_signature: str, ctx: dict[str, Any] | None = None) -> bool:
+        """Run optional stop() hook for a pipeline; returns whether hook existed."""
+        connector, mode, pipeline = self._parse_intent_signature(intent_signature)
+        metadata, module = self._load_pipeline(connector, mode, pipeline)
+        stop_fn = getattr(module, "stop", None)
+        if not callable(stop_fn):
+            return False
+        stop_fn(
+            ctx={
+                **(ctx or {}),
+                "metadata": metadata,
+                "connector": connector,
+                "mode": mode,
+                "pipeline": pipeline,
+            }
+        )
+        return True
+
     def _load_pipeline_source(
         self, connector: str, mode: str, pipeline: str
     ) -> tuple[dict[str, Any], str]:
@@ -219,6 +263,22 @@ class PipelineEngine:
         metadata = self._load_metadata(meta_path)
         module = self._load_module(code_path, f"emerge_{connector}_{mode}_{pipeline}")
         return metadata, module
+
+    @staticmethod
+    def _parse_intent_signature(intent_signature: str) -> tuple[str, str, str]:
+        parts = intent_signature.split(".", 2)
+        if len(parts) != 3:
+            raise ValueError(
+                f"invalid intent_signature {intent_signature!r}: expected connector.mode.name"
+            )
+        connector, mode, pipeline = parts
+        if mode not in ("read", "write"):
+            raise ValueError(
+                f"invalid intent_signature mode {mode!r}: expected 'read' or 'write'"
+            )
+        PipelineEngine._validate_path_segment(connector, "connector")
+        PipelineEngine._validate_path_segment(pipeline, "pipeline")
+        return connector, mode, pipeline
 
     @staticmethod
     def _validate_metadata(path: Path, data: dict[str, Any]) -> None:

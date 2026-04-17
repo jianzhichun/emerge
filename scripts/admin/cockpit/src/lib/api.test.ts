@@ -25,7 +25,7 @@ describe('api client', () => {
   });
 
   it('calls /api/policy', async () => {
-    const fetchMock: FetchMock = vi.fn(async () => jsonResponse({ pipeline_count: 1 }));
+    const fetchMock: FetchMock = vi.fn(async () => jsonResponse({ intent_count: 1 }));
     const api = createApiClient({ baseUrl: 'http://localhost:8789', fetchImpl: fetchMock as typeof fetch });
 
     await api.getPolicy();

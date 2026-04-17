@@ -61,12 +61,12 @@ def test_file_to_intent_sig_unknown_depth_returns_empty():
 def test_load_candidate_timestamps_returns_stable_only(tmp_path, monkeypatch):
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     candidates = {
-        "spans": {
+        "intents": {
             "cs.read.a": _stable_span_entry("cs.read.a", last_ts_ms=500),
             "cs.read.b": _explore_span_entry("cs.read.b", last_ts_ms=999),
         }
     }
-    (tmp_path / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+    (tmp_path / "intents.json").write_text(json.dumps(candidates), encoding="utf-8")
     ts = _load_candidate_timestamps("cs")
     assert ts == {"cs.read.a": 500}
 
@@ -109,11 +109,11 @@ def _make_connector(connectors: Path, name: str, state_root: Path) -> None:
     (base / "NOTES.md").write_text("# Notes", encoding="utf-8")
     intent_key = f"{name}.read.fetch"
     candidates = {
-        "spans": {
+        "intents": {
             intent_key: _stable_span_entry(intent_key, last_ts_ms=1000),
         }
     }
-    (state_root / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+    (state_root / "intents.json").write_text(json.dumps(candidates), encoding="utf-8")
 
 
 def test_export_copies_pipelines_and_notes(connector_home):
@@ -178,7 +178,7 @@ def test_export_spans_json_merges_remote_spans(connector_home):
         "spans": {
             "cloud-server.read.list_vms": {
                 "intent_signature": "cloud-server.read.list_vms",
-                "status": "stable",
+                "stage": "stable",
                 "last_ts_ms": 1000,
             }
         }
@@ -189,11 +189,11 @@ def test_export_spans_json_merges_remote_spans(connector_home):
     (base / "pipelines" / "read").mkdir(parents=True)
     (base / "pipelines" / "read" / "get_quota.py").write_text("# quota", encoding="utf-8")
     candidates = {
-        "spans": {
+        "intents": {
             "cloud-server.read.get_quota": _stable_span_entry("cloud-server.read.get_quota", last_ts_ms=2000),
         }
     }
-    (state_root / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+    (state_root / "intents.json").write_text(json.dumps(candidates), encoding="utf-8")
 
     export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
@@ -212,7 +212,7 @@ def test_export_vertical_preserves_remote_only_pipeline(connector_home):
     (hub_conn / "pipelines" / "read" / "list_vms.py").write_text("# A's list_vms", encoding="utf-8")
     a_spans = {
         "spans": {
-            "cloud-server.read.list_vms": {"intent_signature": "cloud-server.read.list_vms", "status": "stable", "last_ts_ms": 1000}
+            "cloud-server.read.list_vms": {"intent_signature": "cloud-server.read.list_vms", "stage": "stable", "last_ts_ms": 1000}
         }
     }
     (hub_conn / "spans.json").write_text(json.dumps(a_spans), encoding="utf-8")
@@ -222,11 +222,11 @@ def test_export_vertical_preserves_remote_only_pipeline(connector_home):
     (base / "pipelines" / "read").mkdir(parents=True)
     (base / "pipelines" / "read" / "get_quota.py").write_text("# B's get_quota", encoding="utf-8")
     b_candidates = {
-        "spans": {
+        "intents": {
             "cloud-server.read.get_quota": _stable_span_entry("cloud-server.read.get_quota", last_ts_ms=2000),
         }
     }
-    (state_root / "span-candidates.json").write_text(json.dumps(b_candidates), encoding="utf-8")
+    (state_root / "intents.json").write_text(json.dumps(b_candidates), encoding="utf-8")
 
     export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
@@ -246,7 +246,7 @@ def test_export_vertical_local_wins_when_newer(connector_home):
     (hub_conn / "pipelines" / "read" / "fetch.py").write_text("# old remote", encoding="utf-8")
     old_spans = {
         "spans": {
-            "cloud-server.read.fetch": {"status": "stable", "last_ts_ms": 100}
+            "cloud-server.read.fetch": {"stage": "stable", "last_ts_ms": 100}
         }
     }
     (hub_conn / "spans.json").write_text(json.dumps(old_spans), encoding="utf-8")
@@ -255,11 +255,11 @@ def test_export_vertical_local_wins_when_newer(connector_home):
     (base / "pipelines" / "read").mkdir(parents=True)
     (base / "pipelines" / "read" / "fetch.py").write_text("# new local", encoding="utf-8")
     candidates = {
-        "spans": {
+        "intents": {
             "cloud-server.read.fetch": _stable_span_entry("cloud-server.read.fetch", last_ts_ms=999),
         }
     }
-    (state_root / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+    (state_root / "intents.json").write_text(json.dumps(candidates), encoding="utf-8")
 
     export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
@@ -276,7 +276,7 @@ def test_export_vertical_remote_wins_when_newer(connector_home):
     (hub_conn / "pipelines" / "read" / "fetch.py").write_text("# newer remote", encoding="utf-8")
     new_spans = {
         "spans": {
-            "cloud-server.read.fetch": {"status": "stable", "last_ts_ms": 9999}
+            "cloud-server.read.fetch": {"stage": "stable", "last_ts_ms": 9999}
         }
     }
     (hub_conn / "spans.json").write_text(json.dumps(new_spans), encoding="utf-8")
@@ -285,11 +285,11 @@ def test_export_vertical_remote_wins_when_newer(connector_home):
     (base / "pipelines" / "read").mkdir(parents=True)
     (base / "pipelines" / "read" / "fetch.py").write_text("# stale local", encoding="utf-8")
     candidates = {
-        "spans": {
+        "intents": {
             "cloud-server.read.fetch": _stable_span_entry("cloud-server.read.fetch", last_ts_ms=50),
         }
     }
-    (state_root / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+    (state_root / "intents.json").write_text(json.dumps(candidates), encoding="utf-8")
 
     export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
@@ -305,11 +305,11 @@ def test_export_vertical_skips_explore_state_pipeline(connector_home):
     (base / "pipelines" / "read").mkdir(parents=True)
     (base / "pipelines" / "read" / "draft.py").write_text("# explore draft", encoding="utf-8")
     candidates = {
-        "spans": {
+        "intents": {
             "cloud-server.read.draft": _explore_span_entry("cloud-server.read.draft", last_ts_ms=500),
         }
     }
-    (state_root / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+    (state_root / "intents.json").write_text(json.dumps(candidates), encoding="utf-8")
 
     export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
@@ -327,11 +327,11 @@ def test_export_vertical_copies_yaml_companion(connector_home):
     (base / "pipelines" / "read" / "fetch.py").write_text("# fetch", encoding="utf-8")
     (base / "pipelines" / "read" / "fetch.yaml").write_text("connector: cs", encoding="utf-8")
     candidates = {
-        "spans": {
+        "intents": {
             "cloud-server.read.fetch": _stable_span_entry("cloud-server.read.fetch", last_ts_ms=100),
         }
     }
-    (state_root / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+    (state_root / "intents.json").write_text(json.dumps(candidates), encoding="utf-8")
 
     export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 
@@ -349,7 +349,7 @@ def test_export_vertical_removes_stale_yaml_when_local_has_none(connector_home):
     (hub_conn / "pipelines" / "read" / "fetch.py").write_text("# old", encoding="utf-8")
     (hub_conn / "pipelines" / "read" / "fetch.yaml").write_text("old: yaml", encoding="utf-8")
     old_spans = {
-        "spans": {"cloud-server.read.fetch": {"status": "stable", "last_ts_ms": 10}}
+        "spans": {"cloud-server.read.fetch": {"stage": "stable", "last_ts_ms": 10}}
     }
     (hub_conn / "spans.json").write_text(json.dumps(old_spans), encoding="utf-8")
 
@@ -358,11 +358,11 @@ def test_export_vertical_removes_stale_yaml_when_local_has_none(connector_home):
     (base / "pipelines" / "read").mkdir(parents=True)
     (base / "pipelines" / "read" / "fetch.py").write_text("# new local", encoding="utf-8")
     candidates = {
-        "spans": {
+        "intents": {
             "cloud-server.read.fetch": _stable_span_entry("cloud-server.read.fetch", last_ts_ms=999),
         }
     }
-    (state_root / "span-candidates.json").write_text(json.dumps(candidates), encoding="utf-8")
+    (state_root / "intents.json").write_text(json.dumps(candidates), encoding="utf-8")
 
     export_vertical("cloud-server", connectors_root_path=connectors, hub_worktree=worktree)
 

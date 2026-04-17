@@ -65,10 +65,10 @@
 
   function connectorNamesFromData(
     assets: Record<string, AssetConnector>,
-    pipelines: Array<{ key?: string }>
+    intents: Array<{ key?: string }>
   ): string[] {
     const assetNames = Object.keys(assets);
-    const policyNames = pipelines.map((pipeline) => String(pipeline.key ?? '').split('.')[0] || '').filter((name) => name.length > 0);
+    const policyNames = intents.map((intent) => String(intent.key ?? '').split('.')[0] || '').filter((name) => name.length > 0);
     return Array.from(new Set([...assetNames, ...policyNames])).sort();
   }
 
@@ -393,13 +393,13 @@
     };
   });
 
-  $: connectorNames = connectorNamesFromData(connectorAssets, $policyStore.pipelines);
+  $: connectorNames = connectorNamesFromData(connectorAssets, $policyStore.intents);
   $: rollbackThreshold = Number($policyStore.thresholds?.rollback_consecutive_failures ?? 2);
   $: leftTabs = [
     primaryTab,
     ...connectorNames.map((name) => {
-      const hasCritical = $policyStore.pipelines.some(
-        (pipeline) => String(pipeline.key ?? '').startsWith(`${name}.`) && Number(pipeline.consecutive_failures ?? 0) >= rollbackThreshold
+      const hasCritical = $policyStore.intents.some(
+        (intent) => String(intent.key ?? '').startsWith(`${name}.`) && Number(intent.consecutive_failures ?? 0) >= rollbackThreshold
       );
       return {
         id: name,
@@ -416,9 +416,9 @@
   $: showQueuePanel = activeTab === 'overview' || isConnectorTab(activeTab);
   $: activeConnectorPanel = isGlobalTab(activeTab) ? 'pipelines' : selectedConnectorPanel(activeTab, readRouteFromUrl().panel);
   $: activeConnector = isGlobalTab(activeTab) ? null : (connectorAssets[activeTab] ?? null);
-  $: activeConnectorPipelines = isGlobalTab(activeTab)
+  $: activeConnectorIntents = isGlobalTab(activeTab)
     ? []
-    : $policyStore.pipelines.filter((pipeline) => String(pipeline.key ?? '').startsWith(`${activeTab}.`));
+    : $policyStore.intents.filter((intent) => String(intent.key ?? '').startsWith(`${activeTab}.`));
   $: queuedKeys = new Set(
     $queueStore.items.map((item) => String((item.data && item.data.key) ?? '')).filter((key) => key.length > 0)
   );
@@ -482,7 +482,7 @@
     >
       {#if activeTab === 'overview'}
         <OverviewTab
-          pipelines={$policyStore.pipelines}
+          intents={$policyStore.intents}
           thresholds={$policyStore.thresholds}
           connectorNames={connectorNames}
           queueSize={$queueStore.items.length}
@@ -508,7 +508,7 @@
         <ConnectorTab
           connectorName={activeTab}
           connector={activeConnector}
-          pipelines={activeConnectorPipelines}
+          intents={activeConnectorIntents}
           selectedPanel={activeConnectorPanel}
           {queuedKeys}
           criticalThreshold={rollbackThreshold}

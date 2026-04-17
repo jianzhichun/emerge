@@ -25,9 +25,9 @@ export interface PolicyThresholds {
   rollback_consecutive_failures?: number;
 }
 
-export interface PolicyPipeline extends JsonObject {
+export interface PolicyIntent extends JsonObject {
   key?: string;
-  status?: string;
+  stage?: string;
   rollout_pct?: number;
   frozen?: boolean;
   updated_at_ms?: number;
@@ -44,9 +44,9 @@ export interface PolicyResponse extends ApiOkResponse {
   state_root?: string;
   registry_exists?: boolean;
   registry_corrupt?: boolean;
-  pipeline_count?: number;
+  intent_count?: number;
   thresholds?: PolicyThresholds;
-  pipelines?: PolicyPipeline[];
+  intents?: PolicyIntent[];
 }
 
 export interface MonitorRunner {

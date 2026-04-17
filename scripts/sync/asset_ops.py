@@ -33,24 +33,24 @@ def file_to_intent_sig(connector: str, rel: Path) -> str:
 def load_candidate_timestamps(connector: str) -> dict[str, int]:
     """Return {intent_sig: last_ts_ms} for stable span entries belonging to connector."""
     from scripts.policy_config import default_exec_root, STABLE_MIN_ATTEMPTS, STABLE_MIN_SUCCESS_RATE
+    from scripts.intent_registry import IntentRegistry
     state_root = Path(os.environ.get("EMERGE_STATE_ROOT") or str(default_exec_root()))
-    p = state_root / "span-candidates.json"
-    if not p.exists():
-        return {}
-    try:
-        raw = json.loads(p.read_text(encoding="utf-8"))
-        result: dict[str, int] = {}
-        prefix = connector + "."
-        for k, v in raw.get("spans", {}).items():
-            if not isinstance(v, dict) or not k.startswith(prefix):
-                continue
-            attempts = int(v.get("attempts", 0))
-            successes = int(v.get("successes", 0))
-            if attempts >= STABLE_MIN_ATTEMPTS and (successes / max(attempts, 1)) >= STABLE_MIN_SUCCESS_RATE:
-                result[k] = int(v.get("last_ts_ms", 0))
-        return result
-    except Exception:
-        return {}
+    raw = IntentRegistry.load(state_root)
+    result: dict[str, int] = {}
+    prefix = connector + "."
+    for k, v in raw.get("intents", {}).items():
+        if not isinstance(v, dict) or not k.startswith(prefix):
+            continue
+        stage = str(v.get("stage", "")).strip()
+        attempts = int(v.get("attempts_at_transition", v.get("attempts", 0)))
+        successes = int(v.get("successes", 0))
+        success_rate = float(v.get("success_rate", (successes / max(attempts, 1) if attempts else 0.0)))
+        is_stable = stage == "stable" or (
+            attempts >= STABLE_MIN_ATTEMPTS and success_rate >= STABLE_MIN_SUCCESS_RATE
+        )
+        if is_stable:
+            result[k] = int(v.get("last_ts_ms", 0))
+    return result
 
 
 def load_spans_timestamps(worktree_connector_dir: Path) -> dict[str, int]:
@@ -112,28 +112,27 @@ def export_vertical(
 def export_spans_json(connector: str, dst: Path) -> None:
     """Merge local stable spans into the worktree spans.json. Remote-only spans are preserved."""
     from scripts.policy_config import default_exec_root, STABLE_MIN_ATTEMPTS, STABLE_MIN_SUCCESS_RATE
+    from scripts.intent_registry import IntentRegistry
     state_root = Path(os.environ.get("EMERGE_STATE_ROOT") or str(default_exec_root()))
-    candidates_path = state_root / "span-candidates.json"
-    if not candidates_path.exists():
-        return
-    try:
-        raw = json.loads(candidates_path.read_text(encoding="utf-8"))
-        all_candidates = raw.get("spans", {})
-    except Exception:
-        return
+    all_candidates = IntentRegistry.load(state_root).get("intents", {})
 
     prefix = connector + "."
     local_spans: dict[str, Any] = {}
     for key, entry in all_candidates.items():
         if not isinstance(entry, dict) or not key.startswith(prefix):
             continue
-        attempts = int(entry.get("attempts", 0))
+        stage = str(entry.get("stage", "")).strip()
+        attempts = int(entry.get("attempts_at_transition", entry.get("attempts", 0)))
         successes = int(entry.get("successes", 0))
-        if attempts < STABLE_MIN_ATTEMPTS or (successes / max(attempts, 1)) < STABLE_MIN_SUCCESS_RATE:
+        success_rate = float(entry.get("success_rate", (successes / max(attempts, 1) if attempts else 0.0)))
+        is_stable = stage == "stable" or (
+            attempts >= STABLE_MIN_ATTEMPTS and success_rate >= STABLE_MIN_SUCCESS_RATE
+        )
+        if not is_stable:
             continue
         local_spans[key] = {
             "intent_signature": entry.get("intent_signature", key),
-            "status": "stable",
+            "stage": "stable",
             "last_ts_ms": entry.get("last_ts_ms", 0),
         }
 

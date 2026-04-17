@@ -33,7 +33,6 @@ from scripts.admin.api import (  # noqa: E402
 from scripts.admin.control_plane import (  # noqa: E402
     _resolve_session_id,
     _session_paths,
-    _span_policy_label,
     cmd_control_plane_state,
     cmd_control_plane_intents,
     cmd_control_plane_session,
@@ -54,13 +53,12 @@ from scripts.admin.control_plane import (  # noqa: E402
     cmd_control_plane_session_reset,
 )
 from scripts.admin.pipeline import (  # noqa: E402
-    _normalize_pipeline_key,
     _load_registry,
     _save_registry,
     _normalize_intent_signature,
     cmd_policy_status,
-    cmd_pipeline_delete,
-    cmd_pipeline_set,
+    cmd_intent_delete,
+    cmd_intent_set,
     cmd_connector_export,
     cmd_connector_import,
     cmd_normalize_intents,
@@ -103,8 +101,8 @@ def main() -> None:
             "runner-config-unset",
             "runner-install-url",
             "runner-deploy",
-            "pipeline-delete",
-            "pipeline-set",
+            "intent-delete",
+            "intent-set",
             "connector-export",
             "connector-import",
             "normalize-intents",
@@ -125,9 +123,9 @@ def main() -> None:
         default=8789,
         help="Daemon HTTP port for runner-install-url (team-lead URL generation)",
     )
-    parser.add_argument("--pipeline-key", default="", help="Pipeline key for pipeline-delete/pipeline-set (e.g. mock.read.layers)")
+    parser.add_argument("--intent-key", default="", help="Intent key for intent-delete/intent-set (e.g. mock.read.layers)")
     parser.add_argument("--set", dest="set_fields", action="append", metavar="FIELD=VALUE",
-                        help="Field to patch for pipeline-set (repeatable, e.g. --set status=explore --set rollout_pct=0)")
+                        help="Field to patch for intent-set (repeatable, e.g. --set stage=explore --set rollout_pct=0)")
     parser.add_argument("--connector", default="", help="Connector name for connector-export")
     parser.add_argument("--out", default="", help="Output zip path for connector-export")
     parser.add_argument("--pkg", default="", help="Package zip path for connector-import")
@@ -170,9 +168,9 @@ def main() -> None:
             runner_url=str(args.runner_url),
             target_profile=str(args.target_profile) or "default",
         )
-    elif args.command == "pipeline-delete":
-        out = cmd_pipeline_delete(key=str(args.pipeline_key))
-    elif args.command == "pipeline-set":
+    elif args.command == "intent-delete":
+        out = cmd_intent_delete(key=str(args.intent_key))
+    elif args.command == "intent-set":
         fields: dict = {}
         for pair in (args.set_fields or []):
             k, _, v = pair.partition("=")
@@ -184,7 +182,7 @@ def main() -> None:
                     fields[k] = float(v)
                 except ValueError:
                     fields[k] = v
-        out = cmd_pipeline_set(key=str(args.pipeline_key), fields=fields)
+        out = cmd_intent_set(key=str(args.intent_key), fields=fields)
     elif args.command == "connector-export":
         out = cmd_connector_export(
             connector=str(args.connector),

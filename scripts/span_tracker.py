@@ -1,21 +1,15 @@
 from __future__ import annotations
 
 import json
-from scripts.policy_config import atomic_write_json
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from scripts.policy_config import (
-    PROMOTE_MAX_HUMAN_FIX_RATE,
-    PROMOTE_MIN_ATTEMPTS,
-    PROMOTE_MIN_SUCCESS_RATE,
-    ROLLBACK_CONSECUTIVE_FAILURES,
-    STABLE_MIN_ATTEMPTS,
-    STABLE_MIN_SUCCESS_RATE,
-    WINDOW_SIZE,
-)
+from scripts.intent_registry import IntentRegistry
+from scripts.policy_config import atomic_write_json
+from scripts.policy_engine import PolicyEngine, derive_stage
 
 # ── read-only tool classification ─────────────────────────────────────────────
 # Conservative: unknown tools default to has_side_effects=True.
@@ -103,20 +97,31 @@ class SpanRecord:
 # ── SpanTracker ───────────────────────────────────────────────────────────────
 
 class SpanTracker:
-    """Manages intent span lifecycle: open → [actions] → close → WAL → candidates → policy."""
+    """Manages intent span lifecycle: open → [actions] → close → WAL → policy.
 
-    def __init__(self, state_root: Path, hook_state_root: Path) -> None:
+    Stage transitions are delegated to :class:`PolicyEngine` — SpanTracker never
+    writes the ``stage`` field directly. When no ``policy_engine`` is injected
+    (read-only callers like reflection tools, hooks, CLI status), SpanTracker
+    lazily builds a minimal no-side-effect engine sufficient for counter writes.
+    """
+
+    def __init__(
+        self,
+        state_root: Path,
+        hook_state_root: Path,
+        *,
+        policy_engine: PolicyEngine | None = None,
+    ) -> None:
         self._state_root = state_root
         self._hook_state_root = hook_state_root
+        self._policy_engine = policy_engine
+        self._own_lock = threading.Lock()
         # span-wal dir is created lazily on first write to avoid polluting state root
 
     # ── paths ──────────────────────────────────────────────────────────────
 
     def _wal_path(self) -> Path:
         return self._state_root / "span-wal" / "spans.jsonl"
-
-    def _candidates_path(self) -> Path:
-        return self._state_root / "span-candidates.json"
 
     def _buffer_path(self) -> Path:
         return self._hook_state_root / "active-span-actions.jsonl"
@@ -147,11 +152,18 @@ class SpanTracker:
             return {}
 
     def _load_candidates(self) -> dict:
-        p = self._candidates_path()
-        try:
-            return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {"spans": {}}
-        except Exception:
-            return {"spans": {}}
+        return IntentRegistry.load(self._state_root)
+
+    def _save_candidates(self, data: dict) -> None:
+        IntentRegistry.save(self._state_root, data)
+
+    def _get_policy_engine(self) -> PolicyEngine:
+        if self._policy_engine is None:
+            self._policy_engine = PolicyEngine(
+                state_root=lambda: self._state_root,
+                lock=self._own_lock,
+            )
+        return self._policy_engine
 
     # ── open ───────────────────────────────────────────────────────────────
 
@@ -239,92 +251,55 @@ class SpanTracker:
     # ── candidates / policy ────────────────────────────────────────────────
 
     def _update_candidates(self, span: SpanRecord) -> None:
+        """Delegate stage/counter update to PolicyEngine.
+
+        Span evidence carries no verify signal (span close has no separate
+        verify step), so ``verify_observed=False`` — the verify gate defaults
+        to 1.0 for span-only intents.
+        """
         if not span.intent_signature:
             return
-        candidates = self._load_candidates()
-        key = span.intent_signature
-        entry = candidates["spans"].get(key, {
-            "intent_signature": key,
-            "is_read_only": span.is_read_only,
-            "description": span.description,
-            "attempts": 0,
-            "successes": 0,
-            "human_fixes": 0,
-            "consecutive_failures": 0,
-            "recent_outcomes": [],
-            "last_ts_ms": 0,
-            "skeleton_generated": False,
-            "frozen": False,
-        })
-        is_success = span.outcome == "success"
-        entry["attempts"] += 1
-        if is_success:
-            entry["successes"] += 1
-        entry["consecutive_failures"] = (
-            0 if is_success else int(entry.get("consecutive_failures", 0)) + 1
+        self._get_policy_engine().apply_evidence(
+            span.intent_signature,
+            success=(span.outcome == "success"),
+            verify_observed=False,
+            description=span.description,
+            is_read_only=span.is_read_only,
+            ts_ms=span.closed_at_ms or int(time.time() * 1000),
         )
-        recent = list(entry.get("recent_outcomes", []))
-        recent.append(1 if is_success else 0)
-        entry["recent_outcomes"] = recent[-WINDOW_SIZE:]
-        entry["last_ts_ms"] = span.closed_at_ms or 0
-        entry["is_read_only"] = span.is_read_only
-        if span.description:
-            entry["description"] = span.description
-        candidates["spans"][key] = entry
-        # Hard cap: evict oldest entries (by last_ts_ms) when over MAX_CANDIDATES.
-        _MAX_CANDIDATES = 1000
-        if len(candidates["spans"]) > _MAX_CANDIDATES:
-            evict_count = len(candidates["spans"]) - _MAX_CANDIDATES
-            sorted_keys = sorted(
-                candidates["spans"],
-                key=lambda k: (candidates["spans"][k].get("last_ts_ms", 0), k),
-            )
-            for evict_key in sorted_keys[:evict_count]:
-                del candidates["spans"][evict_key]
-        self._atomic_write(self._candidates_path(), candidates)
 
     def get_policy_status(self, intent_signature: str) -> str:
-        """explore | canary | stable | rollback.
-        Span policy intentionally omits verify_rate — spans have no verify step.
+        """Return current lifecycle stage (read-only).
+
+        Reads the persisted ``stage`` field written by PolicyEngine, falling
+        back to a pure re-derivation if the field is missing on an old row.
         """
-        entry = self._load_candidates()["spans"].get(intent_signature, {})
+        entry = self._load_candidates()["intents"].get(intent_signature, {})
         if not entry:
             return "explore"
-        if entry.get("frozen"):
-            return "explore"
-        attempts = int(entry.get("attempts", 0))
-        successes = int(entry.get("successes", 0))
-        human_fixes = int(entry.get("human_fixes", 0))
-        consecutive_failures = int(entry.get("consecutive_failures", 0))
-        if consecutive_failures >= ROLLBACK_CONSECUTIVE_FAILURES:
-            return "rollback"
-        if attempts == 0:
-            return "explore"
-        success_rate = successes / attempts
-        human_fix_rate = human_fixes / attempts
-        if attempts >= STABLE_MIN_ATTEMPTS and success_rate >= STABLE_MIN_SUCCESS_RATE:
-            return "stable"
-        if (
-            attempts >= PROMOTE_MIN_ATTEMPTS
-            and success_rate >= PROMOTE_MIN_SUCCESS_RATE
-            and human_fix_rate <= PROMOTE_MAX_HUMAN_FIX_RATE
-        ):
-            return "canary"
-        return "explore"
+        return str(entry.get("stage") or derive_stage(entry))
 
     def is_synthesis_ready(self, intent_signature: str) -> bool:
+        """True when a *span skeleton* should be generated for this intent.
+
+        Span-path synthesis fires at ``stage == stable`` — we wait until the
+        intent has fully proven itself before converting WAL→skeleton. This is
+        intentionally *different* from the PolicyEngine ``synthesis_ready``
+        flag, which fires at ``stage == canary`` for exec-path auto-crystallize
+        (exec WAL carries explicit code, so we can crystallize earlier).
+        """
         return self.get_policy_status(intent_signature) == "stable"
 
     def mark_skeleton_generated(self, intent_signature: str) -> None:
         """Record that a skeleton has been generated for this intent."""
         candidates = self._load_candidates()
-        if intent_signature in candidates["spans"]:
-            candidates["spans"][intent_signature]["skeleton_generated"] = True
-            self._atomic_write(self._candidates_path(), candidates)
+        if intent_signature in candidates["intents"]:
+            candidates["intents"][intent_signature]["skeleton_generated"] = True
+            self._save_candidates(candidates)
 
     def skeleton_already_generated(self, intent_signature: str) -> bool:
         return bool(
-            self._load_candidates()["spans"]
+            self._load_candidates()["intents"]
             .get(intent_signature, {})
             .get("skeleton_generated", False)
         )
@@ -356,7 +331,7 @@ class SpanTracker:
 
     def format_reflection(self, max_intents: int = 8) -> str:
         """Build a compact muscle-memory summary for hook context injection."""
-        candidates = self._load_candidates().get("spans", {})
+        candidates = self._load_candidates().get("intents", {})
         if not candidates:
             return (
                 "Muscle memory: no learned patterns yet.\n"

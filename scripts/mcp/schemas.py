@@ -232,6 +232,11 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                     "pipeline_name": {"type": "string", "description": "Pipeline file name without extension (e.g. state)"},
                     "mode": {"type": "string", "enum": ["read", "write"], "description": "Pipeline mode"},
                     "target_profile": {"type": "string", "description": "Which exec profile's WAL to read", "default": "default"},
+                    "persistent": {
+                        "type": "boolean",
+                        "description": "Whether to scaffold optional start/stop persistent hooks in the generated pipeline",
+                        "default": False,
+                    },
                 },
                 "required": ["intent_signature", "connector", "pipeline_name", "mode"],
             },

@@ -115,27 +115,27 @@ def test_policy_starts_explore(tracker):
     assert tracker.get_policy_status("lark.read.get-doc") == "explore"
 
 def test_policy_reaches_canary(tracker, monkeypatch):
-    monkeypatch.setattr("scripts.span_tracker.PROMOTE_MIN_ATTEMPTS", 3)
-    monkeypatch.setattr("scripts.span_tracker.PROMOTE_MIN_SUCCESS_RATE", 0.9)
-    monkeypatch.setattr("scripts.span_tracker.PROMOTE_MAX_HUMAN_FIX_RATE", 0.1)
+    monkeypatch.setattr("scripts.policy_engine.PROMOTE_MIN_ATTEMPTS", 3)
+    monkeypatch.setattr("scripts.policy_engine.PROMOTE_MIN_SUCCESS_RATE", 0.9)
+    monkeypatch.setattr("scripts.policy_engine.PROMOTE_MAX_HUMAN_FIX_RATE", 0.1)
     for _ in range(3):
         s = tracker.open_span("lark.read.get-doc")
         tracker.close_span(s, outcome="success")
     assert tracker.get_policy_status("lark.read.get-doc") == "canary"
 
 def test_policy_reaches_stable(tracker, monkeypatch):
-    monkeypatch.setattr("scripts.span_tracker.PROMOTE_MIN_ATTEMPTS", 2)
-    monkeypatch.setattr("scripts.span_tracker.PROMOTE_MIN_SUCCESS_RATE", 0.8)
-    monkeypatch.setattr("scripts.span_tracker.PROMOTE_MAX_HUMAN_FIX_RATE", 0.2)
-    monkeypatch.setattr("scripts.span_tracker.STABLE_MIN_ATTEMPTS", 4)
-    monkeypatch.setattr("scripts.span_tracker.STABLE_MIN_SUCCESS_RATE", 0.8)
+    monkeypatch.setattr("scripts.policy_engine.PROMOTE_MIN_ATTEMPTS", 2)
+    monkeypatch.setattr("scripts.policy_engine.PROMOTE_MIN_SUCCESS_RATE", 0.8)
+    monkeypatch.setattr("scripts.policy_engine.PROMOTE_MAX_HUMAN_FIX_RATE", 0.2)
+    monkeypatch.setattr("scripts.policy_engine.STABLE_MIN_ATTEMPTS", 4)
+    monkeypatch.setattr("scripts.policy_engine.STABLE_MIN_SUCCESS_RATE", 0.8)
     for _ in range(4):
         s = tracker.open_span("lark.read.get-doc")
         tracker.close_span(s, outcome="success")
     assert tracker.get_policy_status("lark.read.get-doc") == "stable"
 
 def test_policy_rollback_on_consecutive_failures(tracker, monkeypatch):
-    monkeypatch.setattr("scripts.span_tracker.ROLLBACK_CONSECUTIVE_FAILURES", 2)
+    monkeypatch.setattr("scripts.policy_engine.ROLLBACK_CONSECUTIVE_FAILURES", 2)
     for _ in range(2):
         s = tracker.open_span("lark.read.get-doc")
         tracker.close_span(s, outcome="failure")
@@ -162,10 +162,14 @@ def test_span_reflection_cold_start_nudge_when_no_data(tracker):
 
 
 def test_span_reflection_with_stable_intents(tracker, monkeypatch):
-    monkeypatch.setattr("scripts.span_tracker.STABLE_MIN_ATTEMPTS", 1)
-    monkeypatch.setattr("scripts.span_tracker.STABLE_MIN_SUCCESS_RATE", 1.0)
-    s = tracker.open_span("lark.read.get-doc")
-    tracker.close_span(s, outcome="success")
+    # explore → canary → stable requires two transitions (promote then stabilize)
+    monkeypatch.setattr("scripts.policy_engine.PROMOTE_MIN_ATTEMPTS", 1)
+    monkeypatch.setattr("scripts.policy_engine.PROMOTE_MIN_SUCCESS_RATE", 1.0)
+    monkeypatch.setattr("scripts.policy_engine.STABLE_MIN_ATTEMPTS", 2)
+    monkeypatch.setattr("scripts.policy_engine.STABLE_MIN_SUCCESS_RATE", 1.0)
+    for _ in range(2):
+        s = tracker.open_span("lark.read.get-doc")
+        tracker.close_span(s, outcome="success")
     reflection = tracker.format_reflection()
     assert "Muscle memory" in reflection
     assert "Stable (auto-bridge): lark.read.get-doc" in reflection
@@ -183,11 +187,11 @@ def test_span_reflection_includes_recent_wal(tracker):
 
 
 def test_format_reflection_uses_policy_status(tracker, monkeypatch):
-    monkeypatch.setattr("scripts.span_tracker.PROMOTE_MIN_ATTEMPTS", 1)
-    monkeypatch.setattr("scripts.span_tracker.PROMOTE_MIN_SUCCESS_RATE", 1.0)
-    monkeypatch.setattr("scripts.span_tracker.PROMOTE_MAX_HUMAN_FIX_RATE", 1.0)
-    monkeypatch.setattr("scripts.span_tracker.STABLE_MIN_ATTEMPTS", 2)
-    monkeypatch.setattr("scripts.span_tracker.STABLE_MIN_SUCCESS_RATE", 1.0)
+    monkeypatch.setattr("scripts.policy_engine.PROMOTE_MIN_ATTEMPTS", 1)
+    monkeypatch.setattr("scripts.policy_engine.PROMOTE_MIN_SUCCESS_RATE", 1.0)
+    monkeypatch.setattr("scripts.policy_engine.PROMOTE_MAX_HUMAN_FIX_RATE", 1.0)
+    monkeypatch.setattr("scripts.policy_engine.STABLE_MIN_ATTEMPTS", 2)
+    monkeypatch.setattr("scripts.policy_engine.STABLE_MIN_SUCCESS_RATE", 1.0)
     # canary intent: 1/1 success (meets promote, not stable)
     s1 = tracker.open_span("lark.read.list-records")
     tracker.close_span(s1, outcome="success")

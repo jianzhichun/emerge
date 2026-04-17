@@ -48,7 +48,7 @@ Always invoke the admin CLI via the **Emerge plugin root**.
                       "options": ["接管", "跳过", "停止学习"],
                       "timeout_s": 15})
          接管 → icc_exec(intent_signature=<value from alert JSON field "intent_signature">)
-         停止学习 → pipeline freeze via repl_admin pipeline-set --set frozen=true
+        停止学习 → intent freeze via repl_admin intent-set --set frozen=true
      - stage=stable   → icc_exec(intent_signature=<value from alert JSON field "intent_signature">) silently
 
    AI uncertainty or knowledge distillation questions → call runner_notify with type=input:

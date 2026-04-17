@@ -2,6 +2,7 @@
 Shared pytest fixtures for the emerge test suite.
 """
 import os
+import json
 from pathlib import Path
 
 import pytest
@@ -50,3 +51,19 @@ def isolate_hook_state(tmp_path, monkeypatch):
     (hook_state / "state.json").write_text("{}", encoding="utf-8")
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(hook_state))
     return hook_state
+
+
+@pytest.fixture
+def seed_intent_registry():
+    """Write intents.json with provided entries and return its path."""
+
+    def _seed(state_root: Path, entries: dict) -> Path:
+        state_root.mkdir(parents=True, exist_ok=True)
+        path = state_root / "intents.json"
+        path.write_text(
+            json.dumps({"intents": entries}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return path
+
+    return _seed

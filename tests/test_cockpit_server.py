@@ -49,8 +49,8 @@ def test_validate_action_rejects_bad_types(tmp_path: Path, monkeypatch):
     from scripts.admin.api import _validate_action
     assert _validate_action({"type": "bogus"}) is not None
     assert _validate_action({"type": "core.tool-call"}) is not None  # missing call
-    assert _validate_action({"type": "pipeline.delete"}) is not None  # missing key
-    assert _validate_action({"type": "pipeline.delete", "key": "x"}) is None  # valid
+    assert _validate_action({"type": "intent.delete"}) is not None  # missing key
+    assert _validate_action({"type": "intent.delete", "key": "x"}) is None  # valid
 
 
 import urllib.request
@@ -78,7 +78,7 @@ def test_serve_get_policy_returns_json(tmp_path, monkeypatch):
     url = _start_test_server(tmp_path, monkeypatch)
     with urllib.request.urlopen(f"{url}/api/policy") as resp:
         data = json.loads(resp.read())
-    assert "pipelines" in data
+    assert "intents" in data
     assert "thresholds" in data
 
 
@@ -153,7 +153,7 @@ def test_serve_submit_writes_events_jsonl(tmp_path, monkeypatch):
     from scripts.repl_admin import cmd_serve
     base = cmd_serve(port=0, open_browser=False)["url"]
 
-    actions = [{"type": "pipeline.delete", "key": "x"}]
+    actions = [{"type": "intent.delete", "key": "x"}]
     body = json.dumps({"actions": actions}).encode()
     req = urllib.request.Request(
         f"{base}/api/submit", data=body,
@@ -171,7 +171,7 @@ def test_serve_submit_writes_events_jsonl(tmp_path, monkeypatch):
     assert event["type"] == "cockpit_action"
     assert event.get("event_id") == submit.get("event_id")
     assert len(event["actions"]) == 1
-    assert event["actions"][0]["type"] == "pipeline.delete"
+    assert event["actions"][0]["type"] == "intent.delete"
     assert str(event["actions"][0].get("action_id", "")).startswith(f"{submit['event_id']}:")
 
 
@@ -193,7 +193,7 @@ def test_serve_status_reports_ack_progress(tmp_path, monkeypatch):
                 "type": "cockpit_action",
                 "event_id": event_id,
                 "ts_ms": 1000,
-                "actions": [{"type": "pipeline.delete", "key": "x"}],
+                "actions": [{"type": "intent.delete", "key": "x"}],
             }
         )
         + "\n",
@@ -271,7 +271,7 @@ def test_cockpit_full_flow(tmp_path, monkeypatch):
                 },
             },
             "auto": {"mode": "assist", "crystallize_when_synthesis_ready": True},
-            "flywheel": {"status": "explore", "synthesis_ready": False},
+            "flywheel": {"stage": "explore", "synthesis_ready": False},
         },
     ]
     body = json.dumps({"actions": actions}).encode()
@@ -302,7 +302,7 @@ def test_serve_get_action_types_and_sdk(tmp_path, monkeypatch):
         data = json.loads(resp.read())
     assert data["ok"] is True
     type_names = {row["type"] for row in data["types"]}
-    assert "pipeline.set" in type_names
+    assert "intent.set" in type_names
     assert "core.prompt" in type_names
 
     with urllib.request.urlopen(f"{url}/api/cockpit-sdk.js") as resp:
@@ -343,7 +343,7 @@ def test_submit_and_inject_limits(tmp_path, monkeypatch):
 
     base = cmd_serve(port=0, open_browser=False)["url"]
 
-    many = [{"type": "pipeline.delete", "key": f"x{i}"} for i in range(51)]
+    many = [{"type": "intent.delete", "key": f"x{i}"} for i in range(51)]
     req_many = urllib.request.Request(
         f"{base}/api/submit",
         data=json.dumps({"actions": many}).encode(),

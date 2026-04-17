@@ -1,8 +1,6 @@
 """MCP icc_hub tool handler for EmergeDaemon.
 
-handle_icc_hub() is a pure function — no daemon state access. It receives
-three callables (tool_error, tool_ok_json, elicit) so it can be tested
-independently and called from any context.
+handle_icc_hub() is a pure function — no daemon state access.
 """
 from __future__ import annotations
 
@@ -15,8 +13,6 @@ def handle_icc_hub(
     *,
     tool_error: Callable[[str], dict[str, Any]],
     tool_ok_json: Callable[[dict[str, Any]], dict[str, Any]],
-    elicit: Callable[..., dict[str, Any] | None],
-    http_mode: bool = False,
 ) -> dict[str, Any]:
     """Dispatch an icc_hub action and return a MCP tool response dict."""
     from scripts.hub_config import (
@@ -181,34 +177,10 @@ def handle_icc_hub(
         if not conflict_id:
             return tool_error("icc_hub resolve: 'conflict_id' is required")
         if resolution not in ("ours", "theirs", "skip"):
-            if http_mode:
-                return tool_error(
-                    "icc_hub resolve: 'resolution' is required (ours/theirs/skip). "
-                    "Example: icc_hub(action='resolve', conflict_id='...', resolution='ours')"
-                )
-            elicit_resp = elicit(
-                f"Choose the resolution strategy for conflict `{conflict_id}`:",
-                {
-                    "type": "object",
-                    "properties": {
-                        "resolution": {
-                            "type": "string",
-                            "enum": ["ours", "theirs", "skip"],
-                            "title": "Resolution strategy",
-                        }
-                    },
-                    "required": ["resolution"],
-                },
+            return tool_error(
+                "icc_hub resolve: 'resolution' is required (ours/theirs/skip). "
+                "Example: icc_hub(action='resolve', conflict_id='...', resolution='ours')"
             )
-            if elicit_resp is None:
-                return tool_error(
-                    "icc_hub resolve: elicitation declined or timed out — operation cancelled"
-                )
-            resolution = str(elicit_resp.get("resolution", "")).strip()
-            if resolution not in ("ours", "theirs", "skip"):
-                return tool_error(
-                    f"icc_hub resolve: invalid resolution from elicitation: {resolution!r}"
-                )
         data = load_pending_conflicts()
         matched = False
         for conflict in data.get("conflicts", []):

@@ -546,9 +546,9 @@ def test_format_pending_actions_tool_call():
 
 def test_format_pending_actions_pipeline_set():
     from scripts.pending_actions import format_pending_actions
-    actions = [{"type": "pipeline.set", "key": "foo", "fields": {"stable": True}}]
+    actions = [{"type": "intent.set", "key": "foo", "fields": {"stable": True}}]
     result = format_pending_actions(actions)
-    assert "pipeline.set foo" in result
+    assert "intent.set foo" in result
 
 
 def test_format_pending_actions_notes_edit():
@@ -776,11 +776,12 @@ def test_pre_compact_includes_active_span_reminder(tmp_path):
 
 def _seed_span_reflection_data(exec_root: Path) -> None:
     exec_root.mkdir(parents=True, exist_ok=True)
-    (exec_root / "span-candidates.json").write_text(
+    (exec_root / "intents.json").write_text(
         json.dumps(
             {
-                "spans": {
+                "intents": {
                     "lark.read.get-doc": {
+                        "stage": "stable",
                         "attempts": 40,
                         "successes": 40,
                         "human_fixes": 0,
@@ -789,6 +790,7 @@ def _seed_span_reflection_data(exec_root: Path) -> None:
                         "last_ts_ms": 1000,
                     },
                     "lark.read.list-records": {
+                        "stage": "canary",
                         "attempts": 20,
                         "successes": 19,
                         "human_fixes": 0,

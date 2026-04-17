@@ -23,15 +23,15 @@ from scripts.policy_config import (  # noqa: E402
     STABLE_MIN_ATTEMPTS,
     STABLE_MIN_SUCCESS_RATE,
     STABLE_MIN_VERIFY_RATE,
-    atomic_write_json,
 )
+from scripts.intent_registry import IntentRegistry  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
 # Pipeline registry helpers
 # ---------------------------------------------------------------------------
 
-def _normalize_pipeline_key(key: str) -> str:
+def _normalize_intent_key(key: str) -> str:
     """Key is the plain intent signature (e.g. 'mock.read.layers'). Strip legacy prefixes."""
     key = key.strip()
     for prefix in ("pipeline::", "flywheel::", "default::"):
@@ -42,24 +42,14 @@ def _normalize_pipeline_key(key: str) -> str:
 
 
 def _load_registry(state_root: Path) -> tuple[Path, dict]:
-    registry_path = state_root / "pipelines-registry.json"
-    if registry_path.exists():
-        data = json.loads(registry_path.read_text(encoding="utf-8"))
-    else:
-        data = {"pipelines": {}}
+    registry_path = state_root / "intents.json"
+    data = IntentRegistry.load(state_root)
     return registry_path, data
 
 
 def _save_registry(registry_path: Path, data: dict) -> None:
-    """Atomic write: temp file + os.replace to prevent half-written state on crash."""
-    atomic_write_json(
-        registry_path,
-        data,
-        prefix=".registry-",
-        suffix=".json",
-        ensure_ascii=False,
-        indent=2,
-    )
+    """Atomic write via IntentRegistry."""
+    IntentRegistry.save(registry_path.parent, data)
 
 
 def _normalize_intent_signature(value: str) -> str:
@@ -79,29 +69,23 @@ def _normalize_intent_signature(value: str) -> str:
 def cmd_policy_status(session_id: str | None = None) -> dict:
     from scripts.admin.control_plane import _resolve_session_id
     state_root = _resolve_state_root()
-    registry_path = state_root / "pipelines-registry.json"
-    pipelines = []
-    registry_corrupt = False
-    if registry_path.exists():
-        try:
-            data = json.loads(registry_path.read_text(encoding="utf-8"))
-        except Exception:
-            data = {"pipelines": {}}
-            registry_corrupt = True
-        raw = data.get("pipelines", {})
-        if isinstance(raw, dict):
-            for key, value in raw.items():
-                if not isinstance(value, dict):
-                    continue
-                item = {"key": key, **value}
-                pipelines.append(item)
-    pipelines.sort(key=lambda x: (str(x.get("status", "")), str(x.get("key", ""))))
+    registry_path = state_root / "intents.json"
+    intents = []
+    data = IntentRegistry.load(state_root)
+    raw = data.get("intents", {})
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if not isinstance(value, dict):
+                continue
+            item = {"key": key, **value}
+            intents.append(item)
+    intents.sort(key=lambda x: (str(x.get("stage", "")), str(x.get("key", ""))))
     return {
         "session_id": _resolve_session_id(session_id=session_id),
         "state_root": str(_resolve_state_root()),
         "registry_exists": registry_path.exists(),
-        "registry_corrupt": registry_corrupt,
-        "pipeline_count": len(pipelines),
+        "registry_corrupt": False,
+        "intent_count": len(intents),
         "thresholds": {
             "promote_min_attempts": PROMOTE_MIN_ATTEMPTS,
             "promote_min_success_rate": PROMOTE_MIN_SUCCESS_RATE,
@@ -112,28 +96,28 @@ def cmd_policy_status(session_id: str | None = None) -> dict:
             "stable_min_verify_rate": STABLE_MIN_VERIFY_RATE,
             "rollback_consecutive_failures": ROLLBACK_CONSECUTIVE_FAILURES,
         },
-        "pipelines": pipelines,
+        "intents": intents,
     }
 
 
-def cmd_pipeline_delete(*, key: str) -> dict:
-    """Remove a pipeline entry from the registry."""
-    full_key = _normalize_pipeline_key(key)
+def cmd_intent_delete(*, key: str) -> dict:
+    """Remove an intent entry from the registry."""
+    full_key = _normalize_intent_key(key)
     state_root = _resolve_state_root()
     registry_path, data = _load_registry(state_root)
-    pipelines = data.get("pipelines", {})
-    if full_key not in pipelines:
-        return {"ok": False, "error": f"pipeline not found: {full_key}", "key": full_key}
-    del pipelines[full_key]
-    data["pipelines"] = pipelines
+    intents = data.get("intents", {})
+    if full_key not in intents:
+        return {"ok": False, "error": f"intent not found: {full_key}", "key": full_key}
+    del intents[full_key]
+    data["intents"] = intents
     _save_registry(registry_path, data)
-    return {"ok": True, "deleted": full_key, "remaining": len(pipelines)}
+    return {"ok": True, "deleted": full_key, "remaining": len(intents)}
 
 
-def cmd_pipeline_set(*, key: str, fields: dict) -> dict:
-    """Reconcile / patch specific fields on a pipeline registry entry."""
+def cmd_intent_set(*, key: str, fields: dict) -> dict:
+    """Reconcile / patch specific fields on an intent registry entry."""
     PATCHABLE = {
-        "status", "rollout_pct", "consecutive_failures",
+        "stage", "rollout_pct", "consecutive_failures",
         "policy_enforced_count", "stop_triggered_count", "rollback_executed_count",
         "last_policy_action", "success_rate", "verify_rate", "human_fix_rate",
     }
@@ -141,24 +125,24 @@ def cmd_pipeline_set(*, key: str, fields: dict) -> dict:
     if unknown:
         return {"ok": False, "error": f"unknown fields: {sorted(unknown)}", "allowed": sorted(PATCHABLE)}
 
-    full_key = _normalize_pipeline_key(key)
+    full_key = _normalize_intent_key(key)
     state_root = _resolve_state_root()
     registry_path, data = _load_registry(state_root)
-    pipelines = data.get("pipelines", {})
+    intents = data.get("intents", {})
 
-    if full_key not in pipelines:
-        return {"ok": False, "error": f"pipeline not found: {full_key}", "key": full_key}
+    if full_key not in intents:
+        return {"ok": False, "error": f"intent not found: {full_key}", "key": full_key}
 
-    before = dict(pipelines[full_key])
-    pipelines[full_key].update(fields)
-    data["pipelines"] = pipelines
+    before = dict(intents[full_key])
+    intents[full_key].update(fields)
+    data["intents"] = intents
     _save_registry(registry_path, data)
     return {
         "ok": True,
         "key": full_key,
         "patched": fields,
         "before": {k: before.get(k) for k in fields},
-        "after": {k: pipelines[full_key].get(k) for k in fields},
+        "after": {k: intents[full_key].get(k) for k in fields},
     }
 
 
@@ -182,7 +166,7 @@ def cmd_connector_export(
     prefix = f"{connector}."
     filtered = {
         k: v
-        for k, v in registry_data.get("pipelines", {}).items()
+        for k, v in registry_data.get("intents", {}).items()
         if k.startswith(prefix)
     }
 
@@ -201,8 +185,8 @@ def cmd_connector_export(
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False))
         zf.writestr(
-            "pipelines-registry.json",
-            json.dumps({"pipelines": filtered}, indent=2, ensure_ascii=False),
+            "intents.json",
+            json.dumps({"intents": filtered}, indent=2, ensure_ascii=False),
         )
         for f in files:
             arcname = f"connectors/{connector}/{f.relative_to(connector_dir)}"
@@ -212,7 +196,7 @@ def cmd_connector_export(
         "ok": True,
         "connector": connector,
         "out": str(out_path),
-        "pipeline_count": len(filtered),
+        "intent_count": len(filtered),
         "file_count": len(files),
     }
 
@@ -249,9 +233,9 @@ def cmd_connector_import(
             }
 
         try:
-            imported_reg = json.loads(zf.read("pipelines-registry.json"))
+            imported_reg = json.loads(zf.read("intents.json"))
         except KeyError:
-            imported_reg = {"pipelines": {}}
+            imported_reg = {"intents": {}}
 
         arc_prefix = f"connectors/{connector}/"
         file_count = 0
@@ -273,8 +257,8 @@ def cmd_connector_import(
 
     s_root = state_root if state_root is not None else _resolve_state_root()
     registry_path, existing = _load_registry(s_root)
-    existing_pipelines = existing.get("pipelines", {})
-    imported_pipelines = imported_reg.get("pipelines", {})
+    existing_pipelines = existing.get("intents", {})
+    imported_pipelines = imported_reg.get("intents", {})
 
     merged: list[str] = []
     skipped: list[str] = []
@@ -285,7 +269,7 @@ def cmd_connector_import(
             existing_pipelines[k] = v
             merged.append(k)
 
-    existing["pipelines"] = existing_pipelines
+    existing["intents"] = existing_pipelines
     _save_registry(registry_path, existing)
 
     return {
@@ -293,8 +277,8 @@ def cmd_connector_import(
         "connector": connector,
         "pkg": str(pkg_path),
         "file_count": file_count,
-        "pipelines_merged": merged,
-        "pipelines_skipped": skipped,
+        "intents_merged": merged,
+        "intents_skipped": skipped,
     }
 
 

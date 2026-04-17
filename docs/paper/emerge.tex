@@ -168,7 +168,7 @@ Figure~\ref{fig:arch} summarizes the component layout.
   % Runtime core — 2×2 grid, no overlap
   \node[box] (es) at (-2.6, 1.0) {ExecSession\\+ WAL};
   \node[box] (pe) at ( 2.6, 1.0) {PipelineEngine};
-  \node[box] (pr) at (-2.6,-0.4) {Policy Registry};
+  \node[box] (pr) at (-2.6,-0.4) {Intent Registry};
   \node[box] (st) at ( 2.6,-0.4) {StateTracker};
 
   % Runtime core bounding box
@@ -322,7 +322,7 @@ as AI-generated patterns.
 \subsection{The Convergence Property}
 
 Both flywheels---AI action crystallization and operator pattern crystallization---converge to the same
-artifact: entries in the pipeline registry.
+artifact: entries in the intent registry.
 The distinction is only the \emph{source of evidence}.
 Over time, the registry accumulates patterns from both human and AI sources,
 and the system becomes increasingly capable of autonomous execution across both axes.
@@ -343,7 +343,7 @@ Figure~\ref{fig:convergence} illustrates this duality.
   \draw[arr] (op) -- node[above right, font=\footnotesize]{Auditor distill} (cr);
   \draw[arr] (cr) -- (reg);
 \end{tikzpicture}
-\caption{Both AI and operator patterns converge to the same pipeline registry.}
+\caption{Both AI and operator patterns converge to the same intent registry.}
 \label{fig:convergence}
 \end{figure}
 
@@ -356,7 +356,7 @@ Key implementation decisions:
 
 \paragraph{Policy storage.}
 Two files: \texttt{candidates.json} (per-session, per-\texttt{intent\_signature} counters)
-and \texttt{pipelines-registry.json} (global, per-pipeline lifecycle state).
+and \texttt{intents.json} (global, per-intent lifecycle state).
 All writes are atomic (temp file + rename) to prevent corruption under concurrent access.
 
 \paragraph{Human-fix targeting.}

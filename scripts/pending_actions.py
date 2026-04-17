@@ -18,10 +18,10 @@ def format_pending_actions(actions: list) -> str:
             scope = str(meta.get("scope", "")).strip()
             scope_suffix = f" scope={scope}" if scope else ""
             lines.append(f"{i}. Execute core.tool-call {tool} args={call_args}{scope_suffix}")
-        elif t == "pipeline.set":
-            lines.append(f"{i}. pipeline.set {a.get('key')} fields={a.get('fields', {})}")
-        elif t == "pipeline.delete":
-            lines.append(f"{i}. pipeline.delete {a.get('key')}")
+        elif t == "intent.set":
+            lines.append(f"{i}. intent.set {a.get('key')} fields={a.get('fields', {})}")
+        elif t == "intent.delete":
+            lines.append(f"{i}. intent.delete {a.get('key')}")
         elif t == "notes.edit":
             lines.append(f"{i}. Update {a.get('connector')} NOTES.md (full replace)")
         elif t == "notes.comment":

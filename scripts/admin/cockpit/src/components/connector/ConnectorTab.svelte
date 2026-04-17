@@ -1,8 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import PipelineCard from '../overview/PipelineCard.svelte';
+  import IntentCard from '../overview/IntentCard.svelte';
   import { renderMarkdown } from '../../lib/markdown';
-  import type { AssetConnector, PolicyPipeline } from '../../lib/types';
+  import type { AssetConnector, PolicyIntent } from '../../lib/types';
 
   type ConnectorPanelId = 'pipelines' | 'notes' | 'controls';
 
@@ -13,7 +13,7 @@
     count: number;
   }
 
-  interface PipelineActionEvent {
+  interface IntentActionEvent {
     action: string;
     key: string;
   }
@@ -28,7 +28,7 @@
 
   export let connectorName = '';
   export let connector: AssetConnector | null = null;
-  export let pipelines: PolicyPipeline[] = [];
+  export let intents: PolicyIntent[] = [];
   export let selectedPanel: ConnectorPanelId = 'pipelines';
   export let queuedKeys: Set<string> = new Set<string>();
   export let criticalThreshold = 2;
@@ -68,42 +68,42 @@
     dispatch('selectPanel', { panel });
   }
 
-  function makeQueueItemFromAction(action: PipelineActionEvent): QueueDraft | null {
+  function makeQueueItemFromAction(action: IntentActionEvent): QueueDraft | null {
     const map: Record<string, { label: string; type: string; fields?: Record<string, unknown> }> = {
-      'promote-canary': { label: 'Promote -> canary', type: 'pipeline.set', fields: { status: 'canary', rollout_pct: 20 } },
-      'promote-stable': { label: 'Promote -> stable', type: 'pipeline.set', fields: { status: 'stable', rollout_pct: 100 } },
-      'demote-explore': { label: 'Demote -> explore', type: 'pipeline.set', fields: { status: 'explore', rollout_pct: 0 } },
-      'demote-canary': { label: 'Demote -> canary', type: 'pipeline.set', fields: { status: 'canary', rollout_pct: 20 } },
-      'reset-failures': { label: 'Reset failures', type: 'pipeline.set', fields: { consecutive_failures: 0 } },
-      delete: { label: 'Delete pipeline', type: 'pipeline.delete' }
+      'promote-canary': { label: 'Promote -> canary', type: 'intent.set', fields: { stage: 'canary', rollout_pct: 20 } },
+      'promote-stable': { label: 'Promote -> stable', type: 'intent.set', fields: { stage: 'stable', rollout_pct: 100 } },
+      'demote-explore': { label: 'Demote -> explore', type: 'intent.set', fields: { stage: 'explore', rollout_pct: 0 } },
+      'demote-canary': { label: 'Demote -> canary', type: 'intent.set', fields: { stage: 'canary', rollout_pct: 20 } },
+      'reset-failures': { label: 'Reset failures', type: 'intent.set', fields: { consecutive_failures: 0 } },
+      delete: { label: 'Delete intent', type: 'intent.delete' }
     };
     const def = map[action.action];
     if (!def) {
       return null;
     }
-    if (def.type === 'pipeline.delete') {
+    if (def.type === 'intent.delete') {
       return {
         type: def.type,
         label: def.label,
         subLabel: action.key,
-        command: `pipeline.delete ${action.key}`,
-        data: { type: 'pipeline.delete', key: action.key }
+        command: `intent.delete ${action.key}`,
+        data: { type: 'intent.delete', key: action.key }
       };
     }
     return {
       type: def.type,
       label: def.label,
       subLabel: action.key,
-      command: `pipeline.set ${action.key} ${JSON.stringify(def.fields ?? {})}`,
+      command: `intent.set ${action.key} ${JSON.stringify(def.fields ?? {})}`,
       data: {
-        type: 'pipeline.set',
+        type: 'intent.set',
         key: action.key,
         fields: def.fields ?? {}
       }
     };
   }
 
-  function enqueueFromCard(event: CustomEvent<PipelineActionEvent>): void {
+  function enqueueFromCard(event: CustomEvent<IntentActionEvent>): void {
     const next = makeQueueItemFromAction(event.detail);
     if (!next) {
       return;
@@ -139,7 +139,7 @@
 
   $: components = connector?.components ?? [];
   $: panelDefs = [
-    { id: 'pipelines', label: 'Pipelines', visible: true, count: pipelines.length },
+    { id: 'pipelines', label: 'Pipelines', visible: true, count: intents.length },
     { id: 'notes', label: 'Notes', visible: true, count: connector?.notes ? 1 : 0 },
     { id: 'controls', label: 'Controls', visible: components.length > 0, count: components.length }
   ] as PanelDef[];
@@ -177,15 +177,15 @@
 
   {#if activePanel === 'pipelines'}
     <div class="list" role="tabpanel" id="conn-panel-pipelines" aria-labelledby="conn-tab-pipelines">
-      {#if pipelines.length === 0}
-        <p class="empty-text">No pipelines for this connector.</p>
+      {#if intents.length === 0}
+        <p class="empty-text">No intents for this connector.</p>
       {:else}
-        {#each pipelines as pipeline}
-          <PipelineCard
-            {pipeline}
+        {#each intents as intent}
+          <IntentCard
+            {intent}
             hideConnector={true}
-            queued={queuedKeys.has(toText(pipeline.key))}
-            critical={Number(pipeline.consecutive_failures ?? 0) >= criticalThreshold}
+            queued={queuedKeys.has(toText(intent.key))}
+            critical={Number(intent.consecutive_failures ?? 0) >= criticalThreshold}
             on:queueAction={enqueueFromCard}
           />
         {/each}

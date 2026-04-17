@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from scripts.policy_config import PIPELINE_KEY_RE as _PIPELINE_KEY_RE
+from scripts.intent_registry import IntentRegistry
 
 
 class McpResourceHandler:
@@ -38,7 +39,6 @@ class McpResourceHandler:
     # ------------------------------------------------------------------
 
     def list_resources(self) -> list[dict[str, Any]]:
-        from scripts.policy_config import load_json_object
         from scripts.pipeline_engine import PipelineEngine
 
         static: list[dict[str, Any]] = [
@@ -92,9 +92,8 @@ class McpResourceHandler:
                     ),
                 })
 
-        registry_path = self._get_state_root() / "pipelines-registry.json"
-        registry = load_json_object(registry_path, root_key="pipelines")
-        for key in registry["pipelines"]:
+        registry = IntentRegistry.load(self._get_state_root())
+        for key in registry["intents"]:
             if _PIPELINE_KEY_RE.match(key):
                 connector_names.add(key.split(".", 1)[0])
 
@@ -118,7 +117,7 @@ class McpResourceHandler:
                     "description": f"Tracked intents for {cname} connector (no NOTES.md yet).",
                 })
 
-        span_candidates = self._span_tracker._load_candidates().get("spans", {})
+        span_candidates = self._span_tracker._load_candidates().get("intents", {})
         span_connectors: set[str] = set()
         for sig in span_candidates:
             if _PIPELINE_KEY_RE.match(sig):
@@ -142,13 +141,11 @@ class McpResourceHandler:
     # ------------------------------------------------------------------
 
     def read_resource(self, uri: str) -> dict[str, Any]:
-        from scripts.policy_config import load_json_object
         from scripts.pipeline_engine import PipelineEngine
         from scripts.runner_client import RunnerRouter
 
         if uri == "policy://current":
-            path = self._get_state_root() / "pipelines-registry.json"
-            data = load_json_object(path, root_key="pipelines")
+            data = IntentRegistry.load(self._get_state_root())
             return {"uri": uri, "mimeType": "application/json", "text": json.dumps(data)}
 
         if uri == "runner://status":
@@ -207,7 +204,7 @@ class McpResourceHandler:
                     data = self.get_connector_intents(connector)
                     return {"uri": uri, "mimeType": "application/json", "text": json.dumps(data)}
                 if resource == "spans":
-                    candidates = self._span_tracker._load_candidates().get("spans", {})
+                    candidates = self._span_tracker._load_candidates().get("intents", {})
                     relevant = {k: v for k, v in candidates.items() if k.startswith(f"{connector}.")}
                     return {"uri": uri, "mimeType": "application/json", "text": json.dumps(relevant, ensure_ascii=False)}
 
@@ -218,21 +215,18 @@ class McpResourceHandler:
     # ------------------------------------------------------------------
 
     def get_connector_intents(self, connector: str) -> dict[str, Any]:
-        """Return all tracked intent entries for a connector from pipelines-registry.json."""
-        from scripts.policy_config import load_json_object
-        registry_path = self._get_state_root() / "pipelines-registry.json"
-        registry = load_json_object(registry_path, root_key="pipelines")
+        """Return all tracked intent entries for a connector from intents.json."""
+        registry = IntentRegistry.load(self._get_state_root())
         prefix = f"{connector}."
         return {
             key: {
-                "status": pipeline.get("status", "explore"),
+                "stage": pipeline.get("stage", "explore"),
                 "success_rate": pipeline.get("success_rate", 0.0),
                 "verify_rate": pipeline.get("verify_rate", 0.0),
                 "attempts": pipeline.get("attempts_at_transition", 0),
                 "description": pipeline.get("description", ""),
-                "source": pipeline.get("source", "exec"),
             }
-            for key, pipeline in registry["pipelines"].items()
+            for key, pipeline in registry["intents"].items()
             if key.startswith(prefix)
         }
 
@@ -245,11 +239,11 @@ class McpResourceHandler:
         rows = []
         for key in sorted(intents):
             info = intents[key]
-            icon = status_icon.get(info["status"], "?")
+            icon = status_icon.get(info["stage"], "?")
             success_pct = f"{info['success_rate'] * 100:.0f}%"
             desc = info["description"] or ""
-            path = "`span-bridge`" if info["source"] == "pipeline" else "`icc_exec`"
-            rows.append(f"| `{key}` | {info['status']} {icon} | {success_pct} | {path} | {desc} |")
+            path = "`span-bridge`" if info["stage"] == "stable" else "`icc_exec`"
+            rows.append(f"| `{key}` | {info['stage']} {icon} | {success_pct} | {path} | {desc} |")
         header = (
             "---\n"
             "## Tracked Intents (Emerge flywheel)\n"

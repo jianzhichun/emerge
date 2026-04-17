@@ -168,7 +168,7 @@ data = np.array([1, 2, 3])
 print(data.mean())
 ```
 
-**Exception: Windows COM objects** — COM apartments are thread-local; COM objects do not survive across calls. See `writing-vertical-adapter` skill (Windows COM Verticals section) and `~/.emerge/connectors/<vertical>/NOTES.md` for vertical-specific patterns.
+**Exception: Windows COM objects** — COM apartments are thread-local; COM objects do not survive across calls. See `~/.emerge/connectors/<vertical>/NOTES.md` for vertical-specific patterns.
 
 Non-COM globals (dicts, numpy arrays, plain objects) are safe to reuse across calls — skip redundant imports after the first call.
 
@@ -240,5 +240,5 @@ These two endpoints are consumed by `OperatorMonitor` in the daemon when `EMERGE
 | Windows: runner starts but COM fails | Runner is in Session 0. Verify with `ProcessIdToSessionId`. Fix: reboot so registry autostart fires in Session 1, or user double-clicks VBS. Never SSH-exec to fix — SSH always creates Session 0. |
 | `schtasks /run` from SSH for GUI runner | Still Session 0. `schtasks /run` ignores the interactive session. Only actual logon triggers Session 1. |
 | `ModuleNotFoundError: scripts.pipeline_engine` | Missing `sys.path` self-insert in `remote_runner.py`. |
-| COM object works in call 1, fails in call 2 with "not connected to server" | COM apartments are thread-local. See `writing-vertical-adapter` skill → Windows COM Verticals. |
+| COM object works in call 1, fails in call 2 with "not connected to server" | COM apartments are thread-local. Re-dispatch COM object every call and follow connector NOTES guidance. |
 | Redundant `import json` / `import pathlib` in every call | ExecSession globals persist across calls for the same profile — only import once. Exception: COM. |

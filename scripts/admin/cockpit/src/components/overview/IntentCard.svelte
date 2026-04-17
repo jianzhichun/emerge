@@ -1,8 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import type { PolicyPipeline } from '../../lib/types';
+  import type { PolicyIntent } from '../../lib/types';
 
-  interface PipelineActionEvent {
+  interface IntentActionEvent {
     action: string;
     key: string;
   }
@@ -24,12 +24,12 @@
     ]
   };
 
-  export let pipeline: PolicyPipeline;
+  export let intent: PolicyIntent;
   export let queued = false;
   export let critical = false;
   export let hideConnector = false;
 
-  const dispatch = createEventDispatcher<{ queueAction: PipelineActionEvent }>();
+  const dispatch = createEventDispatcher<{ queueAction: IntentActionEvent }>();
 
   function parseKey(key: string): { connector: string; mode: string; name: string } {
     const [connector = '', mode = '', ...rest] = key.split('.');
@@ -42,14 +42,14 @@
 
   function sendAction(action: string): void {
     if (action === 'delete') {
-      const confirmed = window.confirm(`Delete pipeline "${String(pipeline.key ?? '')}"? This removes tracking data.`);
+      const confirmed = window.confirm(`Delete intent "${String(intent.key ?? '')}"? This removes tracking data.`);
       if (!confirmed) {
         return;
       }
     }
     if (action === 'promote-stable') {
       const confirmed = window.confirm(
-        `Promote "${String(pipeline.key ?? '')}" to stable? Stable pipelines can bypass LLM inference.`
+        `Promote "${String(intent.key ?? '')}" to stable? Stable intents can bypass LLM inference.`
       );
       if (!confirmed) {
         return;
@@ -57,7 +57,7 @@
     }
     dispatch('queueAction', {
       action,
-      key: String(pipeline.key ?? '')
+      key: String(intent.key ?? '')
     });
   }
 
@@ -94,14 +94,14 @@
     return '';
   }
 
-  $: key = String(pipeline.key ?? '');
+  $: key = String(intent.key ?? '');
   $: parts = parseKey(key);
-  $: status = String(pipeline.status ?? 'explore');
-  $: successRate = typeof pipeline.success_rate === 'number' ? pipeline.success_rate : null;
-  $: verifyRate = typeof pipeline.verify_rate === 'number' ? pipeline.verify_rate : null;
-  $: failures = Number(pipeline.consecutive_failures ?? 0);
+  $: status = String(intent.stage ?? 'explore');
+  $: successRate = typeof intent.success_rate === 'number' ? intent.success_rate : null;
+  $: verifyRate = typeof intent.verify_rate === 'number' ? intent.verify_rate : null;
+  $: failures = Number(intent.consecutive_failures ?? 0);
   $: actions = ACTION_DEFS[status] ?? ACTION_DEFS.explore;
-  $: statusLabel = `${status}${pipeline.rollout_pct == null ? '' : ` · ${pipeline.rollout_pct}%`}${pipeline.synthesis_ready ? ' · synthesis' : ''}`;
+  $: statusLabel = `${status}${intent.rollout_pct == null ? '' : ` · ${intent.rollout_pct}%`}${intent.synthesis_ready ? ' · synthesis' : ''}`;
 </script>
 
 <article class={`pipeline-card ${status} ${critical ? 'critical' : ''} ${queued ? 'queued' : ''}`}>
@@ -125,16 +125,16 @@
     </div>
   </header>
 
-  {#if pipeline.description}
-    <p class="pipeline-desc">{pipeline.description}</p>
+  {#if intent.description}
+    <p class="pipeline-desc">{intent.description}</p>
   {/if}
 
   <div class="pipeline-metrics">
     <span>success <b class={metricClass(successRate)}>{successRate == null ? '?' : successRate.toFixed(2)}</b></span>
     <span>verify <b class={metricClass(verifyRate)}>{verifyRate == null ? '?' : verifyRate.toFixed(2)}</b></span>
     <span>failures <b class={failures >= 2 ? 'warn' : ''}>{failures}</b></span>
-    {#if Number(pipeline.rollback_executed_count ?? 0) > 0}
-      <span>rollbacks <b class="warn">{pipeline.rollback_executed_count}</b></span>
+    {#if Number(intent.rollback_executed_count ?? 0) > 0}
+      <span>rollbacks <b class="warn">{intent.rollback_executed_count}</b></span>
     {/if}
   </div>
 </article>

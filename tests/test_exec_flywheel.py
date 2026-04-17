@@ -129,11 +129,11 @@ def test_auto_promotes_candidate_to_canary_when_thresholds_met(tmp_path: Path):
             )
             assert out.get("isError") is not True
 
-        reg = tmp_path / "state" / "pipelines-registry.json"
+        reg = tmp_path / "state" / "intents.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
         key = "zwcad.write.add-wall"
-        assert data["pipelines"][key]["status"] == "canary"
-        assert data["pipelines"][key]["rollout_pct"] == 20
+        assert data["intents"][key]["stage"] == "canary"
+        assert data["intents"][key]["rollout_pct"] == 20
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
@@ -178,11 +178,11 @@ def test_auto_rolls_back_canary_on_two_consecutive_failures(tmp_path: Path):
             },
         )
 
-        reg = tmp_path / "state" / "pipelines-registry.json"
+        reg = tmp_path / "state" / "intents.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
         key = "zwcad.write.add-wall"
-        assert data["pipelines"][key]["status"] == "explore"
-        assert data["pipelines"][key]["last_transition_reason"] == "two_consecutive_failures"
+        assert data["intents"][key]["stage"] == "explore"
+        assert data["intents"][key]["last_transition_reason"] == "two_consecutive_failures"
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
@@ -217,11 +217,11 @@ def test_canary_sampling_progresses_to_stable(tmp_path: Path):
                     "verify_passed": True,
                 },
             )
-        reg = tmp_path / "state" / "pipelines-registry.json"
+        reg = tmp_path / "state" / "intents.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
         key = "zwcad.write.add-wall"
-        assert data["pipelines"][key]["status"] == "stable"
-        assert data["pipelines"][key]["rollout_pct"] == 100
+        assert data["intents"][key]["stage"] == "stable"
+        assert data["intents"][key]["rollout_pct"] == 100
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
@@ -250,11 +250,11 @@ def test_stable_rolls_back_on_window_failure_rate(tmp_path: Path):
             else:
                 daemon.call_tool("icc_exec", {**common, "code": "raise RuntimeError('window-fail')"})
 
-        reg = tmp_path / "state" / "pipelines-registry.json"
+        reg = tmp_path / "state" / "intents.json"
         data = json.loads(reg.read_text(encoding="utf-8"))
         key = "zwcad.write.add-wall"
-        assert data["pipelines"][key]["status"] == "explore"
-        assert data["pipelines"][key]["last_transition_reason"] == "window_failure_rate"
+        assert data["intents"][key]["stage"] == "explore"
+        assert data["intents"][key]["last_transition_reason"] == "window_failure_rate"
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
@@ -279,16 +279,16 @@ def test_synthesis_ready_flag_set_on_canary_promotion(tmp_path):
                 "intent_signature": "test.read.synth",
                 "no_replay": False,
             })
-        registry_path = tmp_path / "state" / "pipelines-registry.json"
+        registry_path = tmp_path / "state" / "intents.json"
         assert registry_path.exists()
         data = json.loads(registry_path.read_text())
-        entries = data.get("pipelines", {})
+        entries = data.get("intents", {})
         synth_entry = next(
             (v for k, v in entries.items() if "test.read.synth" in k),
             None,
         )
         assert synth_entry is not None, "no registry entry found for test.read.synth"
-        assert synth_entry.get("status") == "canary", f"expected canary, got {synth_entry.get('status')}"
+        assert synth_entry.get("stage") == "canary", f"expected canary, got {synth_entry.get('stage')}"
         assert synth_entry.get("synthesis_ready") is True
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)

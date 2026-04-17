@@ -28,8 +28,6 @@ class SpanHandlers:
         record_pipeline_event: Callable,  # FlywheelRecorder.record_pipeline_event
         tool_error: Callable[[str], dict],
         tool_ok_json: Callable[[Any], dict],
-        elicit: Callable[..., dict | None],
-        is_http_mode: Callable[[], bool],
     ) -> None:
         self._span_tracker = span_tracker
         self._open_spans = open_spans
@@ -41,8 +39,6 @@ class SpanHandlers:
         self._record_pipeline_event = record_pipeline_event
         self._tool_error = tool_error
         self._tool_ok_json = tool_ok_json
-        self._elicit = elicit
-        self._is_http_mode = is_http_mode
 
     # ------------------------------------------------------------------
     # icc_span_open
@@ -88,7 +84,7 @@ class SpanHandlers:
                     pass  # PipelineMissingError or any failure → fall through to explore
 
         # Intent gate: new intent for existing connector → confirm_needed
-        _candidates = self._span_tracker._load_candidates()["spans"]
+        _candidates = self._span_tracker._load_candidates()["intents"]
         if intent_signature not in _candidates:
             _connector = intent_signature.split(".", 1)[0]
             _same_connector = {
@@ -241,28 +237,6 @@ class SpanHandlers:
         real_dir.mkdir(parents=True, exist_ok=True)
         real_py = real_dir / f"{pipeline_name}.py"
         real_yaml = real_dir / f"{pipeline_name}.yaml"
-
-        # HTTP mode: PreToolUse already confirmed via permissionDecision:ask — skip elicit
-        if not self._is_http_mode():
-            elicit_resp = self._elicit(
-                f"Activate pipeline `{intent_signature}`?\n"
-                f"This will move from _pending/ to {real_dir} and enable the bridge.",
-                {
-                    "type": "object",
-                    "properties": {"confirmed": {"type": "boolean", "title": "Activate"}},
-                    "required": ["confirmed"],
-                },
-            )
-            if elicit_resp is None:
-                return self._tool_error(
-                    "icc_span_approve: elicitation declined or timed out — operation cancelled"
-                )
-            if not elicit_resp.get("confirmed"):
-                return self._tool_ok_json({
-                    "approved": False,
-                    "cancelled": True,
-                    "message": "icc_span_approve cancelled by user.",
-                })
 
         fd, tmp_py = tempfile.mkstemp(prefix=".approve-", dir=str(real_dir))
         try:

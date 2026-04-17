@@ -1,44 +1,41 @@
 from __future__ import annotations
 
-import threading
 from collections import deque
 from pathlib import Path
 from typing import Any
 
-from scripts.observer_plugin import AdapterRegistry
-from scripts.pattern_detector import PatternDetector, PatternSummary
+from scripts.intent_registry import IntentRegistry
+from scripts.pattern_detector import PatternDetector
+from scripts.policy_engine import derive_stage
 
 
-class OperatorMonitor(threading.Thread):
-    """Background thread that watches local operator event files,
-    runs PatternDetector against a per-machine sliding window buffer,
-    and writes pattern alerts directly to events-local.jsonl."""
+class OperatorMonitor:
+    """Process local operator events and emit pattern alerts."""
 
     def __init__(
         self,
         machines: dict[str, Any],
         poll_interval_s: float = 5.0,
         event_root: Path | None = None,
-        adapter_root: Path | None = None,
         state_root: Path | None = None,
     ) -> None:
-        super().__init__(daemon=True, name="OperatorMonitor")
         self._machines = machines
         self._poll_interval_s = poll_interval_s
         self._event_root = event_root or (Path.home() / ".emerge" / "operator-events")
         self._state_root = state_root or (Path.home() / ".emerge" / "repl")
-        self._adapter_registry = AdapterRegistry(adapter_root=adapter_root)
         self._detector = PatternDetector()
         self._last_poll_ms: dict[str, int] = {}
         self._event_buffers: dict[str, deque] = {}
-        self._stop_event = threading.Event()
+        self._started = False
 
     def stop(self) -> None:
-        self._stop_event.set()
+        self._started = False
 
-    def run(self) -> None:
-        """Block until stop() is called. Operator events arrive via process_local_file()."""
-        self._stop_event.wait()
+    def start(self) -> None:
+        self._started = True
+
+    def is_alive(self) -> bool:
+        return self._started
 
     def process_local_file(self, events_path: Path) -> None:
         """Process a single local events.jsonl file. Called by EventRouter on file change."""
@@ -77,20 +74,22 @@ class OperatorMonitor(threading.Thread):
             return
         summaries = self._detector.ingest(list(buf))
         for summary in summaries:
-            app = summary.context_hint.get("app", machine_id)
-            plugin = self._adapter_registry.get_plugin(app)
-            try:
-                context = plugin.get_context(summary.context_hint)
-            except Exception:
-                context = summary.context_hint.copy()
             # Primary path: write directly to events-local.jsonl
             ts_ms = int(_time.time() * 1000)
             events_local = self._state_root / "events-local.jsonl"
             events_local.parent.mkdir(parents=True, exist_ok=True)
+            # Resolve stage from IntentRegistry — single source of truth.
+            # Unknown signatures default to "explore" via derive_stage on an
+            # empty entry.
+            try:
+                entry = IntentRegistry.get(self._state_root, summary.intent_signature) or {}
+                stage = str(entry.get("stage") or derive_stage(entry))
+            except Exception:
+                stage = summary.policy_stage
             alert = {
                 "type": "local_pattern_alert",
                 "ts_ms": ts_ms,
-                "stage": summary.policy_stage,
+                "stage": stage,
                 "intent_signature": summary.intent_signature,
                 "meta": {
                     "occurrences": summary.occurrences,

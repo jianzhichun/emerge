@@ -119,12 +119,12 @@ Run, in order:
 2. `pytest -q` full suite.
 3. Confirm policy observability:
   - `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" policy-status --pretty`
-  - verify pipeline entry appears and counters move after calls.
+  - verify intent entry appears and counters move after calls.
 
 Initialization is complete only when:
 
 - read and write `icc_exec` calls succeed (using the connector's `intent_signature`)
-- policy status includes the new pipeline key (shape: `pipeline::<connector>.<mode>.<pipeline>`)
+- policy status includes the new intent key (shape: `<connector>.<mode>.<pipeline>`)
 - when remote mode is used, at least one call is confirmed through runner dispatch
 - tests and lint pass.
 
@@ -179,7 +179,7 @@ When any `intent_signature` for this vertical reaches `stable` status in
 > "`<vertical>.*` pipeline flywheel is stable. Consider establishing a reverse
 > flywheel to observe operator behavior and proactively identify repetitive
 > actions the AI can take over. If needed, invoke the
-> `writing-vertical-adapter` skill."
+> `operator-monitor-debug` skill."
 
 This connects the forward flywheel (AI learns to DO tasks) to the reverse
 flywheel (AI learns to RECOGNIZE when humans are doing those tasks repeatedly).

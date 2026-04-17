@@ -7,13 +7,13 @@ from scripts.admin.actions.registry import ActionContext, ActionRegistry, Action
 
 
 @dataclass(frozen=True)
-class PipelineSetPayload:
+class IntentSetPayload:
     key: str
     fields: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
-class PipelineDeletePayload:
+class IntentDeletePayload:
     key: str
 
 
@@ -114,18 +114,18 @@ def _enrich_tool_call(
 def register_builtins(registry: type[ActionRegistry]) -> None:
     registry.register(
         ActionSpec(
-            type="pipeline.set",
-            payload=PipelineSetPayload,
+            type="intent.set",
+            payload=IntentSetPayload,
             hazard="write",
-            description="Update pipeline policy fields.",
+            description="Update intent policy fields.",
         )
     )
     registry.register(
         ActionSpec(
-            type="pipeline.delete",
-            payload=PipelineDeletePayload,
+            type="intent.delete",
+            payload=IntentDeletePayload,
             hazard="danger",
-            description="Delete a pipeline policy entry.",
+            description="Delete an intent policy entry.",
         )
     )
     registry.register(

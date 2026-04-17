@@ -41,7 +41,6 @@ def test_process_local_file_writes_events_local_jsonl(tmp_path):
         machines={},
         poll_interval_s=0.05,
         event_root=tmp_path / "operator-events",
-        adapter_root=tmp_path / "adapters",
         state_root=state_root,
     )
     monitor.process_local_file(events_file)
@@ -70,7 +69,6 @@ def test_process_local_file_no_events_does_not_write(tmp_path):
         machines={},
         poll_interval_s=0.05,
         event_root=tmp_path / "operator-events",
-        adapter_root=tmp_path / "adapters",
         state_root=state_root,
     )
     monitor.process_local_file(events_file)
@@ -86,13 +84,11 @@ def test_operator_monitor_stops_cleanly(tmp_path):
         machines={},
         poll_interval_s=0.05,
         event_root=tmp_path / "events",
-        adapter_root=tmp_path / "adapters",
         state_root=state_root,
     )
     monitor.start()
     assert monitor.is_alive()
     monitor.stop()
-    monitor.join(timeout=1.0)
     assert not monitor.is_alive()
 
 
@@ -106,7 +102,6 @@ def test_process_local_file_accumulates_across_calls(tmp_path):
         machines={},
         poll_interval_s=0.05,
         event_root=tmp_path / "operator-events",
-        adapter_root=tmp_path / "adapters",
         state_root=state_root,
     )
     monitor.process_local_file(events_file)

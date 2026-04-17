@@ -23,11 +23,9 @@ from scripts.policy_config import (  # noqa: E402
     pin_plugin_data_path_if_present,
 )
 from scripts.crystallizer import PipelineCrystallizer  # noqa: E402
+from scripts.intent_registry import IntentRegistry  # noqa: E402
 from scripts.runner_client import RunnerRouter  # noqa: E402
 from scripts.exec_session import ExecSession  # noqa: E402
-from scripts.observer_plugin import AdapterRegistry  # noqa: E402
-from scripts.admin.actions import ActionRegistry  # noqa: E402
-_stdout_lock = threading.Lock()
 
 
 class EmergeDaemon:
@@ -53,7 +51,7 @@ class EmergeDaemon:
         self._root = resolved_root
         self._script_roots = self._resolve_script_roots()
         # Coarse lock protecting concurrent read-modify-write operations on
-        # candidates.json and pipelines-registry.json. Always held for the
+        # candidates.json and intents.json. Always held for the
         # full load→mutate→save cycle to prevent lost updates.
         self._registry_lock = threading.Lock()
         # Cache for RunnerRouter — rebuilt only when runner-map.json changes on disk.
@@ -75,25 +73,39 @@ class EmergeDaemon:
             self._version = "0.0.0"
         self._operator_monitor: "OperatorMonitor | None" = None
         self._event_router = None
-        self._elicit_events: dict[str, threading.Event] = {}
-        self._elicit_results: dict[str, dict] = {}
+        from scripts.policy_engine import PolicyEngine
         from scripts.span_tracker import SpanTracker
+        from scripts.mcp.flywheel_recorder import FlywheelRecorder
         _hook_state_root = Path(default_hook_state_root())
+        # Single PolicyEngine instance shared across all evidence producers.
+        # This is the *only* writer for intents.json stage fields — span close
+        # (SpanTracker), icc_exec/pipeline events (FlywheelRecorder), and
+        # icc_reconcile all flow through this one engine.
+        self._policy_engine = PolicyEngine(
+            state_root=lambda: self._state_root,
+            lock=self._registry_lock,
+            sink=lambda: self._sink,
+            auto_crystallize=lambda **kw: self._auto_crystallize(**kw),
+            has_synthesizable_wal=lambda sig, tp: self._flywheel.has_synthesizable_wal_entry(sig, tp),
+            write_mcp_push=lambda _p: None,
+            session_id=lambda: self._base_session_id,
+        )
         self._span_tracker = SpanTracker(
             state_root=self._state_root,
             hook_state_root=_hook_state_root,
+            policy_engine=self._policy_engine,
         )
         self._open_spans: dict[str, Any] = {}  # span_id → SpanRecord; in-process cache
         self._intent_gate: set[str] = self._load_intent_gate()  # intents confirmed as genuinely new
-        from scripts.mcp.flywheel_recorder import FlywheelRecorder
         self._flywheel = FlywheelRecorder(
             state_root=lambda: self._state_root,
             session_id=lambda: self._base_session_id,
             registry_lock=self._registry_lock,
             sink=lambda: self._sink,
             pipeline=lambda: self.pipeline,
-            write_mcp_push=lambda p: self._write_mcp_push(p),
+            write_mcp_push=lambda _p: None,
             auto_crystallize=lambda **kw: self._auto_crystallize(**kw),
+            policy_engine=self._policy_engine,
         )
         from scripts.mcp.resources import McpResourceHandler
         self._resource_handler = McpResourceHandler(
@@ -114,10 +126,7 @@ class EmergeDaemon:
             record_pipeline_event=self._flywheel.record_pipeline_event,
             tool_error=self._tool_error,
             tool_ok_json=self._tool_ok_json,
-            elicit=lambda *a, **kw: self._elicit(*a, **kw),
-            is_http_mode=lambda: getattr(self, "_http_mode", False),
         )
-        self._register_adapter_actions()
 
     def _cockpit_broadcast(self, event: dict) -> None:
         """Forward event to cockpit SSE clients (no-op if not in HTTP mode)."""
@@ -125,20 +134,6 @@ class EmergeDaemon:
         if http_srv is None:
             return
         http_srv._notify_cockpit_broadcast(event)
-
-    def _register_adapter_actions(self) -> None:
-        """Load adapters once at daemon boot and let them register custom action specs."""
-        registry = AdapterRegistry()
-        for item in registry.list_plugins():
-            name = str(item.get("name", "")).strip()
-            if not name:
-                continue
-            plugin = registry.get_plugin(name)
-            try:
-                plugin.register_actions(ActionRegistry)
-            except Exception:
-                # Adapter extensions are optional and must not block daemon startup.
-                continue
 
     def _hook_state_path(self) -> Path:
         return Path(default_hook_state_root()) / "state.json"
@@ -214,12 +209,10 @@ class EmergeDaemon:
 
         # Key is the pipeline_id itself — no prefixes, no runner dimension
         key = base_pipeline_id
-        pipelines_path = self._state_root / "pipelines-registry.json"
-        pipelines_data = load_json_object(pipelines_path, root_key="pipelines")
-        bridge_entry = pipelines_data.get("pipelines", {}).get(key)
+        bridge_entry = IntentRegistry.get(self._state_root, key)
         if not isinstance(bridge_entry, dict):
             return None
-        if str(bridge_entry.get("status", "explore")) != "stable":
+        if str(bridge_entry.get("stage", "explore")) != "stable":
             return None
 
         parts = base_pipeline_id.split(".", 2)
@@ -242,26 +235,15 @@ class EmergeDaemon:
                 "flywheel bridge failed for %s (%s), falling back to LLM: %s",
                 base_pipeline_id, mode, _bridge_exc,
             )
-            # Store failure info for icc_exec to inject into the response
+            # Store failure info for icc_exec to inject into the response.
+            # Falling back to LLM: the subsequent icc_exec path will record
+            # evidence via PolicyEngine.apply_evidence — PolicyEngine is the
+            # unique writer for intents.json, so we do not bump counters here.
             self._last_bridge_failure = {
                 "pipeline_id": base_pipeline_id,
                 "mode": mode,
                 "reason": str(_bridge_exc),
             }
-            # Increment consecutive_failures directly in the registry so the policy engine
-            # can downgrade stable→explore if the bridge keeps failing, without polluting
-            # the recent_outcomes window (which would cause spurious window-failure downgrades).
-            try:
-                _reg_path = self._state_root / "pipelines-registry.json"
-                with self._registry_lock:
-                    _reg = load_json_object(_reg_path, root_key="pipelines")
-                    _pe = _reg["pipelines"].get(base_pipeline_id)
-                    if isinstance(_pe, dict):
-                        _pe["consecutive_failures"] = int(_pe.get("consecutive_failures", 0)) + 1
-                        _reg["pipelines"][base_pipeline_id] = _pe
-                        atomic_write_json(_reg_path, _reg)
-            except Exception:
-                pass
             return None
         result["bridge_promoted"] = True
         try:
@@ -502,6 +484,11 @@ class EmergeDaemon:
             pipeline_name = str(arguments.get("pipeline_name", "")).strip()
             mode = str(arguments.get("mode", "read")).strip()
             target_profile = str(arguments.get("target_profile", "default")).strip()
+            _persistent_raw = arguments.get("persistent", False)
+            if isinstance(_persistent_raw, str):
+                persistent = _persistent_raw.strip().lower() in ("1", "true", "yes", "on")
+            else:
+                persistent = bool(_persistent_raw)
             if not all([intent_signature, connector, pipeline_name, mode]):
                 return self._tool_error(
                     "icc_crystallize: intent_signature, connector, pipeline_name, and mode are required"
@@ -516,6 +503,7 @@ class EmergeDaemon:
                 pipeline_name=pipeline_name,
                 mode=mode,
                 target_profile=target_profile,
+                persistent=persistent,
             )
         except Exception as exc:
             return self._tool_error(f"icc_crystallize failed: {exc}")
@@ -564,8 +552,6 @@ class EmergeDaemon:
             arguments,
             tool_error=self._tool_error,
             tool_ok_json=self._tool_ok_json,
-            elicit=self._elicit,
-            http_mode=getattr(self, "_http_mode", False),
         )
 
     def handle_jsonrpc(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -596,7 +582,6 @@ class EmergeDaemon:
                         "resources": {"subscribe": True},
                         "prompts": {},
                         "logging": {},
-                        "elicitation": {},
                     },
                     "serverInfo": {"name": "emerge", "version": self._version},
                 },
@@ -827,7 +812,6 @@ class EmergeDaemon:
             machines={},
             poll_interval_s=poll_s,
             event_root=Path.home() / ".emerge" / "operator-events",
-            adapter_root=Path.home() / ".emerge" / "adapters",
             state_root=self._state_root,
         )
         self._operator_monitor.start()
@@ -872,46 +856,6 @@ class EmergeDaemon:
         except Exception:
             pass
 
-    def _write_mcp_push(self, payload: dict) -> None:
-        """Write a JSON-RPC notification/request to stdout for CC to receive."""
-        line = json.dumps(payload) + "\n"
-        with _stdout_lock:
-            sys.stdout.write(line)
-            sys.stdout.flush()
-
-    def _elicit(
-        self,
-        message: str,
-        schema: dict,
-        timeout: float = 60.0,
-    ) -> dict | None:
-        """Send elicitations/create to CC; block current thread until response.
-
-        Must be called from a worker thread (not the main stdio loop).
-        Returns the content dict from the response, or None on timeout.
-
-        In HTTP mode: CC does not maintain persistent SSE channel, returns None immediately.
-        """
-        if getattr(self, "_http_mode", False):
-            return None  # HTTP mode: no server→client push channel
-        import uuid
-        elicit_id = f"elicit-{uuid.uuid4().hex[:8]}"
-        event = threading.Event()
-        self._elicit_events[elicit_id] = event
-        self._write_mcp_push({
-            "jsonrpc": "2.0",
-            "id": elicit_id,
-            "method": "elicitations/create",
-            "params": {"message": message, "requestedSchema": schema},
-        })
-        fired = event.wait(timeout=timeout)
-        if not fired:
-            self._elicit_events.pop(elicit_id, None)
-            self._elicit_results.pop(elicit_id, None)
-            return None
-        return self._elicit_results.pop(elicit_id, None)
-
-
 def run_http(port: int = 8789, bind_host: str | None = None) -> None:
     """Start emerge daemon in HTTP MCP server mode with in-process cockpit."""
     import atexit
@@ -919,7 +863,6 @@ def run_http(port: int = 8789, bind_host: str | None = None) -> None:
     from scripts.daemon_http import DaemonHTTPServer
 
     daemon = EmergeDaemon()
-    daemon._http_mode = True  # disable _elicit() blocking
     daemon.start_operator_monitor()
     daemon.start_event_router()
     atexit.register(daemon.stop_operator_monitor)

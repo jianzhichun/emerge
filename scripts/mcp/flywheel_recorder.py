@@ -1,15 +1,20 @@
-"""Flywheel recording and policy lifecycle for EmergeDaemon.
+"""Flywheel recording for EmergeDaemon.
 
-FlywheelRecorder owns all candidate tracking and pipeline registry transitions:
-  - record_exec_event / record_pipeline_event  — append to session WAL files
-  - update_pipeline_registry                   — explore→canary→stable transitions
-  - increment_human_fix                        — driven by icc_reconcile(outcome=correct)
-  - should_sample / has_synthesizable_wal_entry — sampling and WAL scan helpers
-  - resolve_exec_candidate_key / resolve_pipeline_candidate_key — key derivation
+FlywheelRecorder is now a pure *evidence* recorder. It never writes
+``intents.json`` stage directly — all stage transitions flow through
+:class:`scripts.policy_engine.PolicyEngine`, the single lifecycle writer.
 
-All mutable state lives in files managed by the daemon (candidates.json,
-pipelines-registry.json, WAL). The lock is shared with the daemon so
-concurrent tool calls are serialized correctly.
+Responsibilities kept here:
+  - record_exec_event / record_pipeline_event — append to session WAL files
+    and session ``candidates.json`` (sampling bookkeeping), then hand evidence
+    to PolicyEngine for global intent state.
+  - increment_human_fix                       — driven by ``icc_reconcile``.
+  - should_sample / has_synthesizable_wal_entry — sampling + WAL scan helpers.
+  - resolve_exec_candidate_key / resolve_pipeline_candidate_key — key derivation.
+
+The session-level ``candidates.json`` is distinct from the global
+``intents.json``: the former tracks per-session sampling counters (useful
+for canary rollout), the latter is the global aggregate owned by PolicyEngine.
 """
 from __future__ import annotations
 
@@ -23,14 +28,6 @@ from typing import Any, Callable
 
 from scripts.policy_config import (
     PIPELINE_KEY_RE as _PIPELINE_KEY_RE,
-    PROMOTE_MAX_HUMAN_FIX_RATE,
-    PROMOTE_MIN_ATTEMPTS,
-    PROMOTE_MIN_SUCCESS_RATE,
-    PROMOTE_MIN_VERIFY_RATE,
-    ROLLBACK_CONSECUTIVE_FAILURES,
-    STABLE_MIN_ATTEMPTS,
-    STABLE_MIN_SUCCESS_RATE,
-    STABLE_MIN_VERIFY_RATE,
     WINDOW_SIZE,
     atomic_write_json,
     derive_profile_token,
@@ -38,6 +35,9 @@ from scripts.policy_config import (
     truncate_jsonl_if_needed,
 )
 from scripts.pipeline_engine import PipelineEngine
+from scripts.intent_registry import IntentRegistry
+from scripts.policy_engine import PolicyEngine
+
 _log = logging.getLogger(__name__)
 
 
@@ -54,6 +54,7 @@ class FlywheelRecorder:
         pipeline: Callable[[], PipelineEngine], # for connector_roots
         write_mcp_push: Callable[[dict], None], # pushes notifications to CC stdout
         auto_crystallize: Callable[..., None],  # triggers skeleton generation
+        policy_engine: PolicyEngine | None = None,
     ) -> None:
         self._get_state_root = state_root
         self._get_session_id = session_id
@@ -62,6 +63,17 @@ class FlywheelRecorder:
         self._get_pipeline = pipeline
         self._write_mcp_push = write_mcp_push
         self._auto_crystallize = auto_crystallize
+        # PolicyEngine owns all stage writes. FlywheelRecorder hands evidence
+        # to it and never touches intents.json stage fields directly.
+        self._policy = policy_engine or PolicyEngine(
+            state_root=state_root,
+            lock=registry_lock,
+            sink=sink,
+            auto_crystallize=auto_crystallize,
+            has_synthesizable_wal=self.has_synthesizable_wal_entry,
+            write_mcp_push=write_mcp_push,
+            session_id=session_id,
+        )
 
     # ------------------------------------------------------------------
     # Key derivation (static — no daemon state needed)
@@ -97,17 +109,13 @@ class FlywheelRecorder:
             return True
         state_root = self._get_state_root()
         session_id = self._get_session_id()
-        path = state_root / "pipelines-registry.json"
-        if not path.exists():
+        intent_entry = IntentRegistry.get(state_root, candidate_key)
+        if not isinstance(intent_entry, dict):
             return True
-        data = load_json_object(path, root_key="pipelines")
-        pipeline = data.get("pipelines", {}).get(candidate_key)
-        if not isinstance(pipeline, dict):
+        stage = str(intent_entry.get("stage", "explore"))
+        if stage != "canary":
             return True
-        status = str(pipeline.get("status", "explore"))
-        if status != "canary":
-            return True
-        rollout_pct = int(pipeline.get("rollout_pct", 0) or 0)
+        rollout_pct = int(intent_entry.get("rollout_pct", 0) or 0)
         rollout_pct = max(0, min(100, rollout_pct))
         if rollout_pct <= 0:
             return False
@@ -208,25 +216,27 @@ class FlywheelRecorder:
     # ------------------------------------------------------------------
 
     def increment_human_fix(self, intent_signature: str) -> None:
-        """Increment human_fixes for the candidate keyed by intent_signature."""
+        """Increment human_fixes for the candidate keyed by intent_signature.
+
+        Updates both the session-level candidate (for sampling bookkeeping) and
+        routes through PolicyEngine for the global ``intents.json`` entry.
+        """
         state_root = self._get_state_root()
         session_id = self._get_session_id()
         session_dir = state_root / session_id
         candidates_path = session_dir / "candidates.json"
-        if not candidates_path.exists():
-            return
-        with self._lock:
-            registry = load_json_object(candidates_path, root_key="candidates")
-            entry = registry["candidates"].get(intent_signature)
-            if not isinstance(entry, dict):
-                return
-            entry["human_fixes"] = int(entry.get("human_fixes", 0)) + 1
-            registry["candidates"][intent_signature] = entry
-            atomic_write_json(candidates_path, registry)
-            try:
-                self.update_pipeline_registry(candidate_key=intent_signature, entry=entry)
-            except Exception:
-                pass
+        if candidates_path.exists():
+            with self._lock:
+                registry = load_json_object(candidates_path, root_key="candidates")
+                entry = registry["candidates"].get(intent_signature)
+                if isinstance(entry, dict):
+                    entry["human_fixes"] = int(entry.get("human_fixes", 0)) + 1
+                    registry["candidates"][intent_signature] = entry
+                    atomic_write_json(candidates_path, registry)
+        try:
+            self._policy.increment_human_fix(intent_signature)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Event recording
@@ -298,7 +308,6 @@ class FlywheelRecorder:
             entry = registry["candidates"].get(
                 key,
                 {
-                    "source": "exec",
                     "target_profile": target_profile,
                     "last_execution_path": execution_path,
                     "intent_signature": intent_signature,
@@ -327,7 +336,19 @@ class FlywheelRecorder:
             )
             registry["candidates"][key] = entry
             atomic_write_json(registry_path, registry)
-            self.update_pipeline_registry(candidate_key=key, entry=entry)
+        # Hand one evidence event to PolicyEngine (outside the candidates.json lock
+        # is fine — PolicyEngine has its own registry lock).
+        if sampled_in_policy or is_error:
+            self._policy.apply_evidence(
+                intent_signature,
+                success=not is_error,
+                verify_observed=True,
+                verify_passed=trusted_verify_passed,
+                description=description,
+                target_profile=target_profile,
+                execution_path=execution_path,
+                ts_ms=event["ts_ms"],
+            )
 
     def record_pipeline_event(
         self,
@@ -418,7 +439,6 @@ class FlywheelRecorder:
             entry = registry["candidates"].get(
                 key,
                 {
-                    "source": "pipeline",
                     "pipeline_id": pipeline_id,
                     "target_profile": target_profile,
                     "last_execution_path": execution_path,
@@ -439,7 +459,6 @@ class FlywheelRecorder:
                     "last_ts_ms": 0,
                 },
             )
-            entry["source"] = "pipeline"
             entry["last_execution_path"] = execution_path
             if pipeline_description and not entry.get("description"):
                 entry["description"] = pipeline_description
@@ -469,194 +488,26 @@ class FlywheelRecorder:
             )
             registry["candidates"][key] = entry
             atomic_write_json(registry_path, registry)
-            self.update_pipeline_registry(candidate_key=key, entry=entry)
-
-    # ------------------------------------------------------------------
-    # Policy lifecycle transitions
-    # ------------------------------------------------------------------
-
-    def update_pipeline_registry(
-        self,
-        *,
-        candidate_key: str,
-        entry: dict[str, Any],
-    ) -> None:
-        if not _PIPELINE_KEY_RE.match(candidate_key):
-            _log.warning(
-                "Refusing to register malformed pipeline key %r — must match <connector>.(read|write).<name>",
-                candidate_key,
+        # Hand evidence to PolicyEngine — pipeline events always carry verify signal.
+        if sampled_in_policy or is_error:
+            policy_action = (
+                "rollback" if rollback_executed
+                else "stop" if stop_triggered
+                else "none"
             )
-            return
-
-        state_root = self._get_state_root()
-        session_id = self._get_session_id()
-        registry_path = state_root / "pipelines-registry.json"
-        registry = load_json_object(registry_path, root_key="pipelines")
-        pipeline = registry["pipelines"].get(
-            candidate_key,
-            {
-                "status": "explore",
-                "rollout_pct": 0,
-                "last_transition_reason": "init",
-                "attempts_at_transition": 0,
-            },
-        )
-        if entry.get("description") and not pipeline.get("description"):
-            pipeline["description"] = entry["description"]
-        if entry.get("source") == "pipeline" or pipeline.get("source") != "pipeline":
-            pipeline["source"] = entry.get("source", "exec")
-
-        attempts = int(entry.get("attempts", 0))
-        if attempts == 0:
-            attempts = 1
-        success_rate = float(entry.get("successes", 0)) / attempts
-        verify_rate = float(entry.get("verify_passes", 0)) / attempts
-        human_fix_rate = float(entry.get("human_fixes", 0)) / attempts
-        consecutive_failures = int(entry.get("consecutive_failures", 0))
-        recent_outcomes = list(entry.get("recent_outcomes", []))
-        window_attempts = len(recent_outcomes)
-        window_success_rate = (
-            sum(recent_outcomes) / window_attempts if window_attempts else 0.0
-        )
-
-        if pipeline.get("frozen"):
-            pipeline["success_rate"] = round(success_rate, 4)
-            pipeline["verify_rate"] = round(verify_rate, 4)
-            pipeline["human_fix_rate"] = round(human_fix_rate, 4)
-            pipeline["consecutive_failures"] = consecutive_failures
-            pipeline["window_success_rate"] = round(window_success_rate, 4)
-            pipeline["policy_enforced_count"] = int(entry.get("policy_enforced_count", 0))
-            pipeline["stop_triggered_count"] = int(entry.get("stop_triggered_count", 0))
-            pipeline["rollback_executed_count"] = int(entry.get("rollback_executed_count", 0))
-            pipeline["last_policy_action"] = str(entry.get("last_policy_action", "none"))
-            pipeline["last_execution_path"] = str(entry.get("last_execution_path", "unknown"))
-            pipeline["updated_at_ms"] = int(time.time() * 1000)
-            registry["pipelines"][candidate_key] = pipeline
-            atomic_write_json(registry_path, registry)
-            return
-
-        status = str(pipeline.get("status", "explore"))
-        transitioned = False
-        reason = "no_change"
-
-        if status == "explore":
-            should_promote = (
-                attempts >= PROMOTE_MIN_ATTEMPTS
-                and success_rate >= PROMOTE_MIN_SUCCESS_RATE
-                and verify_rate >= PROMOTE_MIN_VERIFY_RATE
-                and human_fix_rate <= PROMOTE_MAX_HUMAN_FIX_RATE
-                and consecutive_failures == 0
+            self._policy.apply_evidence(
+                key,
+                success=not is_error,
+                verify_observed=True,
+                verify_passed=verify_passed,
+                is_degraded=is_degraded,
+                description=pipeline_description,
+                target_profile=target_profile,
+                execution_path=execution_path,
+                policy_action=policy_action,
+                policy_enforced=policy_enforced,
+                stop_triggered=stop_triggered,
+                rollback_executed=rollback_executed,
+                ts_ms=event["ts_ms"],
             )
-            if should_promote:
-                status = "canary"
-                transitioned = True
-                reason = "promotion_threshold_met"
-                pipeline["rollout_pct"] = 20
-                intent_sig = entry.get("intent_signature", "")
-                if intent_sig and entry.get("source") == "exec":
-                    if self.has_synthesizable_wal_entry(intent_sig, entry.get("target_profile", "default")):
-                        pipeline["synthesis_ready"] = True
-                        try:
-                            self._get_sink().emit(
-                                "policy.synthesis_ready",
-                                {
-                                    "candidate_key": candidate_key,
-                                    "intent_signature": intent_sig,
-                                    "session_id": session_id,
-                                },
-                            )
-                        except Exception:
-                            pass
-                        try:
-                            _parts = intent_sig.split(".", 2)
-                            if len(_parts) == 3:
-                                _conn, _mode, _name = _parts
-                                self._auto_crystallize(
-                                    intent_signature=intent_sig,
-                                    connector=_conn,
-                                    pipeline_name=_name,
-                                    mode=_mode,
-                                    target_profile=entry.get("target_profile", "default"),
-                                )
-                        except Exception:
-                            pass
-        elif status == "canary":
-            if consecutive_failures >= ROLLBACK_CONSECUTIVE_FAILURES:
-                status = "explore"
-                transitioned = True
-                reason = "two_consecutive_failures"
-                pipeline["rollout_pct"] = 0
-            else:
-                should_stabilize = (
-                    attempts >= STABLE_MIN_ATTEMPTS
-                    and success_rate >= STABLE_MIN_SUCCESS_RATE
-                    and verify_rate >= STABLE_MIN_VERIFY_RATE
-                    and consecutive_failures == 0
-                )
-                if should_stabilize:
-                    status = "stable"
-                    transitioned = True
-                    reason = "stable_threshold_met"
-                    pipeline["rollout_pct"] = 100
-        elif status == "stable":
-            if consecutive_failures >= ROLLBACK_CONSECUTIVE_FAILURES:
-                status = "explore"
-                transitioned = True
-                reason = "two_consecutive_failures"
-                pipeline["rollout_pct"] = 0
-            elif window_attempts >= WINDOW_SIZE and window_success_rate < 0.9:
-                status = "explore"
-                transitioned = True
-                reason = "window_failure_rate"
-                pipeline["rollout_pct"] = 0
 
-        pipeline["status"] = status
-        pipeline["success_rate"] = round(success_rate, 4)
-        pipeline["verify_rate"] = round(verify_rate, 4)
-        pipeline["human_fix_rate"] = round(human_fix_rate, 4)
-        pipeline["consecutive_failures"] = consecutive_failures
-        pipeline["window_success_rate"] = round(window_success_rate, 4)
-        pipeline["policy_enforced_count"] = int(entry.get("policy_enforced_count", 0))
-        pipeline["stop_triggered_count"] = int(entry.get("stop_triggered_count", 0))
-        pipeline["rollback_executed_count"] = int(entry.get("rollback_executed_count", 0))
-        pipeline["last_policy_action"] = str(entry.get("last_policy_action", "none"))
-        pipeline["last_execution_path"] = str(entry.get("last_execution_path", "unknown"))
-        pipeline["updated_at_ms"] = int(time.time() * 1000)
-        if transitioned:
-            pipeline["last_transition_reason"] = reason
-            pipeline["attempts_at_transition"] = attempts
-            try:
-                self._get_sink().emit(
-                    "policy.transition",
-                    {"candidate_key": candidate_key, "new_status": status, "session_id": session_id},
-                )
-            except Exception:
-                pass
-            if status == "stable":
-                try:
-                    from scripts.hub_config import append_sync_event, is_configured, load_hub_config
-                    if is_configured():
-                        parts = candidate_key.split(".", 2)
-                        connector = parts[0] if parts else candidate_key
-                        cfg = load_hub_config()
-                        if connector in cfg.get("selected_verticals", []):
-                            pipeline_name = parts[2] if len(parts) >= 3 else candidate_key
-                            append_sync_event({
-                                "event": "stable",
-                                "connector": connector,
-                                "pipeline": pipeline_name,
-                                "ts_ms": int(time.time() * 1000),
-                            })
-                except Exception:
-                    pass
-
-        registry["pipelines"][candidate_key] = pipeline
-        atomic_write_json(registry_path, registry)
-        try:
-            self._write_mcp_push({
-                "jsonrpc": "2.0",
-                "method": "notifications/resources/list_changed",
-                "params": {},
-            })
-        except Exception:
-            pass

@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { createEventDispatcher } from 'svelte';
-  import type { PolicyPipeline, PolicyThresholds } from '../../lib/types';
+  import type { PolicyIntent, PolicyThresholds } from '../../lib/types';
 
-  export let pipelines: PolicyPipeline[] = [];
+  export let intents: PolicyIntent[] = [];
   export let thresholds: PolicyThresholds = {};
   export let connectorNames: string[] = [];
   export let queueSize = 0;
@@ -67,38 +67,38 @@
     ctx.font = 'bold 22px SF Mono, Consolas, monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(String(pipelineCount), cx, cy - 7);
+    ctx.fillText(String(intentCount), cx, cy - 7);
     ctx.fillStyle = '#8b949e';
     ctx.font = '10px SF Mono, Consolas, monospace';
-    ctx.fillText('pipelines', cx, cy + 11);
+    ctx.fillText('intents', cx, cy + 11);
   }
 
   $: rollbackThreshold = Number(thresholds.rollback_consecutive_failures ?? 2);
-  $: critical = pipelines.filter((pipeline) => Number(pipeline.consecutive_failures ?? 0) >= rollbackThreshold);
-  $: canary = pipelines.filter(
-    (pipeline) => Number(pipeline.consecutive_failures ?? 0) < rollbackThreshold && String(pipeline.status ?? 'explore') === 'canary'
+  $: critical = intents.filter((intent) => Number(intent.consecutive_failures ?? 0) >= rollbackThreshold);
+  $: canary = intents.filter(
+    (intent) => Number(intent.consecutive_failures ?? 0) < rollbackThreshold && String(intent.stage ?? 'explore') === 'canary'
   );
-  $: stable = pipelines.filter(
-    (pipeline) => Number(pipeline.consecutive_failures ?? 0) < rollbackThreshold && String(pipeline.status ?? 'explore') === 'stable'
+  $: stable = intents.filter(
+    (intent) => Number(intent.consecutive_failures ?? 0) < rollbackThreshold && String(intent.stage ?? 'explore') === 'stable'
   );
-  $: explore = pipelines.filter((pipeline) => {
-    if (Number(pipeline.consecutive_failures ?? 0) >= rollbackThreshold) {
+  $: explore = intents.filter((intent) => {
+    if (Number(intent.consecutive_failures ?? 0) >= rollbackThreshold) {
       return false;
     }
-    const status = String(pipeline.status ?? 'explore');
+    const status = String(intent.stage ?? 'explore');
     return status !== 'stable' && status !== 'canary';
   });
-  $: pipelineCount = pipelines.length;
-  $: totalRollbacks = pipelines.reduce((sum, pipeline) => sum + Number(pipeline.rollback_executed_count ?? 0), 0);
-  $: totalFailures = pipelines.reduce((sum, pipeline) => sum + Number(pipeline.consecutive_failures ?? 0), 0);
-  $: connectorLoad = pipelines.reduce<Record<string, number>>((acc, pipeline) => {
-    const key = String(pipeline.key ?? '');
+  $: intentCount = intents.length;
+  $: totalRollbacks = intents.reduce((sum, intent) => sum + Number(intent.rollback_executed_count ?? 0), 0);
+  $: totalFailures = intents.reduce((sum, intent) => sum + Number(intent.consecutive_failures ?? 0), 0);
+  $: connectorLoad = intents.reduce<Record<string, number>>((acc, intent) => {
+    const key = String(intent.key ?? '');
     const connector = key.split('.')[0] || 'unknown';
     acc[connector] = (acc[connector] ?? 0) + 1;
     return acc;
   }, {});
-  $: exploreByConnector = explore.reduce<Record<string, number>>((acc, pipeline) => {
-    const key = String(pipeline.key ?? '');
+  $: exploreByConnector = explore.reduce<Record<string, number>>((acc, intent) => {
+    const key = String(intent.key ?? '');
     const connector = key.split('.')[0] || 'unknown';
     acc[connector] = (acc[connector] ?? 0) + 1;
     return acc;
@@ -108,8 +108,8 @@
     .filter(([connector]) => knownConnectorSet.has(connector))
     .sort((a, b) => b[1] - a[1]);
   $: knownCriticalConnectors = Object.entries(
-    critical.reduce<Record<string, number>>((acc, pipeline) => {
-      const connector = String(pipeline.key ?? '').split('.')[0] || 'unknown';
+    critical.reduce<Record<string, number>>((acc, intent) => {
+      const connector = String(intent.key ?? '').split('.')[0] || 'unknown';
       acc[connector] = (acc[connector] ?? 0) + 1;
       return acc;
     }, {})
@@ -117,8 +117,8 @@
     .filter(([connector]) => knownConnectorSet.has(connector))
     .sort((a, b) => b[1] - a[1]);
   $: knownCanaryConnectors = Object.entries(
-    canary.reduce<Record<string, number>>((acc, pipeline) => {
-      const connector = String(pipeline.key ?? '').split('.')[0] || 'unknown';
+    canary.reduce<Record<string, number>>((acc, intent) => {
+      const connector = String(intent.key ?? '').split('.')[0] || 'unknown';
       acc[connector] = (acc[connector] ?? 0) + 1;
       return acc;
     }, {})
@@ -126,8 +126,8 @@
     .filter(([connector]) => knownConnectorSet.has(connector))
     .sort((a, b) => b[1] - a[1]);
   $: knownStableConnectors = Object.entries(
-    stable.reduce<Record<string, number>>((acc, pipeline) => {
-      const connector = String(pipeline.key ?? '').split('.')[0] || 'unknown';
+    stable.reduce<Record<string, number>>((acc, intent) => {
+      const connector = String(intent.key ?? '').split('.')[0] || 'unknown';
       acc[connector] = (acc[connector] ?? 0) + 1;
       return acc;
     }, {})
@@ -142,7 +142,7 @@
   $: tracked = [...stable, ...canary];
   $: avgSuccess = (() => {
     const values = tracked
-      .map((pipeline) => (typeof pipeline.success_rate === 'number' ? pipeline.success_rate : null))
+      .map((intent) => (typeof intent.success_rate === 'number' ? intent.success_rate : null))
       .filter((value): value is number => value != null);
     if (!values.length) {
       return null;
@@ -151,7 +151,7 @@
   })();
   $: avgVerify = (() => {
     const values = tracked
-      .map((pipeline) => (typeof pipeline.verify_rate === 'number' ? pipeline.verify_rate : null))
+      .map((intent) => (typeof intent.verify_rate === 'number' ? intent.verify_rate : null))
       .filter((value): value is number => value != null);
     if (!values.length) {
       return null;
@@ -164,7 +164,7 @@
     canary.length;
     stable.length;
     explore.length;
-    pipelineCount;
+    intentCount;
     drawDonut();
   }
 
@@ -187,8 +187,8 @@
 
     <div class="report-cards">
       <article class="report-card">
-        <div class="report-num">{pipelineCount}</div>
-        <div class="report-label">Total Pipelines</div>
+        <div class="report-num">{intentCount}</div>
+        <div class="report-label">Total Intents</div>
         <div class="report-sub">{connectorCount} connectors</div>
       </article>
       <article class="report-card {critical.length ? 'critical' : ''}">
@@ -230,10 +230,10 @@
         <div class="report-label">Status Distribution</div>
         <div class="report-sub">critical / canary / stable / explore</div>
         <div class="stat-dist">
-          <span class="critical" style={`width:${pipelineCount ? (critical.length / pipelineCount) * 100 : 0}%`}></span>
-          <span class="canary" style={`width:${pipelineCount ? (canary.length / pipelineCount) * 100 : 0}%`}></span>
-          <span class="stable" style={`width:${pipelineCount ? (stable.length / pipelineCount) * 100 : 0}%`}></span>
-          <span class="explore" style={`width:${pipelineCount ? (explore.length / pipelineCount) * 100 : 0}%`}></span>
+          <span class="critical" style={`width:${intentCount ? (critical.length / intentCount) * 100 : 0}%`}></span>
+          <span class="canary" style={`width:${intentCount ? (canary.length / intentCount) * 100 : 0}%`}></span>
+          <span class="stable" style={`width:${intentCount ? (stable.length / intentCount) * 100 : 0}%`}></span>
+          <span class="explore" style={`width:${intentCount ? (explore.length / intentCount) * 100 : 0}%`}></span>
         </div>
       </article>
       <article class="report-card span-2">
@@ -258,7 +258,7 @@
   <div class="groups">
     <section id="ov-sec-critical">
       <h3 class="section-header critical">⚠ Critical ({critical.length})</h3>
-      <p class="group-note">Use connector tabs for per-pipeline actions.</p>
+      <p class="group-note">Use connector tabs for per-intent actions.</p>
       <div class="group-connectors">
         {#each knownCriticalConnectors as [connector, count]}
           <button type="button" class="explore-chip" on:click={() => dispatch('openConnector', { id: connector })}>
@@ -282,7 +282,7 @@
 
     <section id="ov-sec-stable">
       <h3 class="section-header stable">✓ Stable ({stable.length})</h3>
-      <p class="group-note">Stable pipelines are listed by connector tabs.</p>
+      <p class="group-note">Stable intents are listed by connector tabs.</p>
       <div class="group-connectors">
         {#each knownStableConnectors as [connector, count]}
           <button type="button" class="explore-chip" on:click={() => dispatch('openConnector', { id: connector })}>
@@ -296,7 +296,7 @@
       <h3 class="section-header explore">◯ Explore ({explore.length})</h3>
       {#if knownExploreConnectors.length || otherExploreCount > 0}
         <div class="explore-summary">
-          <div class="explore-title">Explore pipelines by connector</div>
+          <div class="explore-title">Explore intents by connector</div>
           <div class="explore-connectors">
             {#each knownExploreConnectors as [connector, count]}
               <button
