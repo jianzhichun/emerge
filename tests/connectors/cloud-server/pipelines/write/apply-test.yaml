@@ -1,0 +1,9 @@
+intent_signature: cloud-server.write.apply-test
+rollback_or_stop_policy: stop
+write_steps:
+  - run_write
+verify_steps:
+  - verify_write
+synthesized: true
+synthesized_at: 1776420349
+persistent: false
