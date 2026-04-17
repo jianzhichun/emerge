@@ -1,6 +1,6 @@
 # Emerge
 
-![Version](https://img.shields.io/badge/version-v0.3.81-blue)
+![Version](https://img.shields.io/badge/version-v0.3.82-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/github/license/jianzhichun/emerge?cacheSeconds=300)
 ![Tests](https://img.shields.io/badge/tests-639%20passing-brightgreen?logo=pytest)
@@ -393,7 +393,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 python -m pytest tests -q
 ```
 
-Current baseline: **659** tests passing.
+Current baseline: **639** tests passing.
 
 ### Runner SSE parser benchmark (optional)
 
