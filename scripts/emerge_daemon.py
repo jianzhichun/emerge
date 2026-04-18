@@ -138,9 +138,9 @@ class EmergeDaemon:
             record_bridge_outcome=self._policy_engine.record_bridge_outcome,
             sink_emit=lambda name, payload: self._sink.emit(name, payload),
         )
-        # Wire _dispatch through daemon so test monkey-patches on _try_flywheel_bridge
-        # propagate into composite child execution.
-        self._bridge._dispatch = lambda args: self._try_flywheel_bridge(args)
+        # Wire dispatch through daemon so _try_flywheel_bridge remains the
+        # canonical entry point for both composite children and icc_exec.
+        self._bridge._child_dispatch = lambda args: self._try_flywheel_bridge(args)
         from scripts.mcp.tool_handlers import ToolHandlers
         self._tool_handlers = ToolHandlers(
             bridge=self._bridge,
@@ -159,9 +159,10 @@ class EmergeDaemon:
             sink_emit=lambda name, payload: self._sink.emit(name, payload),
             tool_error=self._tool_error,
             tool_ok_json=self._tool_ok_json,
-            # Route through daemon's _try_flywheel_bridge so test monkey-patches propagate.
-            try_bridge_fn=lambda args: self._try_flywheel_bridge(args),
         )
+        # Route icc_exec bridge through daemon so _try_flywheel_bridge remains
+        # the canonical entry point (monkey-patches in tests propagate here).
+        self._tool_handlers._try_bridge_fn = lambda args: self._try_flywheel_bridge(args)
 
     def _cockpit_broadcast(self, event: dict) -> None:
         """Forward event to cockpit SSE clients (no-op if not in HTTP mode)."""
@@ -272,10 +273,7 @@ class EmergeDaemon:
     def _run_composite_bridge(
         self, composite_id: str, children: list[str], arguments: dict[str, Any],
     ) -> dict[str, Any] | None:
-        return self._bridge._run_composite_bridge(
-            composite_id, children, arguments,
-            _child_bridge_fn=self._try_flywheel_bridge,
-        )
+        return self._bridge._run_composite_bridge(composite_id, children, arguments)
 
     @property
     def _last_bridge_failure(self) -> "dict[str, Any] | None":

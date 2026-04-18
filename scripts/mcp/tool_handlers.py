@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 
 class ToolHandlers:
@@ -30,12 +30,11 @@ class ToolHandlers:
         sink_emit,
         tool_error,
         tool_ok_json,
-        try_bridge_fn=None,
     ) -> None:
         self._bridge = bridge
-        # ``try_bridge_fn`` allows the daemon to inject its own ``_try_flywheel_bridge``
-        # so that monkey-patches on the daemon (e.g. in tests) propagate through icc_exec.
-        self._try_bridge_fn = try_bridge_fn if try_bridge_fn is not None else bridge.try_bridge
+        # Default child dispatch — daemon overrides post-construction so that
+        # monkey-patches on _try_flywheel_bridge propagate through icc_exec.
+        self._try_bridge_fn = bridge.try_bridge
         self._flywheel = flywheel
         self._policy_engine = policy_engine
         self._crystallize_fn = crystallize_fn
