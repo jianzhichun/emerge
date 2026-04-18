@@ -220,7 +220,8 @@ def show_notify(ui_spec: dict) -> dict[str, Any]:
             return _render_choice(body=body, options=options, title=title, timeout_s=timeout_s)
         if ui_type == "input":
             prefill = str(ui_spec.get("prefill", ""))
-            return _render_input(body=body, prefill=prefill, title=title)
+            upload_url = str(ui_spec.get("upload_url", ""))
+            return _render_input(body=body, prefill=prefill, title=title, upload_url=upload_url)
         if ui_type == "confirm":
             return _render_confirm(body=body, title=title)
         if ui_type == "toast":
@@ -280,36 +281,23 @@ def _render_choice(*, body: str, options: list[str], title: str, timeout_s: int)
     return result
 
 
-def _render_input(*, body: str, prefill: str, title: str) -> dict[str, Any]:
+def _render_input(*, body: str, prefill: str, title: str, upload_url: str = "") -> dict[str, Any]:
     import tkinter as tk
-
     root = tk.Tk()
-    root.title(title)
-    root.attributes("-topmost", True)
-    root.resizable(False, False)
-    result: dict[str, Any] = {"action": "dismissed", "value": ""}
+    result: dict[str, Any] = {"action": "dismissed", "value": "", "attachments": []}
 
     tk.Label(root, text=body, wraplength=340, justify="left").pack(
         pady=(12, 4), padx=16, anchor="w"
     )
-    entry = tk.Text(root, height=2, width=44, relief="solid", bd=1)
-    entry.insert("1.0", prefill)
-    entry.pack(padx=16, pady=(4, 8))
 
-    btn_frame = tk.Frame(root)
-    btn_frame.pack(pady=(0, 12))
-
-    def on_confirm() -> None:
+    def _on_submit(text: str, attachments: list) -> None:
         result["action"] = "confirmed"
-        result["value"] = entry.get("1.0", "end-1c").strip()
-        root.destroy()
+        result["value"] = text
+        result["attachments"] = attachments
 
-    def on_dismiss() -> None:
-        result["action"] = "dismissed"
-        root.destroy()
-
-    tk.Button(btn_frame, text="Confirm", command=on_confirm, width=8).pack(side="left", padx=4)
-    tk.Button(btn_frame, text="Skip", command=on_dismiss, width=8).pack(side="left", padx=4)
+    widget = RichInputWidget(root, on_submit=_on_submit, upload_url=upload_url, title=title)
+    if prefill:
+        widget._text.insert("1.0", prefill)
     root.mainloop()
     return result
 
@@ -387,38 +375,9 @@ def _render_info(*, body: str, title: str) -> dict[str, Any]:
     return {"action": "dismissed", "value": ""}
 
 
-def show_input_bubble(on_submit: Callable[[str], None]) -> None:
-    """Open a minimal tkinter input bubble.
-
-    Calls on_submit(text) with the stripped text when the operator clicks Send
-    or presses Enter. Silently closes on Cancel or empty input.
-    """
+def show_input_bubble(on_submit: "Callable[[str, list], None]", upload_url: str = "") -> None:
+    """Open RichInputWidget bubble. Calls on_submit(text, attachments) on send."""
     import tkinter as tk
     root = tk.Tk()
-    root.title("emerge")
-    root.attributes("-topmost", True)
-    root.resizable(False, False)
-    root.update_idletasks()
-    sw = root.winfo_screenwidth()
-    sh = root.winfo_screenheight()
-    w, h = 360, 120
-    root.geometry(f"{w}x{h}+{int(sw / 2 - w / 2)}+{int(sh / 2 - h / 2)}")
-    tk.Label(root, text="发送消息给 watcher:", font=("", 10)).pack(
-        pady=(10, 4), padx=12, anchor="w"
-    )
-    entry = tk.Entry(root, width=40, relief="solid", bd=1)
-    entry.pack(padx=12, pady=(0, 6))
-    entry.focus_set()
-    btn_frame = tk.Frame(root)
-    btn_frame.pack(pady=(0, 10))
-
-    def _on_send() -> None:
-        text = entry.get().strip()
-        root.destroy()
-        if text:
-            on_submit(text)
-
-    entry.bind("<Return>", lambda _e: _on_send())
-    tk.Button(btn_frame, text="发送", command=_on_send, width=8).pack(side="left", padx=4)
-    tk.Button(btn_frame, text="取消", command=root.destroy, width=8).pack(side="left", padx=4)
+    RichInputWidget(root, on_submit=on_submit, upload_url=upload_url, title="emerge")
     root.mainloop()

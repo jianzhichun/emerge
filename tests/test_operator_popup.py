@@ -54,7 +54,7 @@ def test_show_notify_input_confirmed(monkeypatch):
     import scripts.operator_popup as popup_mod
 
     monkeypatch.setattr(popup_mod, "_render_input",
-        lambda *, body, prefill, title: {"action": "confirmed", "value": "edited: " + prefill})
+        lambda *, body, prefill, title, upload_url="": {"action": "confirmed", "value": "edited: " + prefill})
     result = popup_mod.show_notify({"type": "input", "body": "你在做什么？", "prefill": "草稿"})
     assert result == {"action": "confirmed", "value": "edited: 草稿"}
 
@@ -167,47 +167,26 @@ def test_handle_sse_event_ignores_invalid_json(monkeypatch):
 
 
 def test_show_input_bubble_calls_on_submit_with_stripped_text(monkeypatch):
-    """show_input_bubble calls on_submit(text) with stripped non-empty text."""
+    """show_input_bubble calls on_submit(text, attachments) with stripped non-empty text."""
     import scripts.operator_popup as popup_mod
     import tkinter as tk
 
     submitted: list = []
-    captured_cmds: dict = {}
-    entry_val = "  hello  "
 
-    class _MockEntry:
-        def pack(self, **kw): pass
-        def get(self): return entry_val
-        def focus_set(self): pass
-        def bind(self, *a, **kw): pass
+    class _MockWidget:
+        def __init__(self, parent, *, on_submit, upload_url="", title="emerge"):
+            # Immediately invoke on_submit as if user typed "  hello  " and clicked send
+            text = "  hello  ".strip()
+            if text:
+                on_submit(text, [])
 
     class _MockRoot:
-        def title(self, *a): pass
-        def attributes(self, *a, **kw): pass
-        def resizable(self, *a): pass
-        def update_idletasks(self): pass
-        def winfo_screenwidth(self): return 1920
-        def winfo_screenheight(self): return 1080
-        def geometry(self, *a): pass
-        def destroy(self): pass
-        def mainloop(self):
-            captured_cmds["send"]()  # simulate Send button click
-
-    def _mock_button(parent, *, text, command, width=None):
-        b = type("_B", (), {"pack": staticmethod(lambda **kw: None)})()
-        if text == "发送":
-            captured_cmds["send"] = command
-        return b
+        def mainloop(self): pass
 
     monkeypatch.setattr(tk, "Tk", _MockRoot)
-    monkeypatch.setattr(tk, "Label",
-        lambda *a, **kw: type("_L", (), {"pack": staticmethod(lambda **kw: None)})())
-    monkeypatch.setattr(tk, "Entry", lambda *a, **kw: _MockEntry())
-    monkeypatch.setattr(tk, "Frame",
-        lambda *a, **kw: type("_F", (), {"pack": staticmethod(lambda **kw: None)})())
-    monkeypatch.setattr(tk, "Button", _mock_button)
+    monkeypatch.setattr(popup_mod, "RichInputWidget", _MockWidget)
 
-    popup_mod.show_input_bubble(lambda text: submitted.append(text))
+    popup_mod.show_input_bubble(lambda text, attachments: submitted.append(text))
     assert submitted == ["hello"]
 
 
@@ -217,39 +196,17 @@ def test_show_input_bubble_skips_empty_text(monkeypatch):
     import tkinter as tk
 
     submitted: list = []
-    captured_cmds: dict = {}
 
-    class _MockEntry:
-        def pack(self, **kw): pass
-        def get(self): return "   "  # blank
-        def focus_set(self): pass
-        def bind(self, *a, **kw): pass
+    class _MockWidget:
+        def __init__(self, parent, *, on_submit, upload_url="", title="emerge"):
+            # Simulate blank entry — on_submit is never called
+            pass
 
     class _MockRoot:
-        def title(self, *a): pass
-        def attributes(self, *a, **kw): pass
-        def resizable(self, *a): pass
-        def update_idletasks(self): pass
-        def winfo_screenwidth(self): return 1920
-        def winfo_screenheight(self): return 1080
-        def geometry(self, *a): pass
-        def destroy(self): pass
-        def mainloop(self):
-            captured_cmds["send"]()
-
-    def _mock_button(parent, *, text, command, width=None):
-        b = type("_B", (), {"pack": staticmethod(lambda **kw: None)})()
-        if text == "发送":
-            captured_cmds["send"] = command
-        return b
+        def mainloop(self): pass
 
     monkeypatch.setattr(tk, "Tk", _MockRoot)
-    monkeypatch.setattr(tk, "Label",
-        lambda *a, **kw: type("_L", (), {"pack": staticmethod(lambda **kw: None)})())
-    monkeypatch.setattr(tk, "Entry", lambda *a, **kw: _MockEntry())
-    monkeypatch.setattr(tk, "Frame",
-        lambda *a, **kw: type("_F", (), {"pack": staticmethod(lambda **kw: None)})())
-    monkeypatch.setattr(tk, "Button", _mock_button)
+    monkeypatch.setattr(popup_mod, "RichInputWidget", _MockWidget)
 
-    popup_mod.show_input_bubble(lambda text: submitted.append(text))
+    popup_mod.show_input_bubble(lambda text, attachments: submitted.append(text))
     assert submitted == []
