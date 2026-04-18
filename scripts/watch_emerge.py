@@ -83,7 +83,7 @@ def _format_event(event: dict) -> str | None:
     if etype == "operator_message":
         text = event.get("text", "")
         profile = event.get("runner_profile", event.get("profile", "?"))
-        lines = [f"[ACTION REQUIRED][Operator:{profile}] {text}"]
+        lines = [f"[ACTION REQUIRED][Operator:{profile}] {text}".rstrip()]
         for att in event.get("attachments", []):
             lines.append(f"[附件: {att.get('path', '')} ({att.get('mime', '')})]")
         return "\n".join(lines)

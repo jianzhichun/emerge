@@ -16,15 +16,22 @@ def _upload_file(upload_url: str, filepath: "Path") -> "Attachment":
     import urllib.error as _ue
     import urllib.request as _ur
     from pathlib import Path
+    import uuid as _uuid
     if not upload_url:
-        raise RuntimeError(f"upload failed: no upload_url configured")
+        raise RuntimeError("upload failed: no upload_url configured")
     mime, _ = _mt.guess_type(filepath.name)
     mime = mime or "application/octet-stream"
-    boundary = "emergeboundary"
+    # Random boundary prevents collision with binary file content.
+    boundary = _uuid.uuid4().hex
+    # Sanitize filename: strip control chars and escape double-quote so the
+    # Content-Disposition header value stays well-formed.
+    safe_name = (
+        filepath.name.replace("\r", "").replace("\n", "").replace('"', '\\"')
+    )
     file_bytes = filepath.read_bytes()
     body = (
         f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="{filepath.name}"\r\n'
+        f'Content-Disposition: form-data; name="file"; filename="{safe_name}"\r\n'
         f"Content-Type: {mime}\r\n\r\n"
     ).encode() + file_bytes + f"\r\n--{boundary}--\r\n".encode()
     req = _ur.Request(
@@ -353,12 +360,14 @@ def _render_toast(*, body: str, timeout_s: int) -> dict[str, Any]:
     """
     import subprocess, sys
 
-    safe_body = body.replace('"', '\\"').replace("'", "\\'")
-    # osascript display notification requires the Notification Center permission;
-    # display dialog auto-dismisses and works without it.
-    script = (
-        f'display notification "{safe_body}" with title "emerge"'
+    # Escape for AppleScript string literal: collapse whitespace control chars
+    # (newlines break the single-line -e string), then escape the only special
+    # character inside AppleScript double-quoted strings: the double-quote itself.
+    safe_body = (
+        body.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+            .replace('"', '\\"')
     )
+    script = f'display notification "{safe_body}" with title "emerge"'
     try:
         subprocess.Popen(
             ["osascript", "-e", script],
