@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any
 
 
+BRIDGE_DEMOTION_REASONS: frozenset[str] = frozenset({"bridge_broken", "bridge_silent_empty"})
+
+
 def connectors_root() -> Path:
     override = os.environ.get("EMERGE_CONNECTOR_ROOT")
     if override:
@@ -149,7 +152,7 @@ def export_spans_json(connector: str, dst: Path) -> None:
         if isinstance(demo, dict):
             demo_reason = str(demo.get("reason", "") or "").strip()
             demo_to_stage = str(demo.get("to_stage", "") or "").strip()
-        has_bridge_demotion = demo_reason == "bridge_broken"
+        has_bridge_demotion = demo_reason in BRIDGE_DEMOTION_REASONS
 
         if not (is_stable or skipped_reason or has_bridge_demotion):
             continue
@@ -283,11 +286,17 @@ def _propagate_diagnostics_to_registry(remote_spans: dict[str, Any]) -> None:
             local_entry["synthesis_skipped_reason"] = remote_skipped
             changed = True
         remote_demo = remote_entry.get("last_demotion")
-        if isinstance(remote_demo, dict) and str(remote_demo.get("reason", "")) == "bridge_broken":
+        remote_reason = (
+            str(remote_demo.get("reason", "") or "") if isinstance(remote_demo, dict) else ""
+        )
+        if remote_reason in BRIDGE_DEMOTION_REASONS:
             local_demo = local_entry.get("last_demotion")
-            if not isinstance(local_demo, dict) or str(local_demo.get("reason", "")) != "bridge_broken":
+            local_reason = (
+                str(local_demo.get("reason", "") or "") if isinstance(local_demo, dict) else ""
+            )
+            if local_reason != remote_reason:
                 local_entry["last_demotion"] = {
-                    "reason": "bridge_broken",
+                    "reason": remote_reason,
                     "to_stage": str(remote_demo.get("to_stage", "") or ""),
                     "imported_from_hub": True,
                 }

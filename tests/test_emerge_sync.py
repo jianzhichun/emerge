@@ -733,6 +733,28 @@ def test_export_includes_bridge_broken_demotion(connector_home):
     assert demo["to_stage"] == "canary"
 
 
+def test_export_includes_bridge_silent_empty_demotion(connector_home):
+    """last_demotion.reason == 'bridge_silent_empty' must also cross-machine — it
+    carries the same "don't trust this crystal" signal as bridge_broken, but
+    for the output-regressed-silently category rather than the exception one."""
+    connectors, worktree, state_root = connector_home
+    (connectors / "gmail").mkdir(parents=True)
+    entry = _stable_entry_with_bridge_demotion("gmail.read.fetch", last_ts_ms=3000)
+    entry["last_demotion"]["reason"] = "bridge_silent_empty"
+    candidates = {"intents": {"gmail.read.fetch": entry}}
+    _intents_path(state_root).write_text(json.dumps(candidates), encoding="utf-8")
+
+    export_vertical("gmail", connectors_root_path=connectors, hub_worktree=worktree)
+
+    spans = json.loads(
+        (worktree / "connectors" / "gmail" / "spans.json").read_text(encoding="utf-8")
+    )["spans"]
+    assert "gmail.read.fetch" in spans
+    demo = spans["gmail.read.fetch"]["last_demotion"]
+    assert demo["reason"] == "bridge_silent_empty"
+    assert demo["to_stage"] == "canary"
+
+
 def test_export_excludes_unremarkable_explore(connector_home):
     """Explore entries with no skipped-reason and no bridge demotion must NOT leak into hub."""
     connectors, worktree, state_root = connector_home
@@ -900,4 +922,48 @@ def test_import_propagates_bridge_broken_demotion(connector_home):
     assert entry["last_demotion"]["reason"] == "bridge_broken"
     assert entry["last_demotion"]["imported_from_hub"] is True
     # Local stage must NOT be rewritten by hub import
+    assert entry["stage"] == "stable"
+
+
+def test_import_propagates_bridge_silent_empty_demotion(connector_home):
+    """Imported bridge_silent_empty demotions must land on an existing local
+    IntentRegistry entry — same invariants as bridge_broken propagation:
+    newer remote ts_ms required, never creates phantom intents, never writes
+    stage or counters."""
+    connectors, worktree, state_root = connector_home
+
+    candidates = {
+        "intents": {
+            "gmail.read.fetch": {
+                "intent_signature": "gmail.read.fetch",
+                "stage": "stable",
+                "attempts": 10,
+                "successes": 10,
+                "last_ts_ms": 500,
+            },
+        }
+    }
+    _intents_path(state_root).write_text(json.dumps(candidates), encoding="utf-8")
+
+    hub_dir = worktree / "connectors" / "gmail"
+    hub_dir.mkdir(parents=True)
+    remote_spans = {
+        "spans": {
+            "gmail.read.fetch": {
+                "intent_signature": "gmail.read.fetch",
+                "stage": "canary",
+                "last_ts_ms": 2000,
+                "last_demotion": {"reason": "bridge_silent_empty", "to_stage": "canary"},
+            }
+        }
+    }
+    (hub_dir / "spans.json").write_text(json.dumps(remote_spans), encoding="utf-8")
+
+    import_vertical("gmail", connectors_root_path=connectors, hub_worktree=worktree)
+
+    local = json.loads(_intents_path(state_root).read_text(encoding="utf-8"))
+    entry = local["intents"]["gmail.read.fetch"]
+    assert entry["last_demotion"]["reason"] == "bridge_silent_empty"
+    assert entry["last_demotion"]["imported_from_hub"] is True
+    # Local stage must NOT be rewritten by hub import.
     assert entry["stage"] == "stable"
