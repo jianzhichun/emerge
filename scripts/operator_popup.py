@@ -16,6 +16,8 @@ def _upload_file(upload_url: str, filepath: "Path") -> "Attachment":
     import urllib.error as _ue
     import urllib.request as _ur
     from pathlib import Path
+    if not upload_url:
+        raise RuntimeError(f"upload failed: no upload_url configured")
     mime, _ = _mt.guess_type(filepath.name)
     mime = mime or "application/octet-stream"
     boundary = "emergeboundary"

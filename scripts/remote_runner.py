@@ -548,7 +548,11 @@ class RunnerSSEClient:
     def _post_result(self, popup_id: str, result: dict) -> None:
         import urllib.request as _ur
         import urllib.error as _ue
-        payload = {"popup_id": popup_id, "value": result.get("value")}
+        payload = {
+            "popup_id": popup_id,
+            "value": result.get("value"),
+            "attachments": result.get("attachments", []),
+        }
         body = json.dumps(payload, ensure_ascii=False).encode()
         req = _ur.Request(
             f"{self._url}/runner/popup-result",

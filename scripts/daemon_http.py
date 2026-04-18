@@ -352,6 +352,8 @@ class DaemonHTTPServer:
         ev = threading.Event()
         with self._popup_lock:
             self._popup_futures[popup_id] = ev
+        if ui_spec.get("type") == "input":
+            ui_spec = {**ui_spec, "upload_url": f"http://localhost:{self._port}/runner/upload"}
         command = json.dumps({"type": "notify", "popup_id": popup_id, "ui_spec": ui_spec})
         with self._runners_lock:
             wfile = self._runner_sse_clients.get(runner_profile)
@@ -377,7 +379,7 @@ class DaemonHTTPServer:
             result = self._popup_results.pop(popup_id, None)
         if not fired or result is None:
             return {"ok": False, "timed_out": True, "value": None}
-        return {"ok": True, "value": result.get("value"), "popup_id": popup_id}
+        return {"ok": True, "value": result.get("value"), "attachments": result.get("attachments", []), "popup_id": popup_id}
 
     def _append_event(self, path: Path, event: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
