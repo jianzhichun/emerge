@@ -138,14 +138,21 @@ class RichInputWidget:
         import tkinter as tk
         import threading
 
+        cancelled: set[str] = set()
+
         chip_var = tk.StringVar(value=f"⏳ {filepath.name}")
         chip_frame = tk.Frame(self._chips_frame, relief="solid", bd=1)
         chip_frame.pack(side="left", padx=(0, 4), pady=2)
         chip_label = tk.Label(chip_frame, textvariable=chip_var, font=("", 9))
         chip_label.pack(side="left", padx=(4, 0))
+
+        def _remove_this_chip() -> None:
+            cancelled.add(filepath.name)
+            self._remove_chip(chip_frame, filepath)
+
         tk.Button(
             chip_frame, text="×", font=("", 9), relief="flat",
-            command=lambda: self._remove_chip(chip_frame, filepath),
+            command=_remove_this_chip,
         ).pack(side="left", padx=2)
 
         self._pending += 1
@@ -155,7 +162,8 @@ class RichInputWidget:
             try:
                 att = _upload_file(self._upload_url, filepath)
                 def _on_success(a=att):
-                    self._attachments.append(a)
+                    if filepath.name not in cancelled:
+                        self._attachments.append(a)
                     chip_var.set(f"📎 {filepath.name}")
                 self._root.after(0, _on_success)
             except RuntimeError:
