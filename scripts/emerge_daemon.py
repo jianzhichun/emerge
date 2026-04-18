@@ -337,6 +337,29 @@ class EmergeDaemon:
                     except Exception:
                         pass
                     return None
+        if mode == "write" and isinstance(result, dict):
+            action = result.get("action_result")
+            if isinstance(action, dict) and action.get("ok") is False:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "flywheel bridge write action_result.ok=False for %s: %s",
+                    base_pipeline_id, action.get("error"),
+                )
+                err = str(action.get("error", "") or "")
+                self._last_bridge_failure = {
+                    "pipeline_id": base_pipeline_id,
+                    "mode": mode,
+                    "reason": f"action_not_ok: {err}",
+                }
+                try:
+                    self._policy_engine.record_bridge_outcome(
+                        base_pipeline_id,
+                        success=False,
+                        reason=f"action_not_ok: {err}",
+                    )
+                except Exception:
+                    pass
+                return None
         result["bridge_promoted"] = True
         try:
             self._sink.emit("flywheel.bridge.promoted", {"pipeline_id": base_pipeline_id})

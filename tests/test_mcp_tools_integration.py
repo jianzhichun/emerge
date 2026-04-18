@@ -3359,6 +3359,38 @@ def test_bridge_read_first_call_empty_is_allowed(tmp_path, monkeypatch):
     assert not entry.get("has_ever_returned_non_empty", False)
 
 
+def test_bridge_write_action_not_ok_bumps_streak(tmp_path, monkeypatch):
+    """A write pipeline that returns action_result.ok=False but whose
+    verify_write fires 'ok=True' (because the verify only checks shape, not
+    business outcome) must still count as a bridge failure. Without this,
+    a write crystal that silently no-ops every call keeps its stable stage."""
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.intent_registry import IntentRegistry
+    from unittest.mock import patch
+
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon()
+    _seed_stable_intent(tmp_path, "gmail.write.send")
+
+    write_result = {
+        "pipeline_id": "gmail.write.send",
+        "intent_signature": "gmail.write.send",
+        "action_result": {"ok": False, "error": "quota exceeded"},
+        "verify_result": {"ok": True},
+        "verification_state": "verified",
+    }
+
+    with patch.object(daemon.pipeline, "run_write", return_value=write_result):
+        result = daemon._try_flywheel_bridge({"intent_signature": "gmail.write.send"})
+
+    assert result is None
+    entry = IntentRegistry.load(tmp_path)["intents"]["gmail.write.send"]
+    assert entry["bridge_failure_streak"] == 1
+    assert entry["stage"] == "stable"  # one failure, below threshold
+    assert daemon._last_bridge_failure is not None
+    assert "action_not_ok" in daemon._last_bridge_failure["reason"]
+
+
 def test_span_close_stable_includes_skeleton_path(tmp_path, monkeypatch):
     """icc_span_close generating a skeleton must include skeleton_path in response."""
     from scripts.emerge_daemon import EmergeDaemon
