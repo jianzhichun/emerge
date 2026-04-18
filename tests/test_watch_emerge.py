@@ -129,3 +129,33 @@ def test_watch_patterns_shim_delegates_to_watch_emerge(tmp_path):
     proc.terminate()
     out = proc.stdout.read().decode()
     assert "canary" in out or "hypermesh" in out
+
+
+def test_watch_emerge_operator_message_with_attachments(tmp_path):
+    events_root = tmp_path / "events"
+    events_root.mkdir(parents=True, exist_ok=True)
+    events_file = events_root / "events-mycader-1.jsonl"
+
+    proc = subprocess.Popen(
+        [sys.executable, str(ROOT / "scripts" / "watch_emerge.py"),
+         "--runner-profile", "mycader-1",
+         "--state-root", str(tmp_path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    time.sleep(0.3)
+
+    _write_event(events_file, {
+        "type": "operator_message",
+        "ts_ms": 1000,
+        "runner_profile": "mycader-1",
+        "text": "请看这个报错",
+        "attachments": [
+            {"path": "/state/uploads/abc/error.png", "mime": "image/png", "name": "error.png"},
+        ],
+    })
+    time.sleep(0.6)
+    proc.terminate()
+    out = proc.stdout.read().decode()
+    assert "请看这个报错" in out
+    assert "/state/uploads/abc/error.png" in out
+    assert "image/png" in out

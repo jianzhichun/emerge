@@ -83,7 +83,10 @@ def _format_event(event: dict) -> str | None:
     if etype == "operator_message":
         text = event.get("text", "")
         profile = event.get("runner_profile", event.get("profile", "?"))
-        return f"[ACTION REQUIRED][Operator:{profile}] {text}"
+        lines = [f"[ACTION REQUIRED][Operator:{profile}] {text}"]
+        for att in event.get("attachments", []):
+            lines.append(f"[附件: {att.get('path', '')} ({att.get('mime', '')})]")
+        return "\n".join(lines)
     if etype == "cockpit_action":
         try:
             from scripts.pending_actions import format_pending_actions
