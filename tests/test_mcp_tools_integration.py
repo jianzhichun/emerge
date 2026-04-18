@@ -3281,6 +3281,84 @@ def test_bridge_verify_degraded_bumps_failure_streak(tmp_path, monkeypatch):
     assert "verify_degraded" in daemon._last_bridge_failure["reason"]
 
 
+def test_bridge_read_empty_regression_demotes_with_silent_empty(tmp_path, monkeypatch):
+    """Once a read intent has returned non-empty rows at least once, a
+    subsequent call returning [] is a silent contract violation (upstream API
+    drift, schema rename, etc.). It must bump bridge_failure_streak with
+    demotion_reason='bridge_silent_empty', distinct from bridge_broken."""
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.intent_registry import IntentRegistry
+    from scripts.policy_config import BRIDGE_BROKEN_THRESHOLD
+    from unittest.mock import patch
+
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon()
+    _seed_stable_intent(tmp_path, "gmail.read.fetch")
+
+    non_empty = {
+        "pipeline_id": "gmail.read.fetch",
+        "intent_signature": "gmail.read.fetch",
+        "rows": [{"id": 1}, {"id": 2}],
+        "verify_result": {"ok": True},
+        "verification_state": "verified",
+    }
+    empty = {
+        "pipeline_id": "gmail.read.fetch",
+        "intent_signature": "gmail.read.fetch",
+        "rows": [],
+        "verify_result": {"ok": True},
+        "verification_state": "verified",
+    }
+
+    # First call: non-empty → baseline is established.
+    with patch.object(daemon.pipeline, "run_read", return_value=non_empty):
+        daemon._try_flywheel_bridge({"intent_signature": "gmail.read.fetch"})
+    baseline = IntentRegistry.load(tmp_path)["intents"]["gmail.read.fetch"]
+    assert baseline["has_ever_returned_non_empty"] is True
+    assert baseline.get("bridge_failure_streak", 0) == 0
+
+    # Now the pipeline returns [] — silent-wrong regression.
+    with patch.object(daemon.pipeline, "run_read", return_value=empty):
+        for _ in range(BRIDGE_BROKEN_THRESHOLD):
+            daemon._try_flywheel_bridge({"intent_signature": "gmail.read.fetch"})
+
+    entry = IntentRegistry.load(tmp_path)["intents"]["gmail.read.fetch"]
+    assert entry["stage"] == "canary", "silent-empty regression at threshold must demote"
+    assert entry["last_transition_reason"] == "bridge_silent_empty"
+    assert entry["last_demotion"]["reason"] == "bridge_silent_empty"
+
+
+def test_bridge_read_first_call_empty_is_allowed(tmp_path, monkeypatch):
+    """A read intent that is empty on its very first bridge call must not be
+    demoted — it may legitimately be an always-empty intent (feed with no new
+    items, query with no matches). Only regressions after a non-empty
+    baseline count."""
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.intent_registry import IntentRegistry
+    from unittest.mock import patch
+
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon()
+    _seed_stable_intent(tmp_path, "gmail.read.fetch")
+
+    empty = {
+        "pipeline_id": "gmail.read.fetch",
+        "intent_signature": "gmail.read.fetch",
+        "rows": [],
+        "verify_result": {"ok": True},
+        "verification_state": "verified",
+    }
+
+    with patch.object(daemon.pipeline, "run_read", return_value=empty):
+        daemon._try_flywheel_bridge({"intent_signature": "gmail.read.fetch"})
+
+    entry = IntentRegistry.load(tmp_path)["intents"]["gmail.read.fetch"]
+    assert entry.get("bridge_failure_streak", 0) == 0
+    assert entry["stage"] == "stable"
+    # Flag stays absent or False — no baseline was ever observed.
+    assert not entry.get("has_ever_returned_non_empty", False)
+
+
 def test_span_close_stable_includes_skeleton_path(tmp_path, monkeypatch):
     """icc_span_close generating a skeleton must include skeleton_path in response."""
     from scripts.emerge_daemon import EmergeDaemon

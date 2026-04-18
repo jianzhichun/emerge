@@ -306,13 +306,53 @@ class EmergeDaemon:
             except Exception:
                 pass
             return None
+        # Silent-empty regression detection: only fires when we've seen a
+        # non-empty result for this intent before (baseline). First-run empties
+        # are legitimate — the intent may always be empty.
+        if mode == "read" and isinstance(result, dict):
+            rows = result.get("rows")
+            is_empty = rows is None or (
+                isinstance(rows, (list, tuple, dict, str)) and len(rows) == 0
+            )
+            if is_empty:
+                current = IntentRegistry.get(self._state_root, base_pipeline_id) or {}
+                if bool(current.get("has_ever_returned_non_empty")):
+                    import logging as _logging
+                    _logging.getLogger(__name__).warning(
+                        "flywheel bridge returned empty rows after non-empty baseline for %s",
+                        base_pipeline_id,
+                    )
+                    self._last_bridge_failure = {
+                        "pipeline_id": base_pipeline_id,
+                        "mode": mode,
+                        "reason": "rows empty after non-empty baseline",
+                    }
+                    try:
+                        self._policy_engine.record_bridge_outcome(
+                            base_pipeline_id,
+                            success=False,
+                            reason="rows empty after non-empty baseline",
+                            demotion_reason="bridge_silent_empty",
+                        )
+                    except Exception:
+                        pass
+                    return None
         result["bridge_promoted"] = True
         try:
             self._sink.emit("flywheel.bridge.promoted", {"pipeline_id": base_pipeline_id})
         except Exception:
             pass
         try:
-            self._policy_engine.record_bridge_outcome(base_pipeline_id, success=True)
+            bridge_non_empty: bool | None = None
+            if mode == "read" and isinstance(result, dict):
+                rows = result.get("rows")
+                if rows is not None and not (
+                    isinstance(rows, (list, tuple, dict, str)) and len(rows) == 0
+                ):
+                    bridge_non_empty = True
+            self._policy_engine.record_bridge_outcome(
+                base_pipeline_id, success=True, non_empty=bridge_non_empty,
+            )
         except Exception:
             pass
         return result
