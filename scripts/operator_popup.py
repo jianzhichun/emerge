@@ -1,6 +1,179 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+import json as _json
+import mimetypes as _mt
+import urllib.error as _ue
+import urllib.request as _ur
+from pathlib import Path
+from typing import Any, Callable, TypedDict
+
+
+class Attachment(TypedDict):
+    path: str
+    mime: str
+    name: str
+
+
+def _upload_file(upload_url: str, filepath: Path) -> "Attachment":
+    """Upload file to daemon via multipart POST. Returns Attachment or raises RuntimeError."""
+    mime, _ = _mt.guess_type(filepath.name)
+    mime = mime or "application/octet-stream"
+    boundary = "emergeboundary"
+    file_bytes = filepath.read_bytes()
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filepath.name}"\r\n'
+        f"Content-Type: {mime}\r\n\r\n"
+    ).encode() + file_bytes + f"\r\n--{boundary}--\r\n".encode()
+    req = _ur.Request(
+        upload_url,
+        data=body,
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Content-Length": str(len(body)),
+        },
+    )
+    try:
+        with _ur.urlopen(req, timeout=30) as r:
+            resp = _json.loads(r.read())
+        return Attachment(path=resp["path"], mime=resp.get("mime", mime), name=filepath.name)
+    except _ue.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        try:
+            msg = _json.loads(body_text).get("error", body_text)
+        except Exception:
+            msg = body_text
+        if exc.code == 413:
+            raise RuntimeError(f"file too large: {filepath.name}") from exc
+        raise RuntimeError(f"upload failed ({exc.code}): {msg}") from exc
+    except OSError as exc:
+        raise RuntimeError(f"upload failed: {exc}") from exc
+
+
+class RichInputWidget:
+    """Claude-Code-style input widget: text area + attachment chips + upload.
+
+    Layout:
+        ┌────────────────────────────────────┐
+        │ multi-line Text area (4 rows)      │
+        ├────────────────────────────────────┤
+        │ [📎 file.py ×] [🖼 img.png ×]     │
+        ├────────────────────────────────────┤
+        │ [📁 文件] [🖼 图片]    [发送 ↵]   │
+        └────────────────────────────────────┘
+    """
+
+    def __init__(
+        self,
+        parent: Any,
+        on_submit: "Callable[[str, list[Attachment]], None]",
+        upload_url: str,
+        title: str = "emerge",
+    ) -> None:
+        import tkinter as tk
+        self._root = parent
+        self._on_submit = on_submit
+        self._upload_url = upload_url
+        self._attachments: list[Attachment] = []
+        self._pending: int = 0
+
+        parent.title(title)
+        parent.attributes("-topmost", True)
+        parent.resizable(True, False)
+        parent.update_idletasks()
+        sw = parent.winfo_screenwidth()
+        sh = parent.winfo_screenheight()
+        w, h = 480, 160
+        parent.geometry(f"{w}x{h}+{int(sw / 2 - w / 2)}+{int(sh / 2 - h / 2)}")
+
+        self._text = tk.Text(parent, height=4, width=56, relief="solid", bd=1, wrap="word")
+        self._text.pack(padx=10, pady=(10, 4), fill="x")
+        self._text.focus_set()
+
+        self._chips_frame = tk.Frame(parent)
+        self._chips_frame.pack(padx=10, fill="x")
+
+        toolbar = tk.Frame(parent)
+        toolbar.pack(padx=10, pady=(4, 10), fill="x")
+        tk.Button(toolbar, text="📁 文件", command=self._pick_file, width=8).pack(side="left", padx=(0, 4))
+        tk.Button(toolbar, text="🖼 图片", command=self._pick_image, width=8).pack(side="left")
+        self._send_btn = tk.Button(toolbar, text="发送 ↵", command=self._on_send, width=8)
+        self._send_btn.pack(side="right")
+
+        parent.bind("<Control-Return>", lambda _e: self._on_send())
+        parent.bind("<Command-Return>", lambda _e: self._on_send())
+
+        try:
+            parent.drop_target_register("DND_Files")  # type: ignore[attr-defined]
+            parent.dnd_bind("<<Drop>>", self._on_drop)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    def _pick_file(self) -> None:
+        import tkinter.filedialog as _fd
+        paths = _fd.askopenfilenames(parent=self._root, title="选择文件")
+        for p in paths:
+            self._add_attachment(Path(p))
+
+    def _pick_image(self) -> None:
+        import tkinter.filedialog as _fd
+        paths = _fd.askopenfilenames(
+            parent=self._root, title="选择图片",
+            filetypes=[("图片", "*.png *.jpg *.jpeg *.gif *.bmp *.webp"), ("所有文件", "*")],
+        )
+        for p in paths:
+            self._add_attachment(Path(p))
+
+    def _on_drop(self, event: Any) -> None:
+        raw = event.data if hasattr(event, "data") else str(event)
+        for token in raw.split():
+            p = Path(token.strip("{}"))
+            if p.exists():
+                self._add_attachment(p)
+
+    def _add_attachment(self, filepath: Path) -> None:
+        import tkinter as tk
+        import threading
+
+        chip_var = tk.StringVar(value=f"⏳ {filepath.name}")
+        chip_frame = tk.Frame(self._chips_frame, relief="solid", bd=1)
+        chip_frame.pack(side="left", padx=(0, 4), pady=2)
+        chip_label = tk.Label(chip_frame, textvariable=chip_var, font=("", 9))
+        chip_label.pack(side="left", padx=(4, 0))
+        tk.Button(
+            chip_frame, text="×", font=("", 9), relief="flat",
+            command=lambda: self._remove_chip(chip_frame, filepath),
+        ).pack(side="left", padx=2)
+
+        self._pending += 1
+        self._send_btn.config(state="disabled")
+
+        def _do_upload() -> None:
+            try:
+                att = _upload_file(self._upload_url, filepath)
+                self._attachments.append(att)
+                self._root.after(0, lambda: chip_var.set(f"📎 {filepath.name}"))
+            except RuntimeError:
+                self._root.after(0, lambda: chip_var.set(f"❌ {filepath.name}"))
+                self._root.after(0, lambda: chip_label.config(fg="red"))
+            finally:
+                self._pending -= 1
+                if self._pending == 0:
+                    self._root.after(0, lambda: self._send_btn.config(state="normal"))
+
+        threading.Thread(target=_do_upload, daemon=True).start()
+
+    def _remove_chip(self, chip_frame: Any, filepath: Path) -> None:
+        self._attachments = [a for a in self._attachments if a["name"] != filepath.name]
+        chip_frame.destroy()
+
+    def _on_send(self) -> None:
+        if self._pending > 0:
+            return
+        text = self._text.get("1.0", "end-1c").strip()
+        self._root.destroy()
+        if text or self._attachments:
+            self._on_submit(text, list(self._attachments))
 
 
 def show_notify(ui_spec: dict) -> dict[str, Any]:
