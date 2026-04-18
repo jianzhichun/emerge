@@ -140,7 +140,9 @@ class RichInputWidget:
     def _add_attachment(self, filepath: Path) -> None:
         import tkinter as tk
         import threading
+        import uuid as _uuid_mod
 
+        slot_id = _uuid_mod.uuid4().hex
         cancelled: set[str] = set()
 
         chip_var = tk.StringVar(value=f"⏳ {filepath.name}")
@@ -150,8 +152,9 @@ class RichInputWidget:
         chip_label.pack(side="left", padx=(4, 0))
 
         def _remove_this_chip() -> None:
-            cancelled.add(filepath.name)
-            self._remove_chip(chip_frame, filepath)
+            cancelled.add(slot_id)
+            self._attachments = [a for a in self._attachments if a.get("_slot") != slot_id]
+            chip_frame.destroy()
 
         tk.Button(
             chip_frame, text="×", font=("", 9), relief="flat",
@@ -165,8 +168,9 @@ class RichInputWidget:
             try:
                 att = _upload_file(self._upload_url, filepath)
                 def _on_success(a=att):
-                    if filepath.name not in cancelled:
-                        self._attachments.append(a)
+                    if slot_id not in cancelled:
+                        tagged = {**a, "_slot": slot_id}
+                        self._attachments.append(tagged)
                     chip_var.set(f"📎 {filepath.name}")
                 self._root.after(0, _on_success)
             except RuntimeError:
@@ -180,10 +184,6 @@ class RichInputWidget:
                 self._root.after(0, _finish)
 
         threading.Thread(target=_do_upload, daemon=True).start()
-
-    def _remove_chip(self, chip_frame: Any, filepath: Path) -> None:
-        self._attachments = [a for a in self._attachments if a["name"] != filepath.name]
-        chip_frame.destroy()
 
     def _on_send(self) -> None:
         if self._pending > 0:
