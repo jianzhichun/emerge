@@ -262,6 +262,7 @@ class PolicyEngine:
                     human_fix_rate=human_fix_rate,
                     consecutive_failures=int(entry["consecutive_failures"]),
                     window=window,
+                    operator_confirmations=int(entry.get("operator_confirmations", 0)),
                 )
             entry["stage"] = new_stage
             if transitioned:
@@ -586,6 +587,7 @@ def _derive_transition(
     human_fix_rate: float,
     consecutive_failures: int,
     window: list[int],
+    operator_confirmations: int = 0,
 ) -> tuple[str, bool, str]:
     """Return ``(new_stage, transitioned, reason)``.
 
@@ -635,6 +637,8 @@ def _derive_transition(
         return "explore", False, "no_change"
 
     if stage == "canary":
+        if operator_confirmations < 1:
+            return "canary", False, "awaiting_operator_confirmation"
         should_stabilize = (
             attempts >= STABLE_MIN_ATTEMPTS
             and success_rate >= STABLE_MIN_SUCCESS_RATE
@@ -681,6 +685,7 @@ def derive_stage(entry: dict) -> str:
         human_fix_rate=human_fix_rate,
         consecutive_failures=consecutive_failures,
         window=window,
+        operator_confirmations=int(entry.get("operator_confirmations", 0)),
     )
     return new_stage
 

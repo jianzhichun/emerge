@@ -18,7 +18,7 @@ import pytest
 
 from scripts.intent_registry import IntentRegistry, registry_path
 from scripts.policy_config import TRANSITION_HISTORY_MAX
-from scripts.policy_engine import PolicyEngine, _is_demotion
+from scripts.policy_engine import PolicyEngine, _is_demotion, _derive_transition
 
 
 def _fresh_engine(state_root: Path, *, session_id: str = "sess-test") -> PolicyEngine:
@@ -647,3 +647,69 @@ def test_failure_never_adds_to_self_report_sessions(tmp_path: Path) -> None:
     engine.apply_evidence(key, success=False, anchor_type="self_report")
     entry = IntentRegistry.get(tmp_path, key)
     assert (entry.get("self_report_sessions") or []) == []
+
+
+# ── evidence anchor phase 2: canary → stable requires operator confirmation ──
+
+def test_canary_to_stable_blocked_without_operator_confirmation() -> None:
+    """canary intent with 0 operator_confirmations must NOT reach stable."""
+    from scripts.policy_config import STABLE_MIN_ATTEMPTS, STABLE_MIN_SUCCESS_RATE, STABLE_MIN_VERIFY_RATE
+    stage, transitioned, reason = _derive_transition(
+        "canary",
+        attempts=STABLE_MIN_ATTEMPTS,
+        success_rate=STABLE_MIN_SUCCESS_RATE,
+        verify_rate=STABLE_MIN_VERIFY_RATE,
+        human_fix_rate=0.0,
+        consecutive_failures=0,
+        window=[1] * 10,
+        operator_confirmations=0,
+    )
+    assert stage == "canary", "must stay at canary without operator confirmation"
+    assert not transitioned
+    assert "operator" in reason
+
+
+def test_canary_to_stable_allowed_with_operator_confirmation() -> None:
+    """canary intent with operator_confirmations >= 1 promotes to stable normally."""
+    from scripts.policy_config import STABLE_MIN_ATTEMPTS, STABLE_MIN_SUCCESS_RATE, STABLE_MIN_VERIFY_RATE
+    stage, transitioned, reason = _derive_transition(
+        "canary",
+        attempts=STABLE_MIN_ATTEMPTS,
+        success_rate=STABLE_MIN_SUCCESS_RATE,
+        verify_rate=STABLE_MIN_VERIFY_RATE,
+        human_fix_rate=0.0,
+        consecutive_failures=0,
+        window=[1] * 10,
+        operator_confirmations=1,
+    )
+    assert stage == "stable"
+    assert transitioned
+    assert reason == "stable_threshold_met"
+
+
+def test_apply_evidence_with_operator_action_enables_stable_promotion(tmp_path: Path) -> None:
+    """End-to-end: self_report alone can't reach stable; operator_action unblocks it."""
+    from scripts.policy_config import (
+        STABLE_MIN_ATTEMPTS, STABLE_MIN_SUCCESS_RATE, STABLE_MIN_VERIFY_RATE,
+        PROMOTE_MIN_ATTEMPTS,
+    )
+    engine = _fresh_engine(tmp_path, session_id="sess-A")
+    key = "conn.read.pipe"
+
+    # Drive to canary with self_report + verify
+    for i in range(STABLE_MIN_ATTEMPTS):
+        eng = _fresh_engine(tmp_path, session_id=f"sess-{i}")
+        eng.apply_evidence(
+            key, success=True,
+            verify_observed=True, verify_passed=True,
+        )
+    entry = IntentRegistry.get(tmp_path, key)
+    # Should be canary (or still explore if STABLE_MIN_ATTEMPTS > PROMOTE_MIN_ATTEMPTS
+    # needs more evidence) — key assertion: not yet stable
+    assert entry.get("stage") != "stable", "must not reach stable without operator confirmation"
+
+    # Operator confirms — this should unblock stable promotion on next evidence
+    engine.apply_evidence(key, success=True, anchor_type="operator_action",
+                          verify_observed=True, verify_passed=True)
+    entry = IntentRegistry.get(tmp_path, key)
+    assert entry.get("stage") == "stable", "should reach stable after operator confirmation"

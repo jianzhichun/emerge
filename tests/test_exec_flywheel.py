@@ -212,6 +212,10 @@ def test_canary_sampling_progresses_to_stable(tmp_path: Path):
                     "verify_passed": True,
                 },
             )
+        # Operator confirmation required to unblock canary → stable gate.
+        daemon._policy_engine.apply_evidence(
+            "zwcad.write.add-wall", success=True, anchor_type="operator_action",
+        )
         for _ in range(140):
             daemon.call_tool(
                 "icc_exec",
@@ -251,6 +255,9 @@ def test_stable_rolls_back_on_window_failure_rate(tmp_path: Path):
 
         for _ in range(20):
             daemon.call_tool("icc_exec", {**common, "code": "x = 1", "verify_passed": True})
+        daemon._policy_engine.apply_evidence(
+            "zwcad.write.window-rate-test", success=True, anchor_type="operator_action",
+        )
         for _ in range(140):
             daemon.call_tool("icc_exec", {**common, "code": "x = 1", "verify_passed": True})
 

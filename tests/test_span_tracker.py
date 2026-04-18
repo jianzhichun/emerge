@@ -132,6 +132,10 @@ def test_policy_reaches_stable(tracker, monkeypatch):
     for _ in range(4):
         s = tracker.open_span("lark.read.get-doc")
         tracker.close_span(s, outcome="success")
+    # canary → stable requires at least one operator confirmation (evidence anchor phase 2)
+    tracker._get_policy_engine().apply_evidence(
+        "lark.read.get-doc", success=True, anchor_type="operator_action",
+    )
     assert tracker.get_policy_status("lark.read.get-doc") == "stable"
 
 def test_policy_rollback_on_consecutive_failures(tracker, monkeypatch):
@@ -170,6 +174,10 @@ def test_span_reflection_with_stable_intents(tracker, monkeypatch):
     for _ in range(2):
         s = tracker.open_span("lark.read.get-doc")
         tracker.close_span(s, outcome="success")
+    # operator confirmation required to unblock canary → stable
+    tracker._get_policy_engine().apply_evidence(
+        "lark.read.get-doc", success=True, anchor_type="operator_action",
+    )
     reflection = tracker.format_reflection()
     assert "Muscle memory" in reflection
     assert "Stable (auto-bridge): lark.read.get-doc" in reflection
@@ -275,11 +283,14 @@ def test_format_reflection_uses_policy_status(tracker, monkeypatch):
     # canary intent: 1/1 success (meets promote, not stable)
     s1 = tracker.open_span("lark.read.list-records")
     tracker.close_span(s1, outcome="success")
-    # stable intent: 2/2 success
+    # stable intent: 2/2 success + operator confirmation
     s2 = tracker.open_span("lark.read.get-doc")
     tracker.close_span(s2, outcome="success")
     s3 = tracker.open_span("lark.read.get-doc")
     tracker.close_span(s3, outcome="success")
+    tracker._get_policy_engine().apply_evidence(
+        "lark.read.get-doc", success=True, anchor_type="operator_action",
+    )
     reflection = tracker.format_reflection()
     assert "Stable (auto-bridge): lark.read.get-doc" in reflection
     assert "Canary: lark.read.list-records" in reflection

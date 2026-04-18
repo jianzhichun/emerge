@@ -2041,6 +2041,13 @@ def _drive_exec_to_synthesis_ready(daemon, intent_sig: str, n: int = 21) -> None
         })
 
 
+def _confirm_operator(daemon, intent_sig: str) -> None:
+    """Fire one operator_action evidence event so canary → stable gate is satisfied."""
+    daemon._policy_engine.apply_evidence(
+        intent_sig, success=True, anchor_type="operator_action",
+    )
+
+
 def test_auto_crystallize_creates_pipeline_at_synthesis_ready(tmp_path, monkeypatch):
     import json
     from scripts.emerge_daemon import EmergeDaemon
@@ -2241,6 +2248,13 @@ def test_span_close_generates_skeleton_at_stable(tmp_path, monkeypatch):
                         "has_side_effects": True, "ts_ms": 1}) + "\n"
         )
         daemon.call_tool("icc_span_close", {"span_id": sid, "outcome": "success"})
+    _confirm_operator(daemon, "lark.write.create-doc")
+    # Trigger one more span to push canary → stable after operator confirmation.
+    r = daemon.call_tool("icc_span_open", {"intent_signature": "lark.write.create-doc"})
+    body = json.loads(r["content"][0]["text"])
+    if not body.get("bridge"):
+        sid = body["span_id"]
+        daemon.call_tool("icc_span_close", {"span_id": sid, "outcome": "success"})
     # Default auto-activates: skeleton is moved to real dir. The behavior we're
     # verifying here is "at stable, a pipeline .py with run_write is produced";
     # auto-activation is covered by test_span_close_at_stable_auto_activates_pipeline.
@@ -2276,6 +2290,11 @@ def test_span_approve_moves_pending_and_generates_yaml(tmp_path, monkeypatch):
         s = daemon._span_tracker.open_span("lark.write.create-doc")
         daemon._open_spans[s.span_id] = s
         daemon._span_tracker.close_span(s, outcome="success")
+    _confirm_operator(daemon, "lark.write.create-doc")
+    # One more span to push canary → stable after operator confirmation.
+    s = daemon._span_tracker.open_span("lark.write.create-doc")
+    daemon._open_spans[s.span_id] = s
+    daemon._span_tracker.close_span(s, outcome="success")
 
     result = daemon.call_tool("icc_span_approve", {"intent_signature": "lark.write.create-doc"})
     assert result.get("isError") is not True
@@ -2315,6 +2334,8 @@ def test_span_close_at_stable_auto_activates_pipeline(tmp_path, monkeypatch):
     daemon.call_tool("icc_span_close", {
         "intent_signature": "lark.write.auto-activate", "outcome": "success",
     })
+    # Operator confirmation unblocks canary → stable gate.
+    _confirm_operator(daemon, "lark.write.auto-activate")
     # Second success: stable → skeleton generated → auto-activate
     daemon.call_tool("icc_span_open", {"intent_signature": "lark.write.auto-activate"})
     resp = daemon.call_tool("icc_span_close", {
@@ -2349,13 +2370,16 @@ def test_stable_bridge_auto_demotes_on_repeated_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(pe, "PROMOTE_MIN_ATTEMPTS", 1)
     monkeypatch.setattr(pe, "PROMOTE_MIN_SUCCESS_RATE", 1.0)
     monkeypatch.setattr(pe, "PROMOTE_MAX_HUMAN_FIX_RATE", 1.0)
-    monkeypatch.setattr(pe, "STABLE_MIN_ATTEMPTS", 2)
+    # Use 3 so that operator confirm (which adds 1 attempt) doesn't jump past the
+    # threshold before span 2 close (which triggers auto-activation at stable).
+    monkeypatch.setattr(pe, "STABLE_MIN_ATTEMPTS", 3)
     monkeypatch.setattr(pe, "STABLE_MIN_SUCCESS_RATE", 1.0)
     monkeypatch.setattr(pc, "BRIDGE_BROKEN_THRESHOLD", 2)
 
     # Drive an intent to stable with auto-activate producing a working skeleton.
     daemon.call_tool("icc_span_open", {"intent_signature": "lark.write.broken"})
     daemon.call_tool("icc_span_close", {"intent_signature": "lark.write.broken", "outcome": "success"})
+    _confirm_operator(daemon, "lark.write.broken")
     daemon.call_tool("icc_span_open", {"intent_signature": "lark.write.broken"})
     daemon.call_tool("icc_span_close", {"intent_signature": "lark.write.broken", "outcome": "success"})
 
@@ -2408,6 +2432,7 @@ def test_span_close_auto_activate_respects_opt_out_env(tmp_path, monkeypatch):
 
     daemon.call_tool("icc_span_open", {"intent_signature": "lark.write.gated"})
     daemon.call_tool("icc_span_close", {"intent_signature": "lark.write.gated", "outcome": "success"})
+    _confirm_operator(daemon, "lark.write.gated")
     daemon.call_tool("icc_span_open", {"intent_signature": "lark.write.gated"})
     resp = daemon.call_tool("icc_span_close", {"intent_signature": "lark.write.gated", "outcome": "success"})
 
@@ -2438,6 +2463,10 @@ def test_span_approve_errors_when_pending_missing(tmp_path, monkeypatch):
         s = daemon._span_tracker.open_span("lark.write.create-doc")
         daemon._open_spans[s.span_id] = s
         daemon._span_tracker.close_span(s, outcome="success")
+    _confirm_operator(daemon, "lark.write.create-doc")
+    s = daemon._span_tracker.open_span("lark.write.create-doc")
+    daemon._open_spans[s.span_id] = s
+    daemon._span_tracker.close_span(s, outcome="success")
     # No _pending file exists
     result = daemon.call_tool("icc_span_approve", {"intent_signature": "lark.write.create-doc"})
     assert result.get("isError") is True
@@ -2740,6 +2769,7 @@ def test_stable_transition_writes_to_sync_queue(tmp_path, monkeypatch):
                 "recent_outcomes": [1] * near,
                 "attempts_at_transition": 0,
                 "last_transition_reason": "init",
+                "operator_confirmations": 1,  # evidence anchor phase 2: gate satisfied
             }
         }
     }
