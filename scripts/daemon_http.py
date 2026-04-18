@@ -356,8 +356,8 @@ class DaemonHTTPServer:
         ev = threading.Event()
         with self._popup_lock:
             self._popup_futures[popup_id] = ev
-        if ui_spec.get("type") == "input":
-            ui_spec = {**ui_spec, "upload_url": f"http://localhost:{self._port}/runner/upload"}
+        # upload_url is intentionally NOT injected here; the runner derives it from
+        # its own team_lead_url so remote runners reach the correct daemon address.
         command = json.dumps({"type": "notify", "popup_id": popup_id, "ui_spec": ui_spec})
         with self._runners_lock:
             wfile = self._runner_sse_clients.get(runner_profile)

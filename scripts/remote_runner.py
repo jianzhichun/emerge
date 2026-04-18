@@ -540,6 +540,8 @@ class RunnerSSEClient:
         if cmd_type == "notify":
             popup_id = str(cmd.get("popup_id", ""))
             ui_spec = cmd.get("ui_spec", {})
+            if ui_spec.get("type") == "input" and "upload_url" not in ui_spec:
+                ui_spec = {**ui_spec, "upload_url": f"{self._url}/runner/upload"}
             try:
                 result = self._show_notify(ui_spec)
             except Exception:

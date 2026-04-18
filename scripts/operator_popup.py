@@ -130,10 +130,14 @@ class RichInputWidget:
             self._add_attachment(Path(p))
 
     def _on_drop(self, event: Any) -> None:
+        import re
         from pathlib import Path
         raw = event.data if hasattr(event, "data") else str(event)
-        for token in raw.split():
-            p = Path(token.strip("{}"))
+        # tkinterdnd2 format: paths with spaces are wrapped in {}, e.g.:
+        #   /simple/path {/path with spaces/file.txt} /another/path
+        paths = re.findall(r"\{([^}]+)\}|(\S+)", raw)
+        for braced, plain in paths:
+            p = Path(braced or plain)
             if p.exists():
                 self._add_attachment(p)
 
@@ -164,24 +168,31 @@ class RichInputWidget:
         self._pending += 1
         self._send_btn.config(state="disabled")
 
+        def _schedule(fn) -> None:
+            """Dispatch fn onto tkinter's main thread; silently drop if window already closed."""
+            try:
+                self._root.after(0, fn)
+            except Exception:
+                pass  # TclError: window destroyed while upload was in flight
+
         def _do_upload() -> None:
             try:
                 att = _upload_file(self._upload_url, filepath)
                 def _on_success(a=att):
                     if slot_id not in cancelled:
-                        tagged = {**a, "_slot": slot_id}
-                        self._attachments.append(tagged)
-                    chip_var.set(f"📎 {filepath.name}")
-                self._root.after(0, _on_success)
+                        self._attachments.append({**a, "_slot": slot_id})
+                        chip_var.set(f"📎 {filepath.name}")
+                    # if cancelled: chip_frame already destroyed, nothing to update
+                _schedule(_on_success)
             except RuntimeError:
-                self._root.after(0, lambda: chip_var.set(f"❌ {filepath.name}"))
-                self._root.after(0, lambda: chip_label.config(fg="red"))
+                _schedule(lambda: chip_var.set(f"❌ {filepath.name}"))
+                _schedule(lambda: chip_label.config(fg="red"))
             finally:
                 def _finish():
                     self._pending -= 1
                     if self._pending == 0:
                         self._send_btn.config(state="normal")
-                self._root.after(0, _finish)
+                _schedule(_finish)
 
         threading.Thread(target=_do_upload, daemon=True).start()
 
@@ -340,7 +351,7 @@ def _render_toast(*, body: str, timeout_s: int) -> dict[str, Any]:
     Uses osascript on macOS (no NSApp conflict with pystray/rumps).
     Falls back to a subprocess-isolated tkinter window on other platforms.
     """
-    import subprocess, sys, shlex
+    import subprocess, sys
 
     safe_body = body.replace('"', '\\"').replace("'", "\\'")
     # osascript display notification requires the Notification Center permission;
