@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-import json as _json
-import mimetypes as _mt
-import urllib.error as _ue
-import urllib.request as _ur
-from pathlib import Path
 from typing import Any, Callable, TypedDict
 
 
@@ -14,8 +9,13 @@ class Attachment(TypedDict):
     name: str
 
 
-def _upload_file(upload_url: str, filepath: Path) -> "Attachment":
+def _upload_file(upload_url: str, filepath: "Path") -> "Attachment":
     """Upload file to daemon via multipart POST. Returns Attachment or raises RuntimeError."""
+    import json as _json
+    import mimetypes as _mt
+    import urllib.error as _ue
+    import urllib.request as _ur
+    from pathlib import Path
     mime, _ = _mt.guess_type(filepath.name)
     mime = mime or "application/octet-stream"
     boundary = "emergeboundary"
@@ -111,12 +111,14 @@ class RichInputWidget:
 
     def _pick_file(self) -> None:
         import tkinter.filedialog as _fd
+        from pathlib import Path
         paths = _fd.askopenfilenames(parent=self._root, title="选择文件")
         for p in paths:
             self._add_attachment(Path(p))
 
     def _pick_image(self) -> None:
         import tkinter.filedialog as _fd
+        from pathlib import Path
         paths = _fd.askopenfilenames(
             parent=self._root, title="选择图片",
             filetypes=[("图片", "*.png *.jpg *.jpeg *.gif *.bmp *.webp"), ("所有文件", "*")],
@@ -125,6 +127,7 @@ class RichInputWidget:
             self._add_attachment(Path(p))
 
     def _on_drop(self, event: Any) -> None:
+        from pathlib import Path
         raw = event.data if hasattr(event, "data") else str(event)
         for token in raw.split():
             p = Path(token.strip("{}"))
@@ -151,15 +154,19 @@ class RichInputWidget:
         def _do_upload() -> None:
             try:
                 att = _upload_file(self._upload_url, filepath)
-                self._attachments.append(att)
-                self._root.after(0, lambda: chip_var.set(f"📎 {filepath.name}"))
+                def _on_success(a=att):
+                    self._attachments.append(a)
+                    chip_var.set(f"📎 {filepath.name}")
+                self._root.after(0, _on_success)
             except RuntimeError:
                 self._root.after(0, lambda: chip_var.set(f"❌ {filepath.name}"))
                 self._root.after(0, lambda: chip_label.config(fg="red"))
             finally:
-                self._pending -= 1
-                if self._pending == 0:
-                    self._root.after(0, lambda: self._send_btn.config(state="normal"))
+                def _finish():
+                    self._pending -= 1
+                    if self._pending == 0:
+                        self._send_btn.config(state="normal")
+                self._root.after(0, _finish)
 
         threading.Thread(target=_do_upload, daemon=True).start()
 
