@@ -56,6 +56,9 @@ def main() -> None:
     # Reset tracker so the next session starts fresh.
     fresh = StateTracker()
     save_tracker(state_path, fresh)
+    # Clear peripheral deltas (tool_audit.py) so post-compaction State tab is fresh.
+    (state_root / "tool-deltas.jsonl").unlink(missing_ok=True)
+    (state_root / "span-nudge-sent").unlink(missing_ok=True)
 
     out = {"systemMessage": context_text}
     print(json.dumps(out))
