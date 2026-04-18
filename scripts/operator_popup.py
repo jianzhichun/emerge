@@ -191,7 +191,8 @@ class RichInputWidget:
         text = self._text.get("1.0", "end-1c").strip()
         self._root.destroy()
         if text or self._attachments:
-            self._on_submit(text, list(self._attachments))
+            clean = [{k: v for k, v in a.items() if k != "_slot"} for a in self._attachments]
+            self._on_submit(text, clean)
 
 
 def show_notify(ui_spec: dict) -> dict[str, Any]:

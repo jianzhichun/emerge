@@ -144,7 +144,7 @@ The runner is a **stateless Python executor** — it accepts `icc_exec` only. Al
 | Endpoint        | Purpose                                  |
 | --------------- | ---------------------------------------- |
 | `POST /run`     | Execute one `icc_exec` call              |
-| `POST /runner/upload` | Upload a file; returns `{file_id, path, mime}` |
+| `POST /runner/upload` | Upload a file; stored at `state_root/uploads/{id}/`; returns `{file_id, path, mime}` |
 | `GET /health`   | Liveness — `{"ok": true, "uptime_s": N}` |
 | `GET /status`   | Process info (pid, python, root)         |
 | `GET /logs?n=N` | Last N log lines                         |
