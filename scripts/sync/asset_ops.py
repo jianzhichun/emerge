@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 
-BRIDGE_DEMOTION_REASONS: frozenset[str] = frozenset({"bridge_broken", "bridge_silent_empty"})
+BRIDGE_DEMOTION_REASONS: frozenset[str] = frozenset({"bridge_broken", "bridge_silent_empty", "bridge_schema_drift"})
 
 
 def connectors_root() -> Path:
