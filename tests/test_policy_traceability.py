@@ -295,6 +295,47 @@ def test_record_bridge_outcome_honors_custom_demotion_reason(tmp_path: Path) -> 
     assert entry["last_demotion"]["bridge_failure_reason"] == "rows empty after baseline"
 
 
+def test_record_bridge_outcome_non_empty_sets_baseline_flag(tmp_path: Path) -> None:
+    """A successful bridge call with non_empty=True marks the intent as having
+    produced non-empty output at least once. This baseline lets the bridge
+    call site later treat an empty return as a regression instead of an
+    always-empty intent."""
+    engine = _fresh_engine(tmp_path)
+    key = "gmail.read.fetch"
+    reg_path = registry_path(tmp_path)
+    reg_path.parent.mkdir(parents=True, exist_ok=True)
+    import json
+    reg_path.write_text(json.dumps({
+        "intents": {
+            key: {
+                "intent_signature": key,
+                "stage": "stable",
+                "attempts": 10,
+                "successes": 10,
+                "bridge_failure_streak": 0,
+                "last_ts_ms": 1,
+            }
+        }
+    }), encoding="utf-8")
+
+    before = IntentRegistry.load(tmp_path)["intents"][key]
+    assert "has_ever_returned_non_empty" not in before
+
+    engine.record_bridge_outcome(key, success=True, non_empty=True)
+    after = IntentRegistry.load(tmp_path)["intents"][key]
+    assert after["has_ever_returned_non_empty"] is True
+
+    # Idempotent: a subsequent non_empty=True call leaves the flag True.
+    engine.record_bridge_outcome(key, success=True, non_empty=True)
+    again = IntentRegistry.load(tmp_path)["intents"][key]
+    assert again["has_ever_returned_non_empty"] is True
+
+    # non_empty=None (default) must never clear the flag.
+    engine.record_bridge_outcome(key, success=True)
+    preserved = IntentRegistry.load(tmp_path)["intents"][key]
+    assert preserved["has_ever_returned_non_empty"] is True
+
+
 # ── last_demotion attribution ───────────────────────────────────────────────
 
 def test_last_demotion_populated_on_explore_to_rollback(tmp_path: Path) -> None:
