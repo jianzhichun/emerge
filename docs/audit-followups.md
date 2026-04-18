@@ -6,21 +6,14 @@ Audit source: `memory/feedback_claude_md_bias.md` — frame-external 5-blind-spo
 
 ## Open
 
-### 1. `scripts/emerge_daemon.py` concern split
-
-- **Principle**: Freedom-boundary — `size has a cost`.
-- **Gap**: ~1150 lines mixing `_TOOL_DISPATCH` registration, span lifecycle, composite execution, policy-evidence construction, HTTP glue. Loop detection and composite-cycle detection land mid-file. Onboarding cost is non-linear.
-- **Done when**: the composite bridge path (`_run_composite_bridge`) and the `_handle_icc_*` families live in their own module; `emerge_daemon.py` retains only dispatch + session lifecycle + HTTP glue.
-- **Non-goal**: renaming fields or `_TOOL_DISPATCH` key style. This is silent-bug prevention, not aesthetics.
-
-### 2. Evidence requires external anchor
+### 1. Evidence requires external anchor
 
 - **Principle**: frame-external blind spot 2 — `system self-audits with no external anchor`.
 - **Gap**: `PolicyEngine.apply_evidence` accepts any payload. Internal telemetry (e.g. `test message` deltas marked `verified: true`) is indistinguishable from operator-sourced evidence, so counter bumps can accrue from the system evaluating itself.
 - **Done when**: evidence carries an `anchor_type` field (`api_response_hash` | `file_mtime` | `operator_action` | `self_report`); `self_report` evidence either doesn't bump success counters, or is capped per session.
 - **Risk**: back-compat for existing evidence payloads without the field — treat missing as `self_report` and enforce the cap retroactively.
 
-### 3. External-user work
+### 2. External-user work
 
 - **Principle**: frame-external counterweight — `healthy audit flags at least one change as "correct by the axes but not by reality"`.
 - **Gap**: recent commit history is emerge-on-emerge (composite, auto-demote, hub sync, doctrine). No material edits under `connectors/<real-name>/`.
@@ -31,3 +24,5 @@ Audit source: `memory/feedback_claude_md_bias.md` — frame-external 5-blind-spo
 - v0.3.87 — composite cycle safety + synthesis-blocked reflection (`f537e6e`)
 - v0.3.87 — hub sync propagates synthesis-blocked + bridge-broken signals (`149c5b8`)
 - v0.3.88 — bridge runtime detects silent-wrong output (verify_degraded, empty-regression, action_not_ok) with new `bridge_silent_empty` demotion reason
+- v0.3.89 — daemon concern-split: FlywheelBridge + ToolHandlers extracted; emerge_daemon.py 1230 → 830 lines
+- v0.3.89 — schema-drift (key-set change) detection: bridge_schema_drift demotion reason; hub-propagated; row_keys_sample baseline persisted
