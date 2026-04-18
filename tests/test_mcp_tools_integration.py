@@ -436,7 +436,11 @@ def test_zwcad_read_state_pipeline_returns_structured_rows(tmp_path: Path):
         assert out.get("isError") is not True, out["content"][0]["text"]
         body = json.loads(out["content"][0]["text"])
         assert body["pipeline_id"] == "zwcad.read.state"
-        assert body["verify_result"]["ok"] is True
+        # In test mode (no real ZWCAD), pipeline falls back to source="mock" rows.
+        # verify_read correctly rejects mock data — this is intentional; the bridge
+        # should not record a verify_pass on fake data.
+        assert body["verify_result"]["ok"] is False
+        assert body["verify_result"].get("why") == "mock_fallback"
         rows = body["rows"]
         assert isinstance(rows, list) and len(rows) > 0
         assert all("id" in r and "name" in r for r in rows)
@@ -1238,8 +1242,12 @@ def test_hypermesh_pipeline_read_returns_structured_state():
     assert result.get("isError") is not True
     obj = json.loads(result["content"][0]["text"])
     assert obj["pipeline_id"] == "hypermesh.read.state"
-    assert obj["verify_result"]["ok"] is True
-    assert obj["verification_state"] == "verified"
+    # In test mode (no real HM server), pipeline falls back to source="mock" rows.
+    # verify_read correctly rejects mock data — the bridge must not count these
+    # as verify_passes, otherwise verify_rate inflates on fake data.
+    assert obj["verify_result"]["ok"] is False
+    assert obj["verify_result"].get("why") == "mock_fallback"
+    assert obj["verification_state"] == "degraded"
     assert isinstance(obj["rows"], list)
     assert len(obj["rows"]) > 0
     row = obj["rows"][0]
