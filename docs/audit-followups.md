@@ -6,12 +6,7 @@ Audit source: `memory/feedback_claude_md_bias.md` — frame-external 5-blind-spo
 
 ## Open
 
-
-### 2. External-user work
-
-- **Principle**: frame-external counterweight — `healthy audit flags at least one change as "correct by the axes but not by reality"`.
-- **Gap**: recent commit history is emerge-on-emerge (composite, auto-demote, hub sync, doctrine). No material edits under `connectors/<real-name>/`.
-- **Done when**: next capability commit lands in a real connector directory (hypermesh / zwcad / cloud-server / gmail), not `scripts/emerge_*` or `scripts/admin/`.
+*(none)*
 
 ## Closed
 
@@ -21,3 +16,4 @@ Audit source: `memory/feedback_claude_md_bias.md` — frame-external 5-blind-spo
 - v0.3.89 — daemon concern-split: FlywheelBridge + ToolHandlers extracted; emerge_daemon.py 1230 → 830 lines
 - v0.3.89 — schema-drift (key-set change) detection: bridge_schema_drift demotion reason; hub-propagated; row_keys_sample baseline persisted
 - v0.3.90 — evidence anchor (complete): phase 1 anchor_type + operator_confirmations + self_report_sessions; phase 2 canary→stable gate (requires operator_confirmations >= 1); reconcile(confirm/retract) fires operator_action
+- v0.3.92 — connector pipelines: verify_read rejects mock-source fallback in hypermesh + zwcad; source field added to all rows; 8 unit tests; closes audit blind spot 1 (silent wrong on fake data) and item 2 (external connector work)
