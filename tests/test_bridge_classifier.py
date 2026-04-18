@@ -4,10 +4,10 @@ These are extracted from _try_flywheel_bridge so each failure mode can be
 tested independently of the daemon / PolicyEngine / IntentRegistry stack.
 """
 
-from scripts.emerge_daemon import EmergeDaemon
+from scripts.mcp.bridge import FlywheelBridge
 
-_classify_bridge_failure = EmergeDaemon._classify_bridge_failure
-_classify_bridge_success_non_empty = EmergeDaemon._classify_bridge_success_non_empty
+_classify_bridge_failure = FlywheelBridge._classify_bridge_failure
+_classify_bridge_success_non_empty = FlywheelBridge._classify_bridge_success_non_empty
 
 
 class TestClassifyBridgeFailure:
@@ -134,27 +134,27 @@ class TestClassifyBridgeSuccessNonEmpty:
 
 
 class TestExtractRowKeysSample:
-    """EmergeDaemon._extract_row_keys_sample(result, mode) → frozenset[str] | None."""
+    """FlywheelBridge._extract_row_keys_sample(result, mode) → frozenset[str] | None."""
 
     def test_read_list_of_dicts(self):
         result = {"rows": [{"id": 1, "name": "foo"}, {"id": 2, "name": "bar"}]}
-        keys = EmergeDaemon._extract_row_keys_sample(result, "read")
+        keys = FlywheelBridge._extract_row_keys_sample(result, "read")
         assert keys == frozenset({"id", "name"})
 
     def test_read_empty_list(self):
         result = {"rows": []}
-        assert EmergeDaemon._extract_row_keys_sample(result, "read") is None
+        assert FlywheelBridge._extract_row_keys_sample(result, "read") is None
 
     def test_read_non_dict_rows(self):
         result = {"rows": [1, 2, 3]}
-        assert EmergeDaemon._extract_row_keys_sample(result, "read") is None
+        assert FlywheelBridge._extract_row_keys_sample(result, "read") is None
 
     def test_write_mode(self):
         result = {"rows": [{"id": 1}]}
-        assert EmergeDaemon._extract_row_keys_sample(result, "write") is None
+        assert FlywheelBridge._extract_row_keys_sample(result, "write") is None
 
     def test_non_dict_result(self):
-        assert EmergeDaemon._extract_row_keys_sample("string", "read") is None
+        assert FlywheelBridge._extract_row_keys_sample("string", "read") is None
 
 
 class TestClassifyBridgeFailureSchemaDrift:
@@ -189,8 +189,17 @@ class TestClassifyBridgeFailureSchemaDrift:
         assert failure is None
 
     def test_drift_with_non_empty_non_dict_rows_ignored(self):
-        # rows is a non-empty string — schema-drift check skips non-list rows
         result = {"rows": "raw_data", "verification_state": "verified"}
         sample = frozenset({"id"})
         failure = _classify_bridge_failure(result, "read", True, sample)
         assert failure is None
+
+    def test_stored_list_coerced_to_frozenset(self):
+        # Simulate reading row_keys_sample from JSON registry (stored as list)
+        stored_as_list = ["id", "name"]
+        row_keys_sample = frozenset(stored_as_list)
+        result = {"rows": [{"id": 1, "extra": "x"}], "verification_state": "verified"}
+        failure = _classify_bridge_failure(result, "read", True, row_keys_sample)
+        assert failure is not None
+        assert failure["demotion_reason"] == "bridge_schema_drift"
+        assert "extra" in failure["reason"]
