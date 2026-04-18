@@ -344,6 +344,7 @@ class PolicyEngine:
         success: bool,
         reason: str | None = None,
         exception_class: str | None = None,
+        demotion_reason: str = "bridge_broken",
         ts_ms: int | None = None,
     ) -> dict[str, Any]:
         """Record a flywheel bridge execution outcome.
@@ -387,7 +388,7 @@ class PolicyEngine:
             if streak >= BRIDGE_BROKEN_THRESHOLD and current_stage == "stable":
                 entry["stage"] = "canary"
                 entry["rollout_pct"] = 20
-                entry["last_transition_reason"] = "bridge_broken"
+                entry["last_transition_reason"] = demotion_reason
                 entry["attempts_at_transition"] = int(entry.get("attempts", 0))
                 entry["last_transition_ts_ms"] = ts_ms
                 # Keys may exist with JSON null — .get(k, 0.0) still returns None.
@@ -399,7 +400,7 @@ class PolicyEngine:
                     "ts_ms": ts_ms,
                     "from_stage": "stable",
                     "to_stage": "canary",
-                    "reason": "bridge_broken",
+                    "reason": demotion_reason,
                     "attempts": int(entry.get("attempts", 0)),
                     "success_rate": _rfloat("success_rate"),
                     "verify_rate": _rfloat("verify_rate"),
@@ -429,7 +430,7 @@ class PolicyEngine:
                 "from_stage": "stable",
                 "to_stage": "canary",
                 "new_stage": "canary",
-                "reason": "bridge_broken",
+                "reason": demotion_reason,
                 "bridge_failure_reason": reason or "",
                 "bridge_failure_exception": exception_class or "",
                 "demotion": True,

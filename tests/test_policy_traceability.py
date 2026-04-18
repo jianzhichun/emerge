@@ -255,6 +255,46 @@ def test_record_bridge_outcome_captures_exception_fingerprint(tmp_path: Path) ->
     assert hist["bridge_failure_exception"] == "NameError"
 
 
+def test_record_bridge_outcome_honors_custom_demotion_reason(tmp_path: Path) -> None:
+    """A caller can pass demotion_reason='bridge_silent_empty' so the transition
+    history and last_demotion reflect the silent-wrong category instead of the
+    default bridge_broken (exception) reason. Reflection can then render the
+    two root causes differently."""
+    from scripts.policy_config import BRIDGE_BROKEN_THRESHOLD
+
+    engine = _fresh_engine(tmp_path)
+    key = "gmail.read.fetch"
+    reg_path = registry_path(tmp_path)
+    reg_path.parent.mkdir(parents=True, exist_ok=True)
+    import json
+    reg_path.write_text(json.dumps({
+        "intents": {
+            key: {
+                "intent_signature": key,
+                "stage": "stable",
+                "attempts": 50,
+                "successes": 50,
+                "success_rate": 1.0,
+                "bridge_failure_streak": 0,
+                "last_ts_ms": 1,
+            }
+        }
+    }), encoding="utf-8")
+
+    for _ in range(BRIDGE_BROKEN_THRESHOLD):
+        engine.record_bridge_outcome(
+            key,
+            success=False,
+            reason="rows empty after baseline",
+            demotion_reason="bridge_silent_empty",
+        )
+    entry = IntentRegistry.load(tmp_path)["intents"][key]
+    assert entry["stage"] == "canary"
+    assert entry["last_transition_reason"] == "bridge_silent_empty"
+    assert entry["last_demotion"]["reason"] == "bridge_silent_empty"
+    assert entry["last_demotion"]["bridge_failure_reason"] == "rows empty after baseline"
+
+
 # ── last_demotion attribution ───────────────────────────────────────────────
 
 def test_last_demotion_populated_on_explore_to_rollback(tmp_path: Path) -> None:
