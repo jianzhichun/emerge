@@ -210,6 +210,66 @@ class EmergeDaemon:
             return self.pipeline.run_write(arguments), "local"
         return self.pipeline.run_read(arguments), "local"
 
+    # -- bridge failure classification (pure, no side-effects) --
+
+    @staticmethod
+    def _classify_bridge_failure(
+        result: Any, mode: str, has_non_empty_baseline: bool,
+    ) -> dict[str, str] | None:
+        """Classify a bridge result as a failure or success (pure function).
+
+        Returns ``None`` on success, else a dict with keys
+        ``reason``, ``demotion_reason`` for downstream recording.
+        """
+        if not isinstance(result, dict):
+            return None
+
+        if result.get("verification_state") == "degraded":
+            verify_info = result.get("verify_result") or {}
+            why = ""
+            if isinstance(verify_info, dict):
+                why = str(verify_info.get("why", "") or "")
+            return {
+                "reason": f"verify_degraded: {why}",
+                "demotion_reason": "bridge_broken",
+            }
+
+        if mode == "read":
+            rows = result.get("rows")
+            is_empty = rows is None or (
+                isinstance(rows, (list, tuple, dict, str)) and len(rows) == 0
+            )
+            if is_empty and has_non_empty_baseline:
+                return {
+                    "reason": "rows empty after non-empty baseline",
+                    "demotion_reason": "bridge_silent_empty",
+                }
+
+        if mode == "write":
+            action = result.get("action_result")
+            if isinstance(action, dict) and action.get("ok") is False:
+                err = str(action.get("error", "") or "")
+                return {
+                    "reason": f"action_not_ok: {err}",
+                    "demotion_reason": "bridge_broken",
+                }
+
+        return None
+
+    @staticmethod
+    def _classify_bridge_success_non_empty(result: Any, mode: str) -> bool | None:
+        """Return ``True`` if this is a read-mode bridge that produced
+        non-empty rows, ``None`` otherwise. Used to latch the
+        ``has_ever_returned_non_empty`` baseline."""
+        if mode != "read" or not isinstance(result, dict):
+            return None
+        rows = result.get("rows")
+        if rows is not None and not (
+            isinstance(rows, (list, tuple, dict, str)) and len(rows) == 0
+        ):
+            return True
+        return None
+
     def _try_flywheel_bridge(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
         base_pipeline_id = str(arguments.get("base_pipeline_id", "")).strip()
         # Fall back to intent_signature — with unified keys they are the same thing.
@@ -258,20 +318,11 @@ class EmergeDaemon:
                 "flywheel bridge failed for %s (%s), falling back to LLM: %s",
                 base_pipeline_id, mode, _bridge_exc,
             )
-            # Store failure info for icc_exec to inject into the response.
-            # Falling back to LLM: the subsequent icc_exec path will record
-            # evidence via PolicyEngine.apply_evidence — PolicyEngine is the
-            # unique writer for state/registry/intents.json, so we do not bump
-            # counters here.
             self._last_bridge_failure = {
                 "pipeline_id": base_pipeline_id,
                 "mode": mode,
                 "reason": str(_bridge_exc),
             }
-            # Record bridge-only evidence so repeated bridge failures demote
-            # the pipeline from stable → canary (see PolicyEngine.record_bridge_outcome).
-            # This is separate from attempt-counter evidence: the LLM fallback's
-            # own success/failure still feeds apply_evidence as usual.
             try:
                 self._policy_engine.record_bridge_outcome(
                     base_pipeline_id,
@@ -282,97 +333,39 @@ class EmergeDaemon:
             except Exception:
                 pass
             return None
-        if isinstance(result, dict) and result.get("verification_state") == "degraded":
+        # Classify non-exception failures via pure function.
+        current = IntentRegistry.get(self._state_root, base_pipeline_id) or {}
+        has_baseline = bool(current.get("has_ever_returned_non_empty"))
+        failure = self._classify_bridge_failure(result, mode, has_baseline)
+        if failure is not None:
             import logging as _logging
             _logging.getLogger(__name__).warning(
-                "flywheel bridge verify degraded for %s (%s), falling back to LLM: %s",
-                base_pipeline_id, mode, result.get("verify_result"),
+                "flywheel bridge %s for %s (%s), falling back to LLM",
+                failure["demotion_reason"], base_pipeline_id, mode,
             )
-            verify_info = result.get("verify_result") or {}
             self._last_bridge_failure = {
                 "pipeline_id": base_pipeline_id,
                 "mode": mode,
-                "reason": f"verify_degraded: {verify_info}",
+                "reason": failure["reason"],
             }
             try:
-                why = ""
-                if isinstance(verify_info, dict):
-                    why = str(verify_info.get("why", "") or "")
                 self._policy_engine.record_bridge_outcome(
                     base_pipeline_id,
                     success=False,
-                    reason=f"verify_degraded: {why}",
+                    reason=failure["reason"],
+                    demotion_reason=failure["demotion_reason"],
                 )
             except Exception:
                 pass
             return None
-        # Silent-empty regression detection: only fires when we've seen a
-        # non-empty result for this intent before (baseline). First-run empties
-        # are legitimate — the intent may always be empty.
-        if mode == "read" and isinstance(result, dict):
-            rows = result.get("rows")
-            is_empty = rows is None or (
-                isinstance(rows, (list, tuple, dict, str)) and len(rows) == 0
-            )
-            if is_empty:
-                current = IntentRegistry.get(self._state_root, base_pipeline_id) or {}
-                if bool(current.get("has_ever_returned_non_empty")):
-                    import logging as _logging
-                    _logging.getLogger(__name__).warning(
-                        "flywheel bridge returned empty rows after non-empty baseline for %s",
-                        base_pipeline_id,
-                    )
-                    self._last_bridge_failure = {
-                        "pipeline_id": base_pipeline_id,
-                        "mode": mode,
-                        "reason": "rows empty after non-empty baseline",
-                    }
-                    try:
-                        self._policy_engine.record_bridge_outcome(
-                            base_pipeline_id,
-                            success=False,
-                            reason="rows empty after non-empty baseline",
-                            demotion_reason="bridge_silent_empty",
-                        )
-                    except Exception:
-                        pass
-                    return None
-        if mode == "write" and isinstance(result, dict):
-            action = result.get("action_result")
-            if isinstance(action, dict) and action.get("ok") is False:
-                import logging as _logging
-                _logging.getLogger(__name__).warning(
-                    "flywheel bridge write action_result.ok=False for %s: %s",
-                    base_pipeline_id, action.get("error"),
-                )
-                err = str(action.get("error", "") or "")
-                self._last_bridge_failure = {
-                    "pipeline_id": base_pipeline_id,
-                    "mode": mode,
-                    "reason": f"action_not_ok: {err}",
-                }
-                try:
-                    self._policy_engine.record_bridge_outcome(
-                        base_pipeline_id,
-                        success=False,
-                        reason=f"action_not_ok: {err}",
-                    )
-                except Exception:
-                    pass
-                return None
+        # Success path.
         result["bridge_promoted"] = True
         try:
             self._sink.emit("flywheel.bridge.promoted", {"pipeline_id": base_pipeline_id})
         except Exception:
             pass
         try:
-            bridge_non_empty: bool | None = None
-            if mode == "read" and isinstance(result, dict):
-                rows = result.get("rows")
-                if rows is not None and not (
-                    isinstance(rows, (list, tuple, dict, str)) and len(rows) == 0
-                ):
-                    bridge_non_empty = True
+            bridge_non_empty = self._classify_bridge_success_non_empty(result, mode)
             self._policy_engine.record_bridge_outcome(
                 base_pipeline_id, success=True, non_empty=bridge_non_empty,
             )

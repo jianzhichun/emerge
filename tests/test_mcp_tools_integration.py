@@ -3391,6 +3391,87 @@ def test_bridge_write_action_not_ok_bumps_streak(tmp_path, monkeypatch):
     assert "action_not_ok" in daemon._last_bridge_failure["reason"]
 
 
+def test_bridge_remote_runner_verify_degraded_demotes(tmp_path, monkeypatch):
+    """Remote-runner path (_run_pipeline_remotely) feeds through the same
+    classifier, so a degraded verify result from a remote pipeline still bumps
+    bridge_failure_streak."""
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.intent_registry import IntentRegistry
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon()
+    _seed_stable_intent(tmp_path, "gmail.read.fetch")
+
+    degraded_result = {
+        "pipeline_id": "gmail.read.fetch",
+        "rows": [{"id": 1}],
+        "verify_result": {"ok": False, "why": "schema changed"},
+        "verification_state": "degraded",
+    }
+
+    fake_router = MagicMock()
+    fake_client = MagicMock()
+    fake_router.find_client.return_value = fake_client
+    monkeypatch.setattr(daemon, "_get_runner_router", lambda: fake_router)
+
+    with patch.object(daemon, "_run_pipeline_remotely", return_value=degraded_result):
+        result = daemon._try_flywheel_bridge({"intent_signature": "gmail.read.fetch"})
+
+    assert result is None
+    entry = IntentRegistry.load(tmp_path)["intents"]["gmail.read.fetch"]
+    assert entry["bridge_failure_streak"] == 1
+    assert daemon._last_bridge_failure is not None
+    assert "verify_degraded" in daemon._last_bridge_failure["reason"]
+
+
+def test_bridge_remote_runner_silent_empty_demotes(tmp_path, monkeypatch):
+    """Remote-runner path: empty read after non-empty baseline triggers
+    bridge_silent_empty demotion, not bridge_broken."""
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.intent_registry import IntentRegistry
+    from scripts.policy_config import BRIDGE_BROKEN_THRESHOLD
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon()
+    _seed_stable_intent(tmp_path, "gmail.read.fetch")
+
+    fake_router = MagicMock()
+    fake_client = MagicMock()
+    fake_router.find_client.return_value = fake_client
+    monkeypatch.setattr(daemon, "_get_runner_router", lambda: fake_router)
+
+    non_empty = {
+        "pipeline_id": "gmail.read.fetch",
+        "rows": [{"id": 1}],
+        "verify_result": {"ok": True},
+        "verification_state": "verified",
+    }
+    empty = {
+        "pipeline_id": "gmail.read.fetch",
+        "rows": [],
+        "verify_result": {"ok": True},
+        "verification_state": "verified",
+    }
+
+    # First: establish baseline via remote.
+    with patch.object(daemon, "_run_pipeline_remotely", return_value=non_empty):
+        daemon._try_flywheel_bridge({"intent_signature": "gmail.read.fetch"})
+
+    baseline = IntentRegistry.load(tmp_path)["intents"]["gmail.read.fetch"]
+    assert baseline["has_ever_returned_non_empty"] is True
+
+    # Then: silent-empty regression via remote.
+    with patch.object(daemon, "_run_pipeline_remotely", return_value=empty):
+        for _ in range(BRIDGE_BROKEN_THRESHOLD):
+            daemon._try_flywheel_bridge({"intent_signature": "gmail.read.fetch"})
+
+    entry = IntentRegistry.load(tmp_path)["intents"]["gmail.read.fetch"]
+    assert entry["stage"] == "canary"
+    assert entry["last_transition_reason"] == "bridge_silent_empty"
+
+
 def test_span_close_stable_includes_skeleton_path(tmp_path, monkeypatch):
     """icc_span_close generating a skeleton must include skeleton_path in response."""
     from scripts.emerge_daemon import EmergeDaemon
