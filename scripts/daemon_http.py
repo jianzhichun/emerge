@@ -689,7 +689,6 @@ def _make_handler(srv: "DaemonHTTPServer"):
                     self._send_json(400, {"ok": False, "error": str(exc)})
             elif path == "/runner/upload":
                 import mimetypes as _mt
-                import uuid as _uuid
                 content_type = self.headers.get("Content-Type", "")
                 if "multipart/form-data" not in content_type:
                     self._send_json(400, {"error": "multipart/form-data required"})
@@ -701,13 +700,10 @@ def _make_handler(srv: "DaemonHTTPServer"):
                 file_data, filename, mime = parts["file"]
                 max_bytes = int(os.environ.get("EMERGE_UPLOAD_MAX_BYTES", str(50 * 1024 * 1024)))
                 if len(file_data) > max_bytes:
-                    self.send_response(413)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"error": "file too large"}).encode())
+                    self._send_json(413, {"error": "file too large"})
                     return
                 safe_name = Path(filename or "upload").name or "upload"
-                file_id = str(_uuid.uuid4())
+                file_id = str(uuid.uuid4())
                 upload_dir = srv._state_root / "uploads" / file_id
                 upload_dir.mkdir(parents=True, exist_ok=True)
                 dest = upload_dir / safe_name
