@@ -186,11 +186,11 @@ class RichInputWidget:
         threading.Thread(target=_do_upload, daemon=True).start()
 
     def _on_send(self) -> None:
-        if self._pending > 0:
+        if self._pending > 0:  # uploads in flight — send_btn is already disabled, but guard keyboard shortcut too
             return
         text = self._text.get("1.0", "end-1c").strip()
         self._root.destroy()
-        if text or self._attachments:
+        if text or self._attachments:  # allow attach-only messages (no text required)
             clean = [{k: v for k, v in a.items() if k != "_slot"} for a in self._attachments]
             self._on_submit(text, clean)
 
@@ -337,30 +337,49 @@ def _render_confirm(*, body: str, title: str) -> dict[str, Any]:
 def _render_toast(*, body: str, timeout_s: int) -> dict[str, Any]:
     """Non-interactive toast that auto-dismisses after timeout_s seconds.
 
-    Spawns a daemon thread for the tkinter window and returns immediately.
+    Uses osascript on macOS (no NSApp conflict with pystray/rumps).
+    Falls back to a subprocess-isolated tkinter window on other platforms.
     """
-    import threading
+    import subprocess, sys, shlex
 
-    def _show() -> None:  # intentionally closes over body/timeout_s — both are immutable call-locals
-        import tkinter as tk
-        try:
-            root = tk.Tk()
-            root.overrideredirect(True)
-            root.attributes("-topmost", True)
-            root.update_idletasks()
-            sw = root.winfo_screenwidth()
-            sh = root.winfo_screenheight()
-            w, h = 300, 64
-            root.geometry(f"{w}x{h}+{sw - w - 20}+{sh - h - 60}")
-            tk.Label(root, text=body, wraplength=280, font=("", 10), justify="left").pack(
-                pady=8, padx=12, anchor="w"
-            )
-            root.after(timeout_s * 1000, root.destroy)
-            root.mainloop()
-        except Exception:
-            pass  # headless or display error — silently skip
+    safe_body = body.replace('"', '\\"').replace("'", "\\'")
+    # osascript display notification requires the Notification Center permission;
+    # display dialog auto-dismisses and works without it.
+    script = (
+        f'display notification "{safe_body}" with title "emerge"'
+    )
+    try:
+        subprocess.Popen(
+            ["osascript", "-e", script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return {"action": "dismissed", "value": ""}
+    except FileNotFoundError:
+        pass  # not macOS
 
-    threading.Thread(target=_show, daemon=True).start()
+    # Non-macOS fallback: tkinter in a subprocess (isolated NSApp context).
+    tk_script = f"""
+import tkinter as tk
+root = tk.Tk()
+root.overrideredirect(True)
+root.attributes("-topmost", True)
+root.update_idletasks()
+sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+w, h = 300, 64
+root.geometry(f"{{w}}x{{h}}+{{sw - w - 20}}+{{sh - h - 60}}")
+tk.Label(root, text={body!r}, wraplength=280, font=("", 10), justify="left").pack(pady=8, padx=12, anchor="w")
+root.after({timeout_s * 1000}, root.destroy)
+root.mainloop()
+"""
+    try:
+        subprocess.Popen(
+            [sys.executable, "-c", tk_script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
     return {"action": "dismissed", "value": ""}
 
 

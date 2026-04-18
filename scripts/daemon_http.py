@@ -18,7 +18,11 @@ _KEEPALIVE_INTERVAL_S = 20.0
 
 
 def _parse_multipart(content_type: str, body: bytes) -> dict:
-    """Parse multipart/form-data. Returns {field_name: (data, filename, mime)}."""
+    """Parse multipart/form-data. Returns {field_name: (data, filename, mime)}.
+
+    Uses get_filename() (not get_param) so RFC 2231 encoded names (e.g. UTF-8
+    Chinese filenames) are decoded correctly instead of returned as raw encoded strings.
+    """
     import email as _email
     import email.policy as _ep
     raw = f"MIME-Version: 1.0\r\nContent-Type: {content_type}\r\n\r\n".encode() + body
@@ -31,7 +35,7 @@ def _parse_multipart(content_type: str, body: bytes) -> dict:
         if not hasattr(part, "get_param"):
             continue
         name = part.get_param("name", header="content-disposition")
-        filename = part.get_param("filename", header="content-disposition")
+        filename = part.get_filename() or part.get_param("filename", header="content-disposition")
         data = part.get_payload(decode=True) or b""
         if name:
             parts[name] = (data, filename, part.get_content_type())
