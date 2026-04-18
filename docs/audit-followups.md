@@ -6,13 +6,6 @@ Audit source: `memory/feedback_claude_md_bias.md` — frame-external 5-blind-spo
 
 ## Open
 
-### 1. Evidence anchor — phase 2 (promotion gate)
-
-- **Principle**: frame-external blind spot 2 — `system self-audits with no external anchor`.
-- **Phase 1 done** (v0.3.90, `dfd3ceb`): `anchor_type` field on `apply_evidence`; `operator_confirmations` counter on intent entries; `self_report_sessions` tracking (bounded); `icc_reconcile(outcome=confirm)` fires `operator_action` evidence; `span_tracker` passes `span_id` as `evidence_unit_id`.
-- **Phase 2 gap**: promotion from `canary → stable` still does not require `operator_confirmations >= 1`. A purely self-reported intent can reach stable without any human confirmation. Adding this gate is the remaining piece.
-- **Done when**: `_derive_transition` (or `PolicyEngine.apply_evidence`) blocks `canary → stable` unless `operator_confirmations >= 1` OR an alternative external anchor is present.
-- **Risk**: existing stable intents pre-dating phase 1 have `operator_confirmations = 0` — apply the gate only to new promotions (don't retroactively demote).
 
 ### 2. External-user work
 
@@ -27,4 +20,4 @@ Audit source: `memory/feedback_claude_md_bias.md` — frame-external 5-blind-spo
 - v0.3.88 — bridge runtime detects silent-wrong output (verify_degraded, empty-regression, action_not_ok) with new `bridge_silent_empty` demotion reason
 - v0.3.89 — daemon concern-split: FlywheelBridge + ToolHandlers extracted; emerge_daemon.py 1230 → 830 lines
 - v0.3.89 — schema-drift (key-set change) detection: bridge_schema_drift demotion reason; hub-propagated; row_keys_sample baseline persisted
-- v0.3.90 — evidence anchor phase 1: anchor_type + operator_confirmations + self_report_sessions tracking; reconcile(confirm) fires operator_action; span uses span_id as evidence_unit_id
+- v0.3.90 — evidence anchor (complete): phase 1 anchor_type + operator_confirmations + self_report_sessions; phase 2 canary→stable gate (requires operator_confirmations >= 1); reconcile(confirm/retract) fires operator_action
