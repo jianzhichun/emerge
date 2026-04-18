@@ -134,11 +134,8 @@ class RunnerExecutor:
         except (_ue.URLError, OSError):
             return False  # best-effort, never block operator
 
-    def _post_operator_message(self, text: str) -> None:
-        """Forward operator tray message to daemon as an operator_message event.
-
-        Shows a non-blocking error toast if the daemon is unreachable.
-        """
+    def _post_operator_message(self, text: str, attachments: list | None = None) -> None:
+        """Forward operator tray message to daemon as an operator_message event."""
         import socket as _sock
         import time as _time
         try:
@@ -148,6 +145,7 @@ class RunnerExecutor:
         event = {
             "type": "operator_message",
             "text": text,
+            "attachments": attachments or [],
             "runner_profile": self._runner_profile,
             "machine_id": machine_id,
             "ts_ms": int(_time.time() * 1000),
@@ -162,7 +160,7 @@ class RunnerExecutor:
                 from scripts.operator_popup import show_notify
                 show_notify({"type": "toast", "body": "发送失败，daemon 未连接", "timeout_s": 4})
             except (ImportError, OSError):
-                pass  # headless or module-unavailable — skip feedback silently
+                pass
 
     def _start_tray(self) -> None:
         """Start system tray icon in a background thread.
@@ -188,9 +186,10 @@ class RunnerExecutor:
 
         def _on_send_message(icon: Any, item: Any) -> None:
             from scripts.operator_popup import show_input_bubble
+            upload_url = f"{self._team_lead_url}/runner/upload" if self._team_lead_url else ""
             threading.Thread(
                 target=show_input_bubble,
-                args=(self._post_operator_message,),
+                args=(self._post_operator_message, upload_url),
                 daemon=True,
             ).start()
 
