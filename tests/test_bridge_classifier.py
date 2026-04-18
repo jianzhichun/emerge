@@ -131,3 +131,66 @@ class TestClassifyBridgeSuccessNonEmpty:
     def test_read_non_empty_string(self):
         result = {"rows": "data"}
         assert _classify_bridge_success_non_empty(result, "read") is True
+
+
+class TestExtractRowKeysSample:
+    """EmergeDaemon._extract_row_keys_sample(result, mode) → frozenset[str] | None."""
+
+    def test_read_list_of_dicts(self):
+        result = {"rows": [{"id": 1, "name": "foo"}, {"id": 2, "name": "bar"}]}
+        keys = EmergeDaemon._extract_row_keys_sample(result, "read")
+        assert keys == frozenset({"id", "name"})
+
+    def test_read_empty_list(self):
+        result = {"rows": []}
+        assert EmergeDaemon._extract_row_keys_sample(result, "read") is None
+
+    def test_read_non_dict_rows(self):
+        result = {"rows": [1, 2, 3]}
+        assert EmergeDaemon._extract_row_keys_sample(result, "read") is None
+
+    def test_write_mode(self):
+        result = {"rows": [{"id": 1}]}
+        assert EmergeDaemon._extract_row_keys_sample(result, "write") is None
+
+    def test_non_dict_result(self):
+        assert EmergeDaemon._extract_row_keys_sample("string", "read") is None
+
+
+class TestClassifyBridgeFailureSchemaDrift:
+    """_classify_bridge_failure schema-drift path."""
+
+    def test_schema_drift_removed_key(self):
+        result = {"rows": [{"id": 1}], "verification_state": "verified"}
+        sample = frozenset({"id", "name"})  # baseline had 'name'
+        failure = _classify_bridge_failure(result, "read", True, sample)
+        assert failure is not None
+        assert failure["demotion_reason"] == "bridge_schema_drift"
+        assert "removed" in failure["reason"]
+        assert "name" in failure["reason"]
+
+    def test_schema_drift_added_key(self):
+        result = {"rows": [{"id": 1, "name": "foo", "extra": "x"}], "verification_state": "verified"}
+        sample = frozenset({"id", "name"})
+        failure = _classify_bridge_failure(result, "read", True, sample)
+        assert failure is not None
+        assert failure["demotion_reason"] == "bridge_schema_drift"
+        assert "added" in failure["reason"]
+
+    def test_no_drift_same_keys(self):
+        result = {"rows": [{"id": 1, "name": "foo"}], "verification_state": "verified"}
+        sample = frozenset({"id", "name"})
+        failure = _classify_bridge_failure(result, "read", True, sample)
+        assert failure is None
+
+    def test_no_sample_no_drift(self):
+        result = {"rows": [{"id": 1}], "verification_state": "verified"}
+        failure = _classify_bridge_failure(result, "read", True, None)
+        assert failure is None
+
+    def test_drift_with_non_empty_non_dict_rows_ignored(self):
+        # rows is a non-empty string — schema-drift check skips non-list rows
+        result = {"rows": "raw_data", "verification_state": "verified"}
+        sample = frozenset({"id"})
+        failure = _classify_bridge_failure(result, "read", True, sample)
+        assert failure is None

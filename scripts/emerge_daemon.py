@@ -215,7 +215,8 @@ class EmergeDaemon:
     @staticmethod
     def _classify_bridge_failure(
         result: Any, mode: str, has_non_empty_baseline: bool,
-    ) -> dict[str, str] | None:
+        row_keys_sample: "frozenset[str] | None" = None,
+    ) -> "dict[str, str] | None":
         """Classify a bridge result as a failure or success (pure function).
 
         Returns ``None`` on success, else a dict with keys
@@ -245,6 +246,27 @@ class EmergeDaemon:
                     "demotion_reason": "bridge_silent_empty",
                 }
 
+            if (
+                row_keys_sample is not None
+                and not is_empty
+                and isinstance(rows, list)
+                and rows
+                and isinstance(rows[0], dict)
+            ):
+                current_keys = frozenset(rows[0].keys())
+                if current_keys != row_keys_sample:
+                    added = sorted(current_keys - row_keys_sample)
+                    removed = sorted(row_keys_sample - current_keys)
+                    parts = []
+                    if removed:
+                        parts.append(f"removed: {removed}")
+                    if added:
+                        parts.append(f"added: {added}")
+                    return {
+                        "reason": f"schema_drift: {', '.join(parts)}",
+                        "demotion_reason": "bridge_schema_drift",
+                    }
+
         if mode == "write":
             action = result.get("action_result")
             if isinstance(action, dict) and action.get("ok") is False:
@@ -268,6 +290,21 @@ class EmergeDaemon:
             isinstance(rows, (list, tuple, dict, str)) and len(rows) == 0
         ):
             return True
+        return None
+
+    @staticmethod
+    def _extract_row_keys_sample(result: Any, mode: str) -> "frozenset[str] | None":
+        """Return frozenset of top-level keys from the first row dict, or None.
+
+        Used to latch a key-set baseline on first non-empty bridge success so
+        subsequent runs can detect schema renames (bridge_schema_drift).
+        Only meaningful for read-mode results with list-of-dict rows.
+        """
+        if mode != "read" or not isinstance(result, dict):
+            return None
+        rows = result.get("rows")
+        if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+            return frozenset(rows[0].keys())
         return None
 
     def _try_flywheel_bridge(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
@@ -336,7 +373,9 @@ class EmergeDaemon:
         # Classify non-exception failures via pure function.
         current = IntentRegistry.get(self._state_root, base_pipeline_id) or {}
         has_baseline = bool(current.get("has_ever_returned_non_empty"))
-        failure = self._classify_bridge_failure(result, mode, has_baseline)
+        stored_keys = current.get("row_keys_sample")
+        row_keys_sample = frozenset(stored_keys) if isinstance(stored_keys, list) else None
+        failure = self._classify_bridge_failure(result, mode, has_baseline, row_keys_sample)
         if failure is not None:
             import logging as _logging
             _logging.getLogger(__name__).warning(
