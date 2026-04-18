@@ -155,12 +155,14 @@ class RunnerExecutor:
             and self._runner_profile
             and self._forward_event_to_daemon(event)
         )
-        if not ok:
-            try:
-                from scripts.operator_popup import show_notify
+        try:
+            from scripts.operator_popup import show_notify
+            if ok:
+                show_notify({"type": "toast", "body": "✓ 消息已发送", "timeout_s": 2})
+            else:
                 show_notify({"type": "toast", "body": "发送失败，daemon 未连接", "timeout_s": 4})
-            except (ImportError, OSError):
-                pass
+        except (ImportError, OSError):
+            pass
 
     def _start_tray(self) -> None:
         """Start system tray icon in a background thread.
