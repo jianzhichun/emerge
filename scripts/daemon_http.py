@@ -16,6 +16,28 @@ from scripts.policy_config import events_root
 
 _KEEPALIVE_INTERVAL_S = 20.0
 
+
+def _parse_multipart(content_type: str, body: bytes) -> dict:
+    """Parse multipart/form-data. Returns {field_name: (data, filename, mime)}."""
+    import email as _email
+    import email.policy as _ep
+    raw = f"MIME-Version: 1.0\r\nContent-Type: {content_type}\r\n\r\n".encode() + body
+    msg = _email.message_from_bytes(raw, policy=_ep.compat32)
+    parts: dict = {}
+    payload = msg.get_payload()
+    if not isinstance(payload, list):
+        return parts
+    for part in payload:
+        if not hasattr(part, "get_param"):
+            continue
+        name = part.get_param("name", header="content-disposition")
+        filename = part.get_param("filename", header="content-disposition")
+        data = part.get_payload(decode=True) or b""
+        if name:
+            parts[name] = (data, filename, part.get_content_type())
+    return parts
+
+
 def _validate_machine_id(machine_id: str) -> None:
     """Reject machine_id values that could escape the event root via path traversal."""
     if not machine_id or machine_id != machine_id.strip():
@@ -665,6 +687,35 @@ def _make_handler(srv: "DaemonHTTPServer"):
                     self._send_json(200, {"ok": True})
                 except Exception as exc:
                     self._send_json(400, {"ok": False, "error": str(exc)})
+            elif path == "/runner/upload":
+                import mimetypes as _mt
+                import uuid as _uuid
+                content_type = self.headers.get("Content-Type", "")
+                if "multipart/form-data" not in content_type:
+                    self._send_json(400, {"error": "multipart/form-data required"})
+                    return
+                parts = _parse_multipart(content_type, body)
+                if "file" not in parts:
+                    self._send_json(400, {"error": "no file provided"})
+                    return
+                file_data, filename, mime = parts["file"]
+                max_bytes = int(os.environ.get("EMERGE_UPLOAD_MAX_BYTES", str(50 * 1024 * 1024)))
+                if len(file_data) > max_bytes:
+                    self.send_response(413)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "file too large"}).encode())
+                    return
+                safe_name = Path(filename or "upload").name or "upload"
+                file_id = str(_uuid.uuid4())
+                upload_dir = srv._state_root / "uploads" / file_id
+                upload_dir.mkdir(parents=True, exist_ok=True)
+                dest = upload_dir / safe_name
+                dest.write_bytes(file_data)
+                if not mime or mime == "application/octet-stream":
+                    guessed, _ = _mt.guess_type(safe_name)
+                    mime = guessed or "application/octet-stream"
+                self._send_json(200, {"file_id": file_id, "path": str(dest), "mime": mime})
             else:
                 self._send_json(404, {"ok": False, "error": "not_found"})
 
