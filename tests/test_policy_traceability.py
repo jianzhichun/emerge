@@ -506,6 +506,55 @@ def test_cmd_control_plane_intent_history_requires_key(tmp_path: Path, monkeypat
 
 # ── cockpit route ───────────────────────────────────────────────────────────
 
+def test_record_bridge_outcome_stores_row_keys_sample(tmp_path: Path) -> None:
+    """row_keys_sample is persisted as a sorted list when provided on success."""
+    engine = _fresh_engine(tmp_path)
+    key = "conn.read.pipe"
+
+    engine.apply_evidence(key, success=True)
+    engine.record_bridge_outcome(
+        key,
+        success=True,
+        non_empty=True,
+        row_keys_sample=frozenset({"id", "name", "status"}),
+    )
+    entry = IntentRegistry.get(tmp_path, key)
+    assert entry is not None
+    assert entry.get("has_ever_returned_non_empty") is True
+    stored = entry.get("row_keys_sample")
+    assert stored == ["id", "name", "status"]  # sorted
+
+
+def test_record_bridge_outcome_updates_row_keys_on_schema_change(tmp_path: Path) -> None:
+    """row_keys_sample is overwritten on subsequent successes (not latch-once)."""
+    engine = _fresh_engine(tmp_path)
+    key = "conn.read.pipe"
+    engine.apply_evidence(key, success=True)
+
+    engine.record_bridge_outcome(key, success=True, non_empty=True,
+                                  row_keys_sample=frozenset({"id"}))
+    entry = IntentRegistry.get(tmp_path, key)
+    assert entry.get("row_keys_sample") == ["id"]
+
+    engine.record_bridge_outcome(key, success=True, non_empty=True,
+                                  row_keys_sample=frozenset({"new_id"}))
+    entry = IntentRegistry.get(tmp_path, key)
+    assert entry.get("row_keys_sample") == ["new_id"]
+
+
+def test_record_bridge_outcome_no_keys_on_failure(tmp_path: Path) -> None:
+    """row_keys_sample is not updated when bridge fails."""
+    engine = _fresh_engine(tmp_path)
+    key = "conn.read.pipe"
+    engine.apply_evidence(key, success=True)
+
+    engine.record_bridge_outcome(key, success=True, non_empty=True,
+                                  row_keys_sample=frozenset({"id"}))
+    engine.record_bridge_outcome(key, success=False, reason="boom")
+    entry = IntentRegistry.get(tmp_path, key)
+    assert entry.get("row_keys_sample") == ["id"]  # unchanged
+
+
 def test_cockpit_intent_history_route(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(tmp_path / "connectors"))

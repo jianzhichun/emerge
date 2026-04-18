@@ -347,6 +347,7 @@ class PolicyEngine:
         demotion_reason: str = "bridge_broken",
         non_empty: bool | None = None,
         ts_ms: int | None = None,
+        row_keys_sample: "frozenset[str] | None" = None,
     ) -> dict[str, Any]:
         """Record a flywheel bridge execution outcome.
 
@@ -381,6 +382,8 @@ class PolicyEngine:
             entry.setdefault("bridge_failure_streak", 0)
             if non_empty is True:
                 entry["has_ever_returned_non_empty"] = True
+            if success and row_keys_sample is not None:
+                entry["row_keys_sample"] = sorted(row_keys_sample)
             if success:
                 entry["bridge_failure_streak"] = 0
             else:
