@@ -66,7 +66,8 @@ def _on_signal(signum, frame) -> None:
     _stop = True
 
 
-signal.signal(signal.SIGTERM, _on_signal)
+if hasattr(signal, "SIGTERM"):  # not available on Windows
+    signal.signal(signal.SIGTERM, _on_signal)
 signal.signal(signal.SIGINT, _on_signal)
 
 

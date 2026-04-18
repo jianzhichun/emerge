@@ -456,7 +456,10 @@ def ensure_running_or_launch(
                     except ProcessLookupError:
                         break
                 else:
-                    os.kill(pid, signal.SIGKILL)
+                    # SIGKILL not available on Windows; SIGTERM there calls
+                    # TerminateProcess, so a second SIGTERM is the best we can do.
+                    _kill = getattr(signal, "SIGKILL", signal.SIGTERM)
+                    os.kill(pid, _kill)
             except (ProcessLookupError, PermissionError):
                 pass
             pid_path.unlink(missing_ok=True)
@@ -717,7 +720,7 @@ def _make_handler(srv: "DaemonHTTPServer"):
                 if not mime or mime == "application/octet-stream":
                     guessed, _ = _mt.guess_type(safe_name)
                     mime = guessed or "application/octet-stream"
-                self._send_json(200, {"file_id": file_id, "path": str(dest), "mime": mime})
+                self._send_json(200, {"file_id": file_id, "path": dest.as_posix(), "mime": mime})
             else:
                 self._send_json(404, {"ok": False, "error": "not_found"})
 

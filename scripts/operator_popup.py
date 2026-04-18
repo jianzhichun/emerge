@@ -355,43 +355,70 @@ def _render_confirm(*, body: str, title: str) -> dict[str, Any]:
 def _render_toast(*, body: str, timeout_s: int) -> dict[str, Any]:
     """Non-interactive toast that auto-dismisses after timeout_s seconds.
 
-    Uses osascript on macOS (no NSApp conflict with pystray/rumps).
-    Falls back to a subprocess-isolated tkinter window on other platforms.
+    Platform dispatch:
+      macOS   → osascript display notification (no NSApp conflict with pystray)
+      Windows → PowerShell balloon via System.Windows.Forms.NotifyIcon
+      other   → subprocess-isolated tkinter window
     """
     import subprocess, sys
 
-    # Escape for AppleScript string literal: collapse whitespace control chars
-    # (newlines break the single-line -e string), then escape the only special
-    # character inside AppleScript double-quoted strings: the double-quote itself.
-    safe_body = (
-        body.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
-            .replace('"', '\\"')
-    )
-    script = f'display notification "{safe_body}" with title "emerge"'
-    try:
-        subprocess.Popen(
-            ["osascript", "-e", script],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+    if sys.platform == "darwin":
+        # Escape for AppleScript string literal: collapse control chars
+        # (newlines break the single-line -e string), then escape double-quotes.
+        safe = (
+            body.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+                .replace('"', '\\"')
         )
+        try:
+            subprocess.Popen(
+                ["osascript", "-e", f'display notification "{safe}" with title "emerge"'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            pass
         return {"action": "dismissed", "value": ""}
-    except FileNotFoundError:
-        pass  # not macOS
 
-    # Non-macOS fallback: tkinter in a subprocess (isolated NSApp context).
-    tk_script = f"""
-import tkinter as tk
-root = tk.Tk()
-root.overrideredirect(True)
-root.attributes("-topmost", True)
-root.update_idletasks()
-sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-w, h = 300, 64
-root.geometry(f"{{w}}x{{h}}+{{sw - w - 20}}+{{sh - h - 60}}")
-tk.Label(root, text={body!r}, wraplength=280, font=("", 10), justify="left").pack(pady=8, padx=12, anchor="w")
-root.after({timeout_s * 1000}, root.destroy)
-root.mainloop()
-"""
+    if sys.platform == "win32":
+        # PowerShell balloon tip via System.Windows.Forms (always available on Windows).
+        # Single-quotes safe for PS string; double-quotes escaped above for PS interpolation.
+        safe = body.replace("'", "''").replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+        ps = (
+            "Add-Type -AssemblyName System.Windows.Forms;"
+            "$n=[System.Windows.Forms.NotifyIcon]::new();"
+            "$n.Icon=[System.Drawing.SystemIcons]::Information;"
+            "$n.Visible=$true;"
+            f"$n.ShowBalloonTip({timeout_s * 1000},'emerge','{safe}',"
+            "[System.Windows.Forms.ToolTipIcon]::Info);"
+            f"Start-Sleep -Milliseconds {timeout_s * 1000 + 500};"
+            "$n.Dispose()"
+        )
+        try:
+            subprocess.Popen(
+                ["powershell", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=0x08000000,  # CREATE_NO_WINDOW — suppress console flash
+            )
+        except FileNotFoundError:
+            pass
+        return {"action": "dismissed", "value": ""}
+
+    # Linux / other: tkinter in a subprocess (isolated display context).
+    tk_script = (
+        "import tkinter as tk\n"
+        "root = tk.Tk()\n"
+        "root.overrideredirect(True)\n"
+        "root.attributes('-topmost', True)\n"
+        "root.update_idletasks()\n"
+        "sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()\n"
+        "w, h = 300, 64\n"
+        "root.geometry(f'{w}x{h}+{sw - w - 20}+{sh - h - 60}')\n"
+        f"tk.Label(root, text={body!r}, wraplength=280, font=('', 10), justify='left')"
+        ".pack(pady=8, padx=12, anchor='w')\n"
+        f"root.after({timeout_s * 1000}, root.destroy)\n"
+        "root.mainloop()\n"
+    )
     try:
         subprocess.Popen(
             [sys.executable, "-c", tk_script],
