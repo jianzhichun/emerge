@@ -35,6 +35,11 @@ class FlywheelBridge:
         self._record_bridge_outcome = record_bridge_outcome
         self._sink_emit = sink_emit
         self.last_failure: dict[str, Any] | None = None
+        # External dispatch hook — allows daemon (and tests) to override the
+        # top-level bridge entry point so that monkey-patches on the daemon's
+        # _try_flywheel_bridge propagate into composite child execution.
+        # Defaults to self.try_bridge; set by EmergeDaemon after construction.
+        self._dispatch: "Callable[[dict], dict | None]" = self.try_bridge
 
     @staticmethod
     def _classify_bridge_failure(
@@ -236,6 +241,7 @@ class FlywheelBridge:
         composite_id: str,
         children: list[str],
         arguments: dict[str, Any],
+        _child_bridge_fn: "Callable[[dict], dict | None] | None" = None,
     ) -> dict[str, Any] | None:
         """Run each child intent's bridge sequentially, returning aggregated result.
 
@@ -244,7 +250,12 @@ class FlywheelBridge:
         consume the upstream output. If any child bridge fails (returns None
         or raises), the composite is marked broken and the caller falls back
         to the LLM path.
+
+        ``_child_bridge_fn`` is an optional override for child dispatch — used by
+        ``EmergeDaemon`` to route children through its own ``_try_flywheel_bridge``
+        so that test monkey-patches on the daemon propagate into composite execution.
         """
+        child_bridge = _child_bridge_fn if _child_bridge_fn is not None else self._dispatch
         aggregated: dict[str, Any] = {
             "bridge_promoted": True,
             "composite": True,
@@ -258,7 +269,7 @@ class FlywheelBridge:
                 child_args["__prev_result"] = prev_result
             child_args.pop("base_pipeline_id", None)
             try:
-                child_result = self.try_bridge(child_args)
+                child_result = child_bridge(child_args)
             except Exception as _exc:
                 child_result = None
                 self.last_failure = {

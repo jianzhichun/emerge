@@ -30,8 +30,12 @@ class ToolHandlers:
         sink_emit,
         tool_error,
         tool_ok_json,
+        try_bridge_fn=None,
     ) -> None:
         self._bridge = bridge
+        # ``try_bridge_fn`` allows the daemon to inject its own ``_try_flywheel_bridge``
+        # so that monkey-patches on the daemon (e.g. in tests) propagate through icc_exec.
+        self._try_bridge_fn = try_bridge_fn if try_bridge_fn is not None else bridge.try_bridge
         self._flywheel = flywheel
         self._policy_engine = policy_engine
         self._crystallize_fn = crystallize_fn
@@ -49,7 +53,7 @@ class ToolHandlers:
         self._tool_ok_json = tool_ok_json
 
     def handle_icc_exec(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        promoted = self._bridge.try_bridge(arguments)
+        promoted = self._try_bridge_fn(arguments)
         if promoted is not None:
             response = {"isError": False, "content": [{"type": "text", "text": json.dumps(promoted)}]}
             try:

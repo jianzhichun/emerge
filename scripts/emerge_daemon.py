@@ -128,6 +128,40 @@ class EmergeDaemon:
             tool_error=self._tool_error,
             tool_ok_json=self._tool_ok_json,
         )
+        from scripts.mcp.bridge import FlywheelBridge
+        self._bridge = FlywheelBridge(
+            state_root=lambda: self._state_root,
+            get_runner_router=lambda: self._get_runner_router(),
+            run_remotely=lambda mode, args, client: self._run_pipeline_remotely(mode, args, client),
+            run_local_read=lambda args: self.pipeline.run_read(args),
+            run_local_write=lambda args: self.pipeline.run_write(args),
+            record_bridge_outcome=self._policy_engine.record_bridge_outcome,
+            sink_emit=lambda name, payload: self._sink.emit(name, payload),
+        )
+        # Wire _dispatch through daemon so test monkey-patches on _try_flywheel_bridge
+        # propagate into composite child execution.
+        self._bridge._dispatch = lambda args: self._try_flywheel_bridge(args)
+        from scripts.mcp.tool_handlers import ToolHandlers
+        self._tool_handlers = ToolHandlers(
+            bridge=self._bridge,
+            flywheel=self._flywheel,
+            policy_engine=self._policy_engine,
+            crystallize_fn=self._crystallize,
+            get_session=self._get_session,
+            resolve_exec_code=self._resolve_exec_code,
+            get_runner_router=self._get_runner_router,
+            run_connector_pipeline=self._run_connector_pipeline,
+            run_pipeline_remotely=self._run_pipeline_remotely,
+            state_root=lambda: self._state_root,
+            write_operator_event=self._write_operator_event,
+            append_warning_text=self._append_warning_text,
+            get_http_server=lambda: getattr(self, "_http_server", None),
+            sink_emit=lambda name, payload: self._sink.emit(name, payload),
+            tool_error=self._tool_error,
+            tool_ok_json=self._tool_ok_json,
+            # Route through daemon's _try_flywheel_bridge so test monkey-patches propagate.
+            try_bridge_fn=lambda args: self._try_flywheel_bridge(args),
+        )
 
     def _cockpit_broadcast(self, event: dict) -> None:
         """Forward event to cockpit SSE clients (no-op if not in HTTP mode)."""
@@ -210,283 +244,47 @@ class EmergeDaemon:
             return self.pipeline.run_write(arguments), "local"
         return self.pipeline.run_read(arguments), "local"
 
-    # -- bridge failure classification (pure, no side-effects) --
+    # -- bridge failure classification shims (delegate to FlywheelBridge) --
 
     @staticmethod
     def _classify_bridge_failure(
         result: Any, mode: str, has_non_empty_baseline: bool,
         row_keys_sample: "frozenset[str] | None" = None,
     ) -> "dict[str, str] | None":
-        """Classify a bridge result as a failure or success (pure function).
-
-        Returns ``None`` on success, else a dict with keys
-        ``reason``, ``demotion_reason`` for downstream recording.
-        """
-        if not isinstance(result, dict):
-            return None
-
-        if result.get("verification_state") == "degraded":
-            verify_info = result.get("verify_result") or {}
-            why = ""
-            if isinstance(verify_info, dict):
-                why = str(verify_info.get("why", "") or "")
-            return {
-                "reason": f"verify_degraded: {why}",
-                "demotion_reason": "bridge_broken",
-            }
-
-        if mode == "read":
-            rows = result.get("rows")
-            is_empty = rows is None or (
-                isinstance(rows, (list, tuple, dict, str)) and len(rows) == 0
-            )
-            if is_empty and has_non_empty_baseline:
-                return {
-                    "reason": "rows empty after non-empty baseline",
-                    "demotion_reason": "bridge_silent_empty",
-                }
-
-            if (
-                row_keys_sample is not None
-                and not is_empty
-                and isinstance(rows, list)
-                and rows
-                and isinstance(rows[0], dict)
-            ):
-                current_keys = frozenset(rows[0].keys())
-                if current_keys != row_keys_sample:
-                    added = sorted(current_keys - row_keys_sample)
-                    removed = sorted(row_keys_sample - current_keys)
-                    parts = []
-                    if removed:
-                        parts.append(f"removed: {removed}")
-                    if added:
-                        parts.append(f"added: {added}")
-                    return {
-                        "reason": f"schema_drift: {', '.join(parts)}",
-                        "demotion_reason": "bridge_schema_drift",
-                    }
-
-        if mode == "write":
-            action = result.get("action_result")
-            if isinstance(action, dict) and action.get("ok") is False:
-                err = str(action.get("error", "") or "")
-                return {
-                    "reason": f"action_not_ok: {err}",
-                    "demotion_reason": "bridge_broken",
-                }
-
-        return None
+        from scripts.mcp.bridge import FlywheelBridge
+        return FlywheelBridge._classify_bridge_failure(
+            result, mode, has_non_empty_baseline, row_keys_sample,
+        )
 
     @staticmethod
-    def _classify_bridge_success_non_empty(result: Any, mode: str) -> bool | None:
-        """Return ``True`` if this is a read-mode bridge that produced
-        non-empty rows, ``None`` otherwise. Used to latch the
-        ``has_ever_returned_non_empty`` baseline."""
-        if mode != "read" or not isinstance(result, dict):
-            return None
-        rows = result.get("rows")
-        if rows is not None and not (
-            isinstance(rows, (list, tuple, dict, str)) and len(rows) == 0
-        ):
-            return True
-        return None
+    def _classify_bridge_success_non_empty(result: Any, mode: str) -> "bool | None":
+        from scripts.mcp.bridge import FlywheelBridge
+        return FlywheelBridge._classify_bridge_success_non_empty(result, mode)
 
     @staticmethod
     def _extract_row_keys_sample(result: Any, mode: str) -> "frozenset[str] | None":
-        """Return frozenset of top-level keys from the first row dict, or None.
-
-        Used to latch a key-set baseline on first non-empty bridge success so
-        subsequent runs can detect schema renames (bridge_schema_drift).
-        Only meaningful for read-mode results with list-of-dict rows.
-        """
-        if mode != "read" or not isinstance(result, dict):
-            return None
-        rows = result.get("rows")
-        if isinstance(rows, list) and rows and isinstance(rows[0], dict):
-            return frozenset(rows[0].keys())
-        return None
+        from scripts.mcp.bridge import FlywheelBridge
+        return FlywheelBridge._extract_row_keys_sample(result, mode)
 
     def _try_flywheel_bridge(self, arguments: dict[str, Any]) -> dict[str, Any] | None:
-        base_pipeline_id = str(arguments.get("base_pipeline_id", "")).strip()
-        # Fall back to intent_signature — with unified keys they are the same thing.
-        # This means the bridge fires automatically once an intent reaches stable,
-        # without requiring CC to explicitly pass base_pipeline_id.
-        if not base_pipeline_id:
-            base_pipeline_id = str(arguments.get("intent_signature", "")).strip()
-        if not base_pipeline_id:
-            return None
-
-        # Key is the pipeline_id itself — no prefixes, no runner dimension
-        key = base_pipeline_id
-        bridge_entry = IntentRegistry.get(self._state_root, key)
-        if not isinstance(bridge_entry, dict):
-            return None
-        if str(bridge_entry.get("stage", "explore")) != "stable":
-            return None
-
-        # Composite intent: delegate to each child's bridge in declared order.
-        # Composite stage already inherits min(children.stage), so reaching
-        # this point means every child is stable. A child failure surfaces as
-        # a composite failure and records bridge_broken on both.
-        composed_from = bridge_entry.get("composed_from") or []
-        if isinstance(composed_from, list) and composed_from:
-            return self._run_composite_bridge(
-                base_pipeline_id, list(composed_from), arguments,
-            )
-
-        parts = base_pipeline_id.split(".", 2)
-        if len(parts) != 3:
-            return None
-        connector, mode, name = parts
-        pipeline_args = {**arguments, "connector": connector, "pipeline": name}
-        try:
-            _rr = self._get_runner_router()
-            _client = _rr.find_client(arguments) if _rr else None
-            if _client is not None:
-                result = self._run_pipeline_remotely(mode, pipeline_args, _client)
-            elif mode == "write":
-                result = self.pipeline.run_write(pipeline_args)
-            else:
-                result = self.pipeline.run_read(pipeline_args)
-        except Exception as _bridge_exc:
-            import logging as _logging
-            _logging.getLogger(__name__).warning(
-                "flywheel bridge failed for %s (%s), falling back to LLM: %s",
-                base_pipeline_id, mode, _bridge_exc,
-            )
-            self._last_bridge_failure = {
-                "pipeline_id": base_pipeline_id,
-                "mode": mode,
-                "reason": str(_bridge_exc),
-            }
-            try:
-                self._policy_engine.record_bridge_outcome(
-                    base_pipeline_id,
-                    success=False,
-                    reason=str(_bridge_exc),
-                    exception_class=type(_bridge_exc).__name__,
-                )
-            except Exception:
-                pass
-            return None
-        # Classify non-exception failures via pure function.
-        current = IntentRegistry.get(self._state_root, base_pipeline_id) or {}
-        has_baseline = bool(current.get("has_ever_returned_non_empty"))
-        stored_keys = current.get("row_keys_sample")
-        row_keys_sample = frozenset(stored_keys) if isinstance(stored_keys, list) else None
-        failure = self._classify_bridge_failure(result, mode, has_baseline, row_keys_sample)
-        if failure is not None:
-            import logging as _logging
-            _logging.getLogger(__name__).warning(
-                "flywheel bridge %s for %s (%s), falling back to LLM",
-                failure["demotion_reason"], base_pipeline_id, mode,
-            )
-            self._last_bridge_failure = {
-                "pipeline_id": base_pipeline_id,
-                "mode": mode,
-                "reason": failure["reason"],
-            }
-            try:
-                self._policy_engine.record_bridge_outcome(
-                    base_pipeline_id,
-                    success=False,
-                    reason=failure["reason"],
-                    demotion_reason=failure["demotion_reason"],
-                )
-            except Exception:
-                pass
-            return None
-        # Success path.
-        result["bridge_promoted"] = True
-        try:
-            self._sink.emit("flywheel.bridge.promoted", {"pipeline_id": base_pipeline_id})
-        except Exception:
-            pass
-        try:
-            bridge_non_empty = self._classify_bridge_success_non_empty(result, mode)
-            self._policy_engine.record_bridge_outcome(
-                base_pipeline_id, success=True, non_empty=bridge_non_empty,
-            )
-        except Exception:
-            pass
-        return result
+        return self._bridge.try_bridge(arguments)
 
     def _run_composite_bridge(
-        self,
-        composite_id: str,
-        children: list[str],
-        arguments: dict[str, Any],
+        self, composite_id: str, children: list[str], arguments: dict[str, Any],
     ) -> dict[str, Any] | None:
-        """Run each child intent's bridge sequentially, returning aggregated result.
+        return self._bridge._run_composite_bridge(
+            composite_id, children, arguments,
+            _child_bridge_fn=self._try_flywheel_bridge,
+        )
 
-        Each child receives the same ``arguments`` plus the previous child's
-        result under ``__prev_result`` — callers can wire child pipelines to
-        consume the upstream output. If any child bridge fails (returns None
-        or raises), the composite is marked broken and the caller falls back
-        to the LLM path.
-        """
-        aggregated: dict[str, Any] = {
-            "bridge_promoted": True,
-            "composite": True,
-            "composite_id": composite_id,
-            "children": [],
-        }
-        prev_result: Any = None
-        for child_id in children:
-            child_args = {**arguments, "intent_signature": child_id}
-            if prev_result is not None:
-                child_args["__prev_result"] = prev_result
-            child_args.pop("base_pipeline_id", None)
-            try:
-                child_result = self._try_flywheel_bridge(child_args)
-            except Exception as _exc:
-                child_result = None
-                self._last_bridge_failure = {
-                    "pipeline_id": composite_id,
-                    "mode": "composite",
-                    "reason": f"child {child_id} raised: {_exc}",
-                }
-                try:
-                    self._policy_engine.record_bridge_outcome(
-                        composite_id,
-                        success=False,
-                        reason=f"child {child_id} raised: {_exc}",
-                        exception_class=type(_exc).__name__,
-                    )
-                except Exception:
-                    pass
-                return None
-            if child_result is None:
-                self._last_bridge_failure = {
-                    "pipeline_id": composite_id,
-                    "mode": "composite",
-                    "reason": f"child {child_id} bridge returned None",
-                }
-                try:
-                    self._policy_engine.record_bridge_outcome(
-                        composite_id,
-                        success=False,
-                        reason=f"child {child_id} bridge unavailable",
-                        exception_class="CompositeChildMissing",
-                    )
-                except Exception:
-                    pass
-                return None
-            aggregated["children"].append({"intent": child_id, "result": child_result})
-            prev_result = child_result
-        try:
-            self._sink.emit("flywheel.bridge.composite", {
-                "pipeline_id": composite_id,
-                "children": children,
-            })
-        except Exception:
-            pass
-        try:
-            self._policy_engine.record_bridge_outcome(composite_id, success=True)
-        except Exception:
-            pass
-        return aggregated
+    @property
+    def _last_bridge_failure(self) -> "dict[str, Any] | None":
+        """Proxy to FlywheelBridge.last_failure for test and backward compatibility."""
+        return self._bridge.last_failure
+
+    @_last_bridge_failure.setter
+    def _last_bridge_failure(self, value: "dict[str, Any] | None") -> None:
+        self._bridge.last_failure = value
 
     def _crystallize(self, **kwargs: Any) -> dict[str, Any]:
         return PipelineCrystallizer(self._state_root).crystallize(**kwargs)
@@ -633,257 +431,22 @@ class EmergeDaemon:
         return self._span_handlers.handle_span_approve(arguments)
 
     def _handle_icc_exec(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        # Flywheel bridge: stable candidate → zero-LLM redirect
-        promoted = self._try_flywheel_bridge(arguments)
-        if promoted is not None:
-            response = {"isError": False, "content": [{"type": "text", "text": json.dumps(promoted)}]}
-            try:
-                _rr = self._get_runner_router()
-                _client = _rr.find_client(arguments) if _rr else None
-                self._flywheel.record_pipeline_event(
-                    tool_name="icc_exec",
-                    arguments=arguments,
-                    result=promoted,
-                    is_error=False,
-                    execution_path="remote" if _client is not None else "local",
-                )
-            except Exception:
-                pass
-            _bsig = str(arguments.get("intent_signature", "")).strip()
-            if _bsig and not arguments.get("no_replay"):
-                self._write_operator_event(_bsig, is_error=False)
-            return response
-        try:
-            mode = str(arguments.get("mode", "inline_code"))
-            target_profile = str(arguments.get("target_profile", "default"))
-            candidate_key = self._flywheel.resolve_exec_candidate_key(
-                arguments=arguments,
-                target_profile=target_profile,
-            )
-            sampled_in_policy = self._flywheel.should_sample(candidate_key)
-            _rr = self._get_runner_router()
-            _exec_client = _rr.find_client(arguments) if _rr else None
-            execution_path = "remote" if _exec_client is not None else "local"
-            if _exec_client is not None:
-                remote_args = dict(arguments)
-                if mode == "script_ref":
-                    remote_args["code"] = self._resolve_exec_code(mode=mode, arguments=arguments)
-                    remote_args["mode"] = "inline_code"
-                result = _exec_client.call_tool("icc_exec", remote_args)
-            else:
-                code = self._resolve_exec_code(mode=mode, arguments=arguments)
-                repl = self._get_session(target_profile)
-                result = repl.exec_code(
-                    code,
-                    metadata={
-                        "mode": mode,
-                        "target_profile": target_profile,
-                        "intent_signature": arguments.get("intent_signature", ""),
-                        "script_ref": arguments.get("script_ref", ""),
-                        "no_replay": bool(arguments.get("no_replay", False)),
-                    },
-                    inject_vars={"__args": arguments.get("script_args", {})},
-                    result_var=str(arguments.get("result_var", "")).strip() or None,
-                )
-            try:
-                self._flywheel.record_exec_event(
-                    arguments=arguments,
-                    result=result,
-                    target_profile=target_profile,
-                    mode=mode,
-                    execution_path=execution_path,
-                    sampled_in_policy=sampled_in_policy,
-                    candidate_key=candidate_key,
-                )
-            except Exception as exc:
-                self._append_warning_text(result, f"policy bookkeeping failed: {exc}")
-            _sig = str(arguments.get("intent_signature", ""))
-            if _sig and not arguments.get("no_replay"):
-                self._write_operator_event(_sig, is_error=bool(result.get("isError")))
-            if "isError" not in result:
-                result["isError"] = False
-            _bf = getattr(self, "_last_bridge_failure", None)
-            if _bf:
-                self._last_bridge_failure = None
-                self._append_warning_text(
-                    result,
-                    f"bridge fallback: {_bf['pipeline_id']} ({_bf['mode']}) failed: "
-                    f"{_bf['reason']}. Falling back to LLM inference.",
-                )
-            return result
-        except Exception as exc:
-            return self._tool_error(f"icc_exec failed: {exc}")
+        return self._tool_handlers.handle_icc_exec(arguments)
 
     def _handle_icc_crystallize(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        try:
-            intent_signature = str(arguments.get("intent_signature", "")).strip()
-            connector = str(arguments.get("connector", "")).strip()
-            pipeline_name = str(arguments.get("pipeline_name", "")).strip()
-            mode = str(arguments.get("mode", "read")).strip()
-            target_profile = str(arguments.get("target_profile", "default")).strip()
-            _persistent_raw = arguments.get("persistent", False)
-            if isinstance(_persistent_raw, str):
-                persistent = _persistent_raw.strip().lower() in ("1", "true", "yes", "on")
-            else:
-                persistent = bool(_persistent_raw)
-            if not all([intent_signature, connector, pipeline_name, mode]):
-                return self._tool_error(
-                    "icc_crystallize: intent_signature, connector, pipeline_name, and mode are required"
-                )
-            if mode not in ("read", "write"):
-                return self._tool_error(
-                    f"icc_crystallize: mode must be 'read' or 'write', got {mode!r}"
-                )
-            return self._crystallize(
-                intent_signature=intent_signature,
-                connector=connector,
-                pipeline_name=pipeline_name,
-                mode=mode,
-                target_profile=target_profile,
-                persistent=persistent,
-            )
-        except Exception as exc:
-            return self._tool_error(f"icc_crystallize failed: {exc}")
+        return self._tool_handlers.handle_icc_crystallize(arguments)
 
     def _handle_icc_compose(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Register a composite intent that delegates to existing stable intents.
-
-        A composite ``parent`` with ``children=[A, B, C]`` runs each child's
-        flywheel bridge in order, passing each child's result to the next via
-        ``__prev_result``. The composite's stage is derived from the minimum
-        of its children's stages so a broken child never hides behind a
-        stable composite.
-        """
-        parent = str(arguments.get("intent_signature", "")).strip()
-        children_raw = arguments.get("children")
-        if not parent:
-            return self._tool_error("icc_compose: intent_signature is required")
-        if not isinstance(children_raw, list) or not children_raw:
-            return self._tool_error(
-                "icc_compose: children must be a non-empty list of intent_signatures"
-            )
-        children = [str(c).strip() for c in children_raw if str(c).strip()]
-        if len(children) < 2:
-            return self._tool_error(
-                "icc_compose: composition requires at least 2 children — "
-                "a single child is just the child itself"
-            )
-
-        from scripts.policy_config import PIPELINE_KEY_RE
-        if not PIPELINE_KEY_RE.match(parent):
-            return self._tool_error(
-                f"icc_compose: parent intent_signature {parent!r} must match connector.mode.name"
-            )
-        for c in children:
-            if not PIPELINE_KEY_RE.match(c):
-                return self._tool_error(
-                    f"icc_compose: child {c!r} must match connector.mode.name"
-                )
-
-        reg = IntentRegistry.load(self._state_root)
-        intents = reg["intents"]
-        missing = [c for c in children if c not in intents]
-        if missing:
-            return self._tool_error(
-                f"icc_compose: children must exist before composition — missing: {missing}"
-            )
-
-        # Cycle detection: composites can nest (child → grandchild via
-        # composed_from). Reject any proposed edge that would produce a cycle,
-        # otherwise _run_composite_bridge recurses until the stack blows.
-        def _reaches(node: str, target: str, seen: set[str]) -> bool:
-            if node == target:
-                return True
-            if node in seen:
-                return False
-            seen.add(node)
-            entry = intents.get(node)
-            if not isinstance(entry, dict):
-                return False
-            for nxt in entry.get("composed_from") or []:
-                if _reaches(str(nxt), target, seen):
-                    return True
-            return False
-
-        for c in children:
-            if c == parent or _reaches(c, parent, set()):
-                return self._tool_error(
-                    f"icc_compose: child {c!r} would create a cycle — "
-                    f"{parent!r} already reachable from it"
-                )
-
-        # Route the composite registration through PolicyEngine so ``stage`` is
-        # still written by the single lifecycle writer — composite structure is
-        # not evidence, but the inherited stage must flow through the same
-        # code path to preserve the invariant.
-        description = str(arguments.get("description", "") or "").strip()
-        entry = self._policy_engine.register_composite(
-            parent, children=children, description=description,
-        )
-        min_stage = str(entry.get("stage", "explore"))
-
-        payload = {
-            "ok": True,
-            "intent_signature": parent,
-            "children": children,
-            "stage": min_stage,
-            "next_step": (
-                f"Composite registered. Call icc_exec(intent_signature={parent!r}) — "
-                "children will bridge-execute in order. If any child is non-stable, "
-                "the composite falls back to LLM."
-            ),
-        }
-        return {
-            "isError": False,
-            "structuredContent": payload,
-            "content": [{"type": "text", "text": json.dumps(payload)}],
-        }
+        return self._tool_handlers.handle_icc_compose(arguments)
 
     def _handle_icc_reconcile(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        delta_id = str(arguments.get("delta_id", "")).strip()
-        outcome = str(arguments.get("outcome", "")).strip()
-        intent_signature = str(arguments.get("intent_signature", "")).strip()
-        if not delta_id:
-            return self._tool_error("icc_reconcile: delta_id is required")
-        if outcome not in ("confirm", "correct", "retract"):
-            return self._tool_error(
-                f"icc_reconcile: 'outcome' must be confirm/correct/retract, got {outcome!r}"
-            )
-        from scripts.state_tracker import load_tracker, save_tracker
-        state_path = self._hook_state_path()
-        tracker = load_tracker(state_path)
-        tracker.reconcile_delta(delta_id, outcome)
-        save_tracker(state_path, tracker)
-        td = tracker.to_dict()
-        if outcome == "correct" and intent_signature:
-            self._flywheel.increment_human_fix(intent_signature)
-        return self._tool_ok_json({
-            "delta_id": delta_id,
-            "outcome": outcome,
-            "intent_signature": intent_signature or None,
-            "verification_state": td.get("verification_state", "unverified"),
-        })
+        return self._tool_handlers.handle_icc_reconcile(arguments)
 
     def _handle_runner_notify(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        runner_profile = str(arguments.get("runner_profile", "")).strip()
-        ui_spec = arguments.get("ui_spec", {})
-        if not runner_profile:
-            return self._tool_error("runner_notify: runner_profile is required")
-        if not isinstance(ui_spec, dict):
-            return self._tool_error("runner_notify: ui_spec must be an object")
-        http_srv = getattr(self, "_http_server", None)
-        if http_srv is None:
-            return self._tool_error("runner_notify requires HTTP daemon mode (--http flag)")
-        result = http_srv.request_popup(runner_profile, ui_spec)
-        return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+        return self._tool_handlers.handle_runner_notify(arguments)
 
     def _handle_icc_hub(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        from scripts.mcp.hub_handler import handle_icc_hub
-        return handle_icc_hub(
-            arguments,
-            tool_error=self._tool_error,
-            tool_ok_json=self._tool_ok_json,
-        )
+        return self._tool_handlers.handle_icc_hub(arguments)
 
     # ------------------------------------------------------------------
     # JSON-RPC dispatch
