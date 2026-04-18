@@ -102,6 +102,7 @@ class RichInputWidget:
 
         parent.bind("<Control-Return>", lambda _e: self._on_send())
         parent.bind("<Command-Return>", lambda _e: self._on_send())
+        parent.protocol("WM_DELETE_WINDOW", parent.destroy)
 
         try:
             parent.drop_target_register("DND_Files")  # type: ignore[attr-defined]
