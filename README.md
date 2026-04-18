@@ -159,7 +159,7 @@ The runner is a **stateless Python executor** — it accepts `icc_exec` only. Al
 
 CLI: `python3 scripts/repl_admin.py runner-install-url --target-profile <p> --pretty`. Cockpit: `GET /api/control-plane/runner-install-url?profile=<p>`.
 
-Installer URLs point at your machine’s LAN address (`http://<lan-ip>:<port>/…`). The HTTP MCP daemon listens on **loopback by default** (`127.0.0.1`). To let another host download `/runner-install.*` or `/runner-dist/runner.tar.gz`, set **`EMERGE_DAEMON_BIND=0.0.0.0`** (or bind a specific interface IP) and ensure the host firewall allows inbound TCP on the daemon port. Binding all interfaces exposes the MCP endpoint on the LAN — restrict access if needed.
+Installer URLs point at your machine’s LAN address (`http://<lan-ip>:<port>/…`). The HTTP MCP daemon **binds all interfaces by default** (`0.0.0.0`). To restrict to loopback only, set **`EMERGE_DAEMON_BIND=127.0.0.1`**. Ensure the host firewall allows inbound TCP on the daemon port where LAN access is desired; binding `0.0.0.0` exposes the MCP endpoint on the LAN — restrict access if needed.
 
 
 **Configuration**
@@ -167,7 +167,7 @@ Installer URLs point at your machine’s LAN address (`http://<lan-ip>:<port>/�
 
 | Env var                   | Purpose                                         | Default        |
 | ------------------------- | ----------------------------------------------- | -------------- |
-| `EMERGE_DAEMON_BIND`    | IP address for the HTTP MCP daemon to bind (`0.0.0.0` = all interfaces, for LAN self-install) | `127.0.0.1` |
+| `EMERGE_DAEMON_BIND`    | IP address for the HTTP MCP daemon to bind (`0.0.0.0` = all interfaces, for LAN self-install) | `0.0.0.0` |
 | `EMERGE_RUNNER_URL`       | Single default runner                           | —              |
 | `EMERGE_RUNNER_MAP`       | JSON `target_profile → URL`                     | —              |
 | `EMERGE_RUNNER_URLS`      | Comma-separated URL pool                        | —              |

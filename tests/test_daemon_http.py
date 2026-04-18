@@ -176,7 +176,7 @@ def test_pid_file_written(tmp_path):
     assert pid_path.exists()
     info = json.loads(pid_path.read_text())
     assert info["port"] == srv.port
-    assert info.get("host") == "127.0.0.1"
+    assert info.get("host") == "0.0.0.0"
     srv.stop()
     # PID file removed on stop
     assert not pid_path.exists()

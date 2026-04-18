@@ -1214,7 +1214,7 @@ if __name__ == "__main__":
         type=str,
         default=None,
         metavar="ADDR",
-        help="Bind address for HTTP MCP (overrides EMERGE_DAEMON_BIND; default 127.0.0.1)",
+        help="Bind address for HTTP MCP (overrides EMERGE_DAEMON_BIND; default 0.0.0.0)",
     )
     _p.add_argument("--ensure-running", action="store_true",
                     help="Launch daemon if not already running, then exit")

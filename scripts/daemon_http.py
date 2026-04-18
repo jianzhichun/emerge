@@ -27,10 +27,10 @@ def _validate_machine_id(machine_id: str) -> None:
 
 def resolve_daemon_bind(override: str | None = None) -> str:
     """Resolve bind address for ThreadingHTTPServer (CLI override, else EMERGE_DAEMON_BIND)."""
-    raw = override if override is not None else os.environ.get("EMERGE_DAEMON_BIND", "127.0.0.1")
+    raw = override if override is not None else os.environ.get("EMERGE_DAEMON_BIND", "0.0.0.0")
     raw = (raw or "").strip()
     if not raw:
-        raw = "127.0.0.1"
+        raw = "0.0.0.0"
     try:
         ipaddress.ip_address(raw)
     except ValueError as e:
