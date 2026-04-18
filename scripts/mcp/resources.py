@@ -184,9 +184,28 @@ class McpResourceHandler:
             return {"uri": uri, "mimeType": "application/json", "text": json.dumps(summary)}
 
         if uri == "state://deltas":
-            from scripts.state_tracker import load_tracker
+            from scripts.state_tracker import load_tracker, MAX_DELTAS
             tracker = load_tracker(self._hook_state_path())
             data = tracker.to_dict()
+            # Merge peripheral deltas written by tool_audit.py (tool-deltas.jsonl).
+            # Those writes never touch state.json, so there is no TOCTOU race here.
+            tool_deltas_path = self._hook_state_path().parent / "tool-deltas.jsonl"
+            if tool_deltas_path.exists():
+                try:
+                    tool_deltas: list[dict] = []
+                    for line in tool_deltas_path.read_text(encoding="utf-8").splitlines():
+                        line = line.strip()
+                        if line:
+                            try:
+                                tool_deltas.append(json.loads(line))
+                            except Exception:
+                                pass
+                    if tool_deltas:
+                        merged = list(data.get("deltas", [])) + tool_deltas
+                        merged.sort(key=lambda d: d.get("ts_ms", 0))
+                        data["deltas"] = merged[-MAX_DELTAS:]
+                except Exception:
+                    pass
             return {"uri": uri, "mimeType": "application/json", "text": json.dumps(data)}
 
         if uri.startswith("pipeline://"):

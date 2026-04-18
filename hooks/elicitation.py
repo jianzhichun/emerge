@@ -1,3 +1,23 @@
+"""Elicitation hook — CI-mode auto-response for emerge MCP elicitations.
+
+This hook fires when the emerge MCP server calls ``elicitations/create`` to
+request user input mid-task.  In interactive mode it returns ``{}`` so CC shows
+the normal dialog.  In CI mode (``EMERGE_CI=1``) it auto-accepts known patterns
+so pipelines can run without human interaction.
+
+STATUS — forward-looking infrastructure:
+  The emerge daemon does not yet call ``elicitations/create``.  Operations that
+  currently require user confirmation (icc_span_approve, icc_reconcile,
+  icc_hub conflict resolution) are implemented as regular MCP tool calls that
+  operator-Claude invokes.  When the daemon adopts the MCP elicitation API for
+  these operations, this hook's CI auto-responses will activate automatically.
+
+  Patterns pre-registered here so CI pipelines work on day-one of daemon-side
+  elicitation adoption without a separate hook deployment:
+    • "activate pipeline …"    → icc_span_approve equivalent
+    • "reconciliation outcome" → icc_reconcile outcome selector
+    • "resolution strategy …"  → icc_hub sync-conflict resolver
+"""
 from __future__ import annotations
 
 import json

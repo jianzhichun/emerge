@@ -3627,6 +3627,47 @@ def test_resource_read_state_deltas_is_valid_json():
     assert "open_risks" in data or "deltas" in data
 
 
+def test_state_deltas_merges_tool_deltas_jsonl(tmp_path):
+    """state://deltas merges peripheral deltas from tool-deltas.jsonl into the response."""
+    import json as _json
+    from scripts.policy_config import default_hook_state_root
+    from scripts.emerge_daemon import EmergeDaemon
+
+    hook_root = tmp_path / "hook-state"
+    hook_root.mkdir(parents=True)
+    # Write a peripheral delta to tool-deltas.jsonl
+    peripheral = {
+        "id": "d-999-Bash",
+        "message": "Bash: git status",
+        "level": "peripheral",
+        "verification_state": "verified",
+        "provisional": False,
+        "intent_signature": "lark.read.get-doc",
+        "tool_name": "Bash",
+        "ts_ms": 999,
+    }
+    (hook_root / "tool-deltas.jsonl").write_text(
+        _json.dumps(peripheral) + "\n", encoding="utf-8"
+    )
+    # Daemon reads from EMERGE_HOOK_STATE_ROOT
+    import os
+    old_env = os.environ.get("EMERGE_HOOK_STATE_ROOT")
+    os.environ["EMERGE_HOOK_STATE_ROOT"] = str(hook_root)
+    try:
+        daemon = EmergeDaemon()
+        req = {"jsonrpc": "2.0", "id": 1, "method": "resources/read",
+               "params": {"uri": "state://deltas"}}
+        resp = daemon.handle_jsonrpc(req)
+        data = _json.loads(resp["result"]["resource"]["text"])
+        ids = [d.get("id") for d in data.get("deltas", [])]
+        assert "d-999-Bash" in ids, f"peripheral delta not merged; deltas={data.get('deltas')}"
+    finally:
+        if old_env is None:
+            os.environ.pop("EMERGE_HOOK_STATE_ROOT", None)
+        else:
+            os.environ["EMERGE_HOOK_STATE_ROOT"] = old_env
+
+
 def test_format_context_trims_risks_when_over_budget():
     """format_context must trim risk list when budget_chars is exceeded."""
     from scripts.state_tracker import StateTracker

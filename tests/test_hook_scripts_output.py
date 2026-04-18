@@ -996,7 +996,7 @@ def test_tool_audit_excludes_emerge_icc_tools(tmp_path: Path):
 
 
 def test_tool_audit_span_nudge_fires_once_for_non_read_only_tool(tmp_path: Path):
-    """First non-trivial tool call without a span injects a one-shot nudge."""
+    """First non-trivial tool call without a span injects a one-shot nudge via flag file."""
     state = tmp_path / "state.json"
     state.write_text(json.dumps({}), encoding="utf-8")
     out = _run(
@@ -1013,7 +1013,11 @@ def test_tool_audit_span_nudge_fires_once_for_non_read_only_tool(tmp_path: Path)
     ctx = result.get("hookSpecificOutput", {}).get("additionalContext", "")
     assert "Span nudge" in ctx
     assert "icc_span_open" in ctx
-    # Flag written so second call does NOT nudge again
+    # Flag file created — state.json must NOT have been modified
+    assert (tmp_path / "span-nudge-sent").exists()
+    state_after = json.loads(state.read_text(encoding="utf-8"))
+    assert "_span_nudge_sent" not in state_after
+    # Second call: flag file exists → no nudge
     out2 = _run(
         "tool_audit.py",
         {
@@ -1046,6 +1050,8 @@ def test_tool_audit_no_nudge_for_read_only_tool(tmp_path: Path):
     result = json.loads(out)
     ctx = result.get("hookSpecificOutput", {}).get("additionalContext", "")
     assert "Span nudge" not in ctx
+    # No flag file for read-only tools
+    assert not (tmp_path / "span-nudge-sent").exists()
 
 
 def test_tool_audit_no_nudge_when_span_active(tmp_path: Path):
@@ -1065,6 +1071,35 @@ def test_tool_audit_no_nudge_when_span_active(tmp_path: Path):
     result = json.loads(out)
     ctx = result.get("hookSpecificOutput", {}).get("additionalContext", "")
     assert "Span nudge" not in ctx
+
+
+def test_tool_audit_delta_written_to_tool_deltas_jsonl(tmp_path: Path):
+    """With active span, delta goes to tool-deltas.jsonl; state.json is NOT modified."""
+    state = tmp_path / "state.json"
+    original_state = {"active_span_id": "span-abc", "active_span_intent": "lark.read.get-doc"}
+    state.write_text(json.dumps(original_state), encoding="utf-8")
+    _run(
+        "tool_audit.py",
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls -la"},
+            "tool_response": {},
+            "hook_event_name": "PostToolUse",
+        },
+        tmp_path,
+    )
+    # Delta written to separate file
+    deltas_path = tmp_path / "tool-deltas.jsonl"
+    assert deltas_path.exists()
+    entries = [json.loads(line) for line in deltas_path.read_text().splitlines() if line.strip()]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["intent_signature"] == "lark.read.get-doc"
+    assert entry["level"] == "peripheral"
+    assert "Bash" in entry["message"]
+    # state.json must be identical — no "deltas" key injected
+    state_after = json.loads(state.read_text(encoding="utf-8"))
+    assert state_after == original_state
 
 
 def test_cwd_changed_emits_system_message(tmp_path: Path):

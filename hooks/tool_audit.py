@@ -5,17 +5,18 @@ tool call.
 
 Behaviour:
 - Always: append to session-scoped tool-events.jsonl (Audit tab)
-- When a span is active: ALSO append a delta to state.json with intent_signature
-  from the active span. This gives every in-span tool call "muscle memory" —
-  visible in State tab, linked to the span's intent cluster, usable for
-  crystallization review.
+- When a span is active: ALSO append a peripheral delta to tool-deltas.jsonl
+  (concurrent-safe, fcntl LOCK_EX) — visible in State tab via state://deltas
+  merge, linked to the span's intent cluster, usable for crystallization review.
 - Always (when span active): append to active-span-actions.jsonl (span WAL)
+- No span, first non-trivial tool: inject one-shot span nudge via flag file.
 
-Intentionally avoids importing StateTracker to keep the
-no-span path lightweight. The span-delta path does a single raw JSON read+write.
+state.json is only READ here (to check active_span_id). All writes go to
+separate files so there is no TOCTOU race with StateTracker.save_state().
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -36,28 +37,20 @@ from scripts.policy_config import (
 )  # noqa: E402
 from scripts.span_tracker import is_read_only_tool  # noqa: E402
 
-_MAX_DELTAS = 500
-_SPAN_NUDGE_FLAG = "_span_nudge_sent"
+_MAX_TOOL_DELTAS = 500
 
 
-def _maybe_span_nudge(tool_name: str, state_path: Path) -> str:
-    """Return a nudge string the first time a non-trivial tool runs without a span.
+def _maybe_span_nudge(tool_name: str, state_dir: Path) -> str:
+    """Return nudge text the first time a non-trivial tool runs without an active span.
 
-    Writes a flag to state.json so the nudge fires at most once per session.
-    Returns empty string if the nudge has already been sent or state is unreadable.
+    Uses an atomic flag file (exclusive create) — no lock needed, no state.json
+    modification.  Returns "" if the nudge was already sent this session.
     """
+    flag = state_dir / "span-nudge-sent"
     try:
-        raw = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
-    except Exception:
+        flag.open("x").close()
+    except FileExistsError:
         return ""
-    if raw.get(_SPAN_NUDGE_FLAG):
-        return ""
-    # Mark sent before returning so concurrent calls don't double-fire
-    raw[_SPAN_NUDGE_FLAG] = True
-    try:
-        tmp = state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(state_path)
     except Exception:
         return ""
     short = _short_tool_name(tool_name)
@@ -89,41 +82,40 @@ def _short_tool_name(tool_name: str) -> str:
 def _write_span_delta(
     tool_name: str,
     tool_input: dict,
-    state_path: Path,
+    state_dir: Path,
     active_span_intent: str,
 ) -> None:
-    """Append a peripheral delta to state.json for an in-span tool call.
+    """Append a peripheral delta to tool-deltas.jsonl for an in-span tool call.
 
-    Uses raw JSON manipulation (no StateTracker import) to keep overhead low.
-    Preserves all existing fields in state.json (including active_span_id).
+    Uses fcntl LOCK_EX so concurrent hook processes don't interleave writes.
+    Does NOT touch state.json — no TOCTOU race with StateTracker.
+    The state://deltas resource merges this file at read time.
     """
     short = _short_tool_name(tool_name)
     args = _args_summary(tool_input)
     message = f"{short}: {args}" if args else short
-
+    ts_ms = int(time.time() * 1000)
+    entry: dict = {
+        "id": f"d-{ts_ms}-{short}",
+        "message": message,
+        "level": "peripheral",
+        "verification_state": "verified",
+        "provisional": False,
+        "intent_signature": active_span_intent or None,
+        "tool_name": tool_name,
+        "ts_ms": ts_ms,
+    }
+    if args:
+        entry["args_summary"] = args[:200]
     try:
-        raw = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
-        deltas = list(raw.get("deltas", []))
-        ts_ms = int(time.time() * 1000)
-        entry: dict = {
-            "id": f"d-{ts_ms}-{len(deltas)}",
-            "message": message,
-            "level": "peripheral",
-            "verification_state": "verified",
-            "provisional": False,
-            "intent_signature": active_span_intent or None,
-            "tool_name": tool_name,
-            "ts_ms": ts_ms,
-        }
-        if args:
-            entry["args_summary"] = args[:200]
-        deltas.append(entry)
-        if len(deltas) > _MAX_DELTAS:
-            deltas = deltas[-_MAX_DELTAS:]
-        raw["deltas"] = deltas
-        tmp = state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(state_path)
+        deltas_path = state_dir / "tool-deltas.jsonl"
+        with deltas_path.open("a", encoding="utf-8") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+        truncate_jsonl_if_needed(deltas_path, max_lines=_MAX_TOOL_DELTAS)
     except Exception:
         pass
 
@@ -167,6 +159,7 @@ def main() -> None:
     if not tool_name.endswith("__icc_exec"):
         state_root = Path(default_hook_state_root())
         state_path = state_root / "state.json"
+        # Read-only access to state.json — no write, no race.
         try:
             raw_state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
             active_span_id = str(raw_state.get("active_span_id", "") or "")
@@ -178,7 +171,6 @@ def main() -> None:
         if active_span_id:
             # Span action WAL (used for span close + crystallization)
             try:
-                import fcntl
                 args_raw = json.dumps(tool_input, sort_keys=True, ensure_ascii=True)
                 args_hash = hashlib.sha256(args_raw.encode()).hexdigest()[:16]
                 action = {
@@ -196,13 +188,13 @@ def main() -> None:
             except Exception:
                 pass
 
-            # Delta with intent — makes in-span work visible in State tab
-            _write_span_delta(tool_name, tool_input, state_path, active_span_intent)
+            # Peripheral delta — goes to tool-deltas.jsonl, NOT state.json
+            _write_span_delta(tool_name, tool_input, state_root, active_span_intent)
 
         elif not is_read_only_tool(tool_name):
             # No active span + non-trivial tool: inject a one-shot nudge so CC
             # learns to open spans. Fire only once per session to avoid noise.
-            nudge_text = _maybe_span_nudge(tool_name, state_path)
+            nudge_text = _maybe_span_nudge(tool_name, state_root)
             if nudge_text:
                 print(json.dumps({
                     "hookSpecificOutput": {

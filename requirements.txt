@@ -1,0 +1,5 @@
+pytest>=8.0
+pytest-timeout
+pyyaml
+watchdog
+requests-mock
