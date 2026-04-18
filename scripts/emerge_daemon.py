@@ -282,6 +282,30 @@ class EmergeDaemon:
             except Exception:
                 pass
             return None
+        if isinstance(result, dict) and result.get("verification_state") == "degraded":
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "flywheel bridge verify degraded for %s (%s), falling back to LLM: %s",
+                base_pipeline_id, mode, result.get("verify_result"),
+            )
+            verify_info = result.get("verify_result") or {}
+            self._last_bridge_failure = {
+                "pipeline_id": base_pipeline_id,
+                "mode": mode,
+                "reason": f"verify_degraded: {verify_info}",
+            }
+            try:
+                why = ""
+                if isinstance(verify_info, dict):
+                    why = str(verify_info.get("why", "") or "")
+                self._policy_engine.record_bridge_outcome(
+                    base_pipeline_id,
+                    success=False,
+                    reason=f"verify_degraded: {why}",
+                )
+            except Exception:
+                pass
+            return None
         result["bridge_promoted"] = True
         try:
             self._sink.emit("flywheel.bridge.promoted", {"pipeline_id": base_pipeline_id})

@@ -3249,6 +3249,38 @@ def test_bridge_failure_stores_failure_info(tmp_path, monkeypatch):
     assert "timeout" in bf["reason"]
 
 
+def test_bridge_verify_degraded_bumps_failure_streak(tmp_path, monkeypatch):
+    """A bridge call whose pipeline returns verification_state='degraded'
+    (i.e. verify_result.ok == False) must bump bridge_failure_streak even
+    though no exception was raised. Without this, a crystal whose verify
+    function catches a broken upstream silently keeps serving bad data."""
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.intent_registry import IntentRegistry
+    from unittest.mock import patch
+
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
+    daemon = EmergeDaemon()
+    _seed_stable_intent(tmp_path, "gmail.read.fetch")
+
+    degraded_result = {
+        "pipeline_id": "gmail.read.fetch",
+        "intent_signature": "gmail.read.fetch",
+        "rows": [{"id": 1}],
+        "verify_result": {"ok": False, "why": "schema mismatch"},
+        "verification_state": "degraded",
+    }
+
+    with patch.object(daemon.pipeline, "run_read", return_value=degraded_result):
+        result = daemon._try_flywheel_bridge({"intent_signature": "gmail.read.fetch"})
+
+    assert result is None, "degraded verify must fall through to LLM"
+    entry = IntentRegistry.load(tmp_path)["intents"]["gmail.read.fetch"]
+    assert entry["bridge_failure_streak"] == 1
+    assert entry["stage"] == "stable"  # one failure, below threshold
+    assert daemon._last_bridge_failure is not None
+    assert "verify_degraded" in daemon._last_bridge_failure["reason"]
+
+
 def test_span_close_stable_includes_skeleton_path(tmp_path, monkeypatch):
     """icc_span_close generating a skeleton must include skeleton_path in response."""
     from scripts.emerge_daemon import EmergeDaemon
