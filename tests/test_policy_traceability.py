@@ -578,3 +578,72 @@ def test_cockpit_intent_history_route(tmp_path: Path, monkeypatch) -> None:
     assert body["stage"] == "rollback"
     assert len(body["transition_history"]) == 1
     assert body["last_demotion"]["reason"] == "two_consecutive_failures"
+
+
+# ── evidence anchor: anchor_type / self_report session cap ──────────────────
+
+def test_operator_action_increments_operator_confirmations(tmp_path: Path) -> None:
+    """operator_action successes increment operator_confirmations counter."""
+    engine = _fresh_engine(tmp_path, session_id="sess-A")
+    key = "conn.read.pipe"
+    for _ in range(3):
+        engine.apply_evidence(key, success=True, anchor_type="operator_action")
+    entry = IntentRegistry.get(tmp_path, key)
+    assert entry is not None
+    assert entry["operator_confirmations"] == 3
+    assert entry["successes"] == 3
+
+
+def test_self_report_does_not_increment_operator_confirmations(tmp_path: Path) -> None:
+    """self_report evidence doesn't touch operator_confirmations."""
+    engine = _fresh_engine(tmp_path, session_id="sess-A")
+    key = "conn.read.pipe"
+    engine.apply_evidence(key, success=True, anchor_type="self_report")
+    entry = IntentRegistry.get(tmp_path, key)
+    assert entry is not None
+    assert entry.get("operator_confirmations", 0) == 0
+
+
+def test_anchor_type_default_is_self_report(tmp_path: Path) -> None:
+    """Callers that omit anchor_type get self_report semantics (backward-compat)."""
+    engine = _fresh_engine(tmp_path, session_id="sess-A")
+    key = "conn.read.pipe"
+    engine.apply_evidence(key, success=True)
+    engine.apply_evidence(key, success=True)
+    entry = IntentRegistry.get(tmp_path, key)
+    assert entry is not None
+    assert entry["successes"] == 2
+    assert entry.get("operator_confirmations", 0) == 0
+
+
+def test_self_report_sessions_persisted(tmp_path: Path) -> None:
+    """self_report_sessions tracks unique session IDs (informational evidence quality)."""
+    engine = _fresh_engine(tmp_path, session_id="sess-X")
+    key = "conn.read.pipe"
+    engine.apply_evidence(key, success=True, anchor_type="self_report")
+    # Same session second call — should NOT add duplicate.
+    engine.apply_evidence(key, success=True, anchor_type="self_report")
+    entry = IntentRegistry.get(tmp_path, key)
+    assert entry.get("self_report_sessions") == ["sess-X"]
+
+
+def test_self_report_sessions_dedup_by_evidence_unit_id(tmp_path: Path) -> None:
+    """Different evidence_unit_ids track independently; same unit_id deduped."""
+    engine = _fresh_engine(tmp_path, session_id="sess-A")
+    key = "conn.read.pipe"
+    engine.apply_evidence(key, success=True, evidence_unit_id="span-1")
+    engine.apply_evidence(key, success=True, evidence_unit_id="span-1")  # duplicate
+    engine.apply_evidence(key, success=True, evidence_unit_id="span-2")
+    entry = IntentRegistry.get(tmp_path, key)
+    # successes = 3 (not capped), but self_report_sessions only has 2 unique IDs
+    assert entry["successes"] == 3
+    assert set(entry.get("self_report_sessions") or []) == {"span-1", "span-2"}
+
+
+def test_failure_never_adds_to_self_report_sessions(tmp_path: Path) -> None:
+    """Failed evidence doesn't add the unit_id to self_report_sessions."""
+    engine = _fresh_engine(tmp_path, session_id="sess-A")
+    key = "conn.read.pipe"
+    engine.apply_evidence(key, success=False, anchor_type="self_report")
+    entry = IntentRegistry.get(tmp_path, key)
+    assert (entry.get("self_report_sessions") or []) == []

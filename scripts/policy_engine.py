@@ -91,6 +91,8 @@ class PolicyEngine:
         intent_signature: str,
         *,
         success: bool,
+        anchor_type: str = "self_report",
+        evidence_unit_id: str | None = None,
         verify_observed: bool = False,
         verify_passed: bool = False,
         human_fix: bool = False,
@@ -115,6 +117,18 @@ class PolicyEngine:
         success
             Whether the attempt succeeded. Drives ``successes`` + resets
             ``consecutive_failures`` when True.
+        anchor_type
+            Source of this evidence. ``"self_report"`` (default) means the
+            operator-Claude evaluated itself; ``"operator_action"`` means a
+            human explicitly confirmed (e.g. ``icc_reconcile(outcome=confirm)``
+            or cockpit click). ``self_report`` successes are capped at one per
+            unique ``evidence_unit_id`` so a single logical unit cannot inflate
+            the success counter with repeated calls. ``operator_action``
+            successes always count.
+        evidence_unit_id
+            Dedup key for ``self_report`` success capping. Defaults to the
+            current CC session ID when omitted. Pass ``span_id`` from span-close
+            evidence so each span is treated as an independent work unit.
         verify_observed / verify_passed
             ``verify_observed=True`` means this evidence carries a verification
             signal (e.g. `icc_exec` tracked ``verification_state``). Span evidence
@@ -171,6 +185,18 @@ class PolicyEngine:
             if success:
                 entry["successes"] = int(entry.get("successes", 0)) + 1
                 entry["consecutive_failures"] = 0
+                if anchor_type == "operator_action":
+                    # Track human-confirmed successes separately so promotion gates
+                    # can require at least one external anchor in future.
+                    entry["operator_confirmations"] = int(entry.get("operator_confirmations", 0)) + 1
+                else:
+                    # Track which CC sessions have contributed self_report evidence
+                    # (informational — surfaces in reflection as a quality signal).
+                    unit_id = evidence_unit_id or self._get_session_id()
+                    prior_sessions: list[str] = list(entry.get("self_report_sessions") or [])
+                    if unit_id and unit_id not in prior_sessions:
+                        prior_sessions.append(unit_id)
+                        entry["self_report_sessions"] = prior_sessions[-20:]
             else:
                 entry["consecutive_failures"] = int(entry.get("consecutive_failures", 0)) + 1
             if verify_observed:

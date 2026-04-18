@@ -262,8 +262,22 @@ class ToolHandlers:
         tracker.reconcile_delta(delta_id, outcome)
         save_tracker(state_path, tracker)
         td = tracker.to_dict()
-        if outcome == "correct" and intent_signature:
-            self._flywheel.increment_human_fix(intent_signature)
+        if intent_signature:
+            from scripts.policy_config import PIPELINE_KEY_RE
+            if PIPELINE_KEY_RE.match(intent_signature):
+                if outcome == "confirm":
+                    # Human explicitly confirmed the output was correct — strongest
+                    # possible external anchor; count as operator_action evidence.
+                    self._policy_engine.apply_evidence(
+                        intent_signature, success=True, anchor_type="operator_action",
+                    )
+                elif outcome == "retract":
+                    # Human retracted — the output was wrong.
+                    self._policy_engine.apply_evidence(
+                        intent_signature, success=False, anchor_type="operator_action",
+                    )
+            if outcome == "correct":
+                self._flywheel.increment_human_fix(intent_signature)
         return self._tool_ok_json({
             "delta_id": delta_id,
             "outcome": outcome,

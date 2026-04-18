@@ -262,6 +262,7 @@ class SpanTracker:
         self._get_policy_engine().apply_evidence(
             span.intent_signature,
             success=(span.outcome == "success"),
+            evidence_unit_id=span.span_id,
             verify_observed=False,
             description=span.description,
             is_read_only=span.is_read_only,
