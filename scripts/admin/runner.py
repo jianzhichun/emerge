@@ -545,15 +545,15 @@ $INSTALL_STAGE = "download"
 New-Item -Force -ItemType Directory -Path $RUNNER_ROOT | Out-Null
 $tarPath = "$env:TEMP\\emerge-runner.tar.gz"
 $shaPath = "$env:TEMP\\emerge-runner.tar.gz.sha256"
-Invoke-WebRequest -Uri "$TEAM_LEAD_URL/runner-dist/runner.tar.gz" -OutFile $tarPath
-Invoke-WebRequest -Uri "$TEAM_LEAD_URL/runner-dist/runner.tar.gz.sha256" -OutFile $shaPath
+Invoke-WebRequest -Uri "$TEAM_LEAD_URL/runner-dist/runner.tar.gz" -OutFile $tarPath -UseBasicParsing
+Invoke-WebRequest -Uri "$TEAM_LEAD_URL/runner-dist/runner.tar.gz.sha256" -OutFile $shaPath -UseBasicParsing
 $expectedSha = (Get-Content -Path $shaPath -Raw).Split()[0].Trim()
 $actualSha = & $PYTHON -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" $tarPath
 if ($expectedSha -ne $actualSha.Trim()) {{
     throw "runner.tar.gz SHA256 mismatch"
 }}
 $INSTALL_STAGE = "extract"
-tar -xzf $tarPath -C $RUNNER_ROOT
+& $PYTHON -c "import tarfile,sys; tarfile.open(sys.argv[1]).extractall(sys.argv[2])" $tarPath $RUNNER_ROOT
 Remove-Item -Force -ErrorAction SilentlyContinue $tarPath, $shaPath
 
 $pipArgs = @()
