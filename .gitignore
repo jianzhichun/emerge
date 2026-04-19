@@ -72,3 +72,4 @@ scripts/admin/cockpit/node_modules/
 
 # Generated connector rule stubs
 .claude/rules/connector-*.md
+.selfhost/

@@ -578,9 +578,13 @@ def _make_handler(srv: "DaemonHTTPServer"):
                     _generate_runner_install_sh,
                 )
                 from scripts.admin.shared import _detect_lan_ip
-                lan_ip = _detect_lan_ip()
-                dport = srv.port
-                team_lead_url = f"http://{lan_ip}:{dport}".rstrip("/")
+                req_host = self.headers.get("Host", "").strip()
+                if req_host and not req_host.startswith(("0.0.0.0", "127.0.0.1")):
+                    team_lead_url = f"http://{req_host}".rstrip("/")
+                else:
+                    lan_ip = _detect_lan_ip()
+                    dport = srv.port
+                    team_lead_url = f"http://{lan_ip}:{dport}".rstrip("/")
                 if path.endswith(".sh"):
                     body = _generate_runner_install_sh(
                         team_lead_url=team_lead_url,
