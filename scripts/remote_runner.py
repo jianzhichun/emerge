@@ -175,16 +175,15 @@ class RunnerExecutor:
             return
         try:
             import pystray
-            from PIL import Image, ImageDraw
+            from PIL import Image
         except ImportError:
             logging.warning("pystray/Pillow not installed — tray icon disabled")
             return
-        img = Image.new("RGB", (64, 64), color=(30, 30, 30))
+        _tray_png = Path(__file__).parent.parent / "assets" / "icon-tray.png"
         try:
-            draw = ImageDraw.Draw(img)
-            draw.text((20, 16), "E", fill=(255, 255, 255))
+            img = Image.open(_tray_png).convert("RGBA")
         except Exception:
-            pass  # proceed with plain solid image
+            img = Image.new("RGBA", (64, 64), (255, 255, 255, 200))
 
         def _on_send_message(icon: Any, item: Any) -> None:
             from scripts.operator_popup import show_input_bubble

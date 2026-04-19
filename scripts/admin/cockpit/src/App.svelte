@@ -449,7 +449,17 @@
 
 <main class="app">
   <header class="app-header">
-    <h1>🌀 Emerge Cockpit</h1>
+    <div class="header-logo">
+      <svg viewBox="0 0 64 64" width="28" height="28" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect width="64" height="64" rx="14" fill="#0f172a"/>
+        <circle cx="32" cy="32" r="8" fill="#6366f1" opacity="0.12"/>
+        <path d="M32 32 C32 32 26 21 20 21 C13 21 13 43 20 43 C26 43 32 32 32 32 Z" stroke="#60a5fa" stroke-width="4.5" fill="none" stroke-linejoin="round"/>
+        <path d="M32 32 C32 32 38 21 44 21 C51 21 51 43 44 43 C38 43 32 32 32 32 Z" stroke="#a78bfa" stroke-width="4.5" fill="none" stroke-linejoin="round"/>
+        <polygon points="44,21 48,26 40,24" fill="#c4b5fd" opacity="0.9"/>
+        <circle cx="32" cy="32" r="3.5" fill="white" opacity="0.95"/>
+      </svg>
+      <span class="header-wordmark">emerge</span>
+    </div>
     <div class="header-session">
       <span class="session-label" id="cockpit-session-label">Session</span>
       <CockpitDropdown
@@ -580,11 +590,17 @@
     flex-shrink: 0;
   }
 
-  h1 {
-    margin: 0;
+  .header-logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .header-wordmark {
     font-size: 14px;
+    font-weight: 600;
     line-height: 1;
-    color: var(--color-text);
+    color: #e2e8f0;
   }
 
   .header-session {

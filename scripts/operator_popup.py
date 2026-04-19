@@ -254,11 +254,26 @@ def show_notify(ui_spec: dict) -> dict[str, Any]:
         return {"action": "skip", "value": "", "error": str(exc)}
 
 
+def _set_window_icon(root: Any) -> None:
+    """Set emerge icon on a tkinter Tk window. Silently no-ops on any error."""
+    try:
+        from pathlib import Path
+        from PIL import Image, ImageTk  # type: ignore[import]
+        _icon_png = Path(__file__).parent.parent / "assets" / "icon-64.png"
+        img = Image.open(_icon_png)
+        photo = ImageTk.PhotoImage(img)
+        root.wm_iconphoto(True, photo)
+        root._emerge_icon_ref = photo  # prevent GC
+    except Exception:
+        pass
+
+
 def _render_choice(*, body: str, options: list[str], title: str, timeout_s: int) -> dict[str, Any]:
     import tkinter as tk
 
     root = tk.Tk()
     root.title(title)
+    _set_window_icon(root)
     root.attributes("-topmost", True)
     root.resizable(False, False)
     result: dict[str, Any] = {"action": "dismissed", "value": ""}
@@ -306,6 +321,7 @@ def _render_choice(*, body: str, options: list[str], title: str, timeout_s: int)
 def _render_input(*, body: str, prefill: str, title: str, upload_url: str = "") -> dict[str, Any]:
     import tkinter as tk
     root = tk.Tk()
+    _set_window_icon(root)
     result: dict[str, Any] = {"action": "dismissed", "value": "", "attachments": []}
 
     tk.Label(root, text=body, wraplength=340, justify="left").pack(
@@ -329,6 +345,7 @@ def _render_confirm(*, body: str, title: str) -> dict[str, Any]:
 
     root = tk.Tk()
     root.title(title)
+    _set_window_icon(root)
     root.attributes("-topmost", True)
     root.resizable(False, False)
     result: dict[str, Any] = {"action": "dismissed", "value": ""}
@@ -435,6 +452,7 @@ def _render_info(*, body: str, title: str) -> dict[str, Any]:
 
     root = tk.Tk()
     root.title(title)
+    _set_window_icon(root)
     root.attributes("-topmost", True)
     root.resizable(False, False)
     tk.Label(root, text=body, wraplength=300, font=("", 11), justify="center").pack(
@@ -449,5 +467,6 @@ def show_input_bubble(on_submit: "Callable[[str, list], None]", upload_url: str 
     """Open RichInputWidget bubble. Calls on_submit(text, attachments) on send."""
     import tkinter as tk
     root = tk.Tk()
+    _set_window_icon(root)
     RichInputWidget(root, on_submit=on_submit, upload_url=upload_url, title="emerge")
     root.mainloop()
