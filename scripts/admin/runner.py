@@ -567,7 +567,7 @@ import tarfile, sys
 try:
     tarfile.open(sys.argv[1]).extractall(sys.argv[2])
 except Exception as e:
-    print(f'[extract-py] {e}', flush=True)
+    print(f'[extract-py] {{e}}', flush=True)
     sys.exit(1)
 "@ $tarPath $RUNNER_ROOT 2>&1
 if ($LASTEXITCODE -ne 0) {{ throw ($extractErr -join "`n") }}
