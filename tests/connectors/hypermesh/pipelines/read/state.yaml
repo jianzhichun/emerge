@@ -1,0 +1,6 @@
+intent_signature: hypermesh.read.state
+rollback_or_stop_policy: stop
+read_steps:
+  - run_read
+verify_steps:
+  - verify_read

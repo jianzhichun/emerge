@@ -1,0 +1,6 @@
+intent_signature: zwcad.write.apply-change
+rollback_or_stop_policy: stop
+write_steps:
+  - run_write
+verify_steps:
+  - verify_write
