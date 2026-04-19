@@ -545,6 +545,16 @@ def _make_handler(srv: "DaemonHTTPServer"):
                 qs2 = _up2.parse_qs(_up2.urlparse(self.path).query)
                 profile = qs2.get("runner_profile", [""])[0].strip()
                 self._handle_runner_sse(profile)
+            elif path == "/runner-dist/runner.zip":
+                from scripts.admin.runner import _build_runner_zip
+                _plugin_root = Path(__file__).resolve().parents[1]
+                data = _build_runner_zip(_plugin_root)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Disposition", 'attachment; filename="runner.zip"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
             elif path == "/runner-dist/runner.tar.gz":
                 from scripts.admin.runner import _build_runner_tarball
                 _plugin_root = Path(__file__).resolve().parents[1]
