@@ -271,13 +271,22 @@ _RUNNER_FILES: list[str] = [
 
 
 def _build_runner_tarball(plugin_root: Path) -> bytes:
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+    # Build uncompressed tar first, then gzip with mtime=0 so both the
+    # .tar.gz and .sha256 endpoints produce identical bytes across calls.
+    raw_buf = io.BytesIO()
+    with tarfile.open(fileobj=raw_buf, mode="w") as tar:
         for rel in _RUNNER_FILES:
             p = plugin_root / rel
             if p.is_file():
-                tar.add(str(p), arcname=rel)
-    return buf.getvalue()
+                ti = tar.gettarinfo(str(p), arcname=rel)
+                ti.mtime = 0
+                with open(str(p), "rb") as f:
+                    tar.addfile(ti, f)
+    import gzip as _gzip
+    gz_buf = io.BytesIO()
+    with _gzip.GzipFile(fileobj=gz_buf, mode="wb", mtime=0) as gz:
+        gz.write(raw_buf.getvalue())
+    return gz_buf.getvalue()
 
 
 def _generate_runner_install_sh(
