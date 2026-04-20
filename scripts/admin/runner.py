@@ -586,12 +586,10 @@ $cfg | Out-File -FilePath "$env:USERPROFILE\\.emerge\\runner-config.json" -Encod
 $pythonPath = (Get-Command $PYTHON -ErrorAction SilentlyContinue).Source
 if (-not $pythonPath) {{ $pythonPath = $PYTHON }}
 $vbsPath = "$env:USERPROFILE\\.emerge\\start_emerge_runner.vbs"
-$vbs = @"
-Set sh = CreateObject("WScript.Shell")
-sh.CurrentDirectory = "$RUNNER_ROOT"
-sh.Run Chr(34) & "$pythonPath" & Chr(34) & " " & Chr(34) & "$RUNNER_ROOT\\scripts\\runner_watchdog.py" & Chr(34) & " --host 0.0.0.0 --port $RUNNER_PORT", 0, False
-"@
-$vbs | Out-File -FilePath $vbsPath -Encoding utf8
+$vbs = ('Set sh = CreateObject("WScript.Shell")' + [char]13 + [char]10 +
+        'sh.CurrentDirectory = "' + $RUNNER_ROOT + '"' + [char]13 + [char]10 +
+        'sh.Run Chr(34) & "' + $pythonPath + '" & Chr(34) & " " & Chr(34) & "' + $RUNNER_ROOT + '\\scripts\\runner_watchdog.py" & Chr(34) & " --host 0.0.0.0 --port ' + $RUNNER_PORT + '", 0, False')
+[System.IO.File]::WriteAllText($vbsPath, $vbs, [System.Text.Encoding]::UTF8)
 
 $regKey = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
 $INSTALL_STAGE = "autostart"
