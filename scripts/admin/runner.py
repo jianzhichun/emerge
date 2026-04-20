@@ -565,26 +565,11 @@ Write-Host "[OK] $(& $PYTHON --version)"
 
 $INSTALL_STAGE = "download"
 New-Item -Force -ItemType Directory -Path $RUNNER_ROOT | Out-Null
-$tarPath = "$env:TEMP\\emerge-runner.tar.gz"
-$shaPath = "$env:TEMP\\emerge-runner.tar.gz.sha256"
-Invoke-WebRequest -Uri "$TEAM_LEAD_URL/runner-dist/runner.tar.gz" -OutFile $tarPath -UseBasicParsing
-Invoke-WebRequest -Uri "$TEAM_LEAD_URL/runner-dist/runner.tar.gz.sha256" -OutFile $shaPath -UseBasicParsing
-$expectedSha = (Get-Content -Path $shaPath -Raw).Split()[0].Trim()
-$actualSha = & $PYTHON -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" $tarPath
-if ($expectedSha -ne $actualSha.Trim()) {{
-    throw "runner.tar.gz SHA256 mismatch"
-}}
+$zipPath = "$env:TEMP\\emerge-runner.zip"
+Invoke-WebRequest -Uri "$TEAM_LEAD_URL/runner-dist/runner.zip" -OutFile $zipPath -UseBasicParsing
 $INSTALL_STAGE = "extract"
-$extractErr = & $PYTHON -c @"
-import tarfile, sys
-try:
-    tarfile.open(sys.argv[1]).extractall(sys.argv[2])
-except Exception as e:
-    print(f'[extract-py] {{e}}', flush=True)
-    sys.exit(1)
-"@ $tarPath $RUNNER_ROOT 2>&1
-if ($LASTEXITCODE -ne 0) {{ throw ($extractErr -join "`n") }}
-Remove-Item -Force -ErrorAction SilentlyContinue $tarPath, $shaPath
+Expand-Archive -Path $zipPath -DestinationPath $RUNNER_ROOT -Force
+Remove-Item -Force -ErrorAction SilentlyContinue $zipPath
 
 $pipArgs = @()
 if ($USE_CN_MIRROR) {{ $pipArgs = @("--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple") }}
