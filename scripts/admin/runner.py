@@ -565,11 +565,9 @@ Write-Host "[OK] $(& $PYTHON --version)"
 
 $INSTALL_STAGE = "download"
 New-Item -Force -ItemType Directory -Path $RUNNER_ROOT | Out-Null
-$zipPath = "$env:TEMP\\emerge-runner.zip"
-Invoke-WebRequest -Uri "$TEAM_LEAD_URL/runner-dist/runner.zip" -OutFile $zipPath -UseBasicParsing
 $INSTALL_STAGE = "extract"
-Expand-Archive -Path $zipPath -DestinationPath $RUNNER_ROOT -Force
-Remove-Item -Force -ErrorAction SilentlyContinue $zipPath
+& $PYTHON -c "import urllib.request,zipfile,io,sys; url=sys.argv[1]+'/runner-dist/runner.zip'; d=urllib.request.urlopen(url,timeout=60).read(); z=zipfile.ZipFile(io.BytesIO(d)); z.extractall(sys.argv[2]); print('extracted '+str(len(z.namelist()))+' files')" $TEAM_LEAD_URL $RUNNER_ROOT
+if ($LASTEXITCODE -ne 0) {{ throw "Download/extract failed (exit $LASTEXITCODE)" }}
 
 $pipArgs = @()
 if ($USE_CN_MIRROR) {{ $pipArgs = @("--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple") }}
