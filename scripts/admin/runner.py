@@ -569,11 +569,17 @@ $INSTALL_STAGE = "extract"
 & $PYTHON -c "import urllib.request,zipfile,io,sys; url=sys.argv[1]+'/runner-dist/runner.zip'; d=urllib.request.urlopen(url,timeout=60).read(); z=zipfile.ZipFile(io.BytesIO(d)); z.extractall(sys.argv[2]); print('extracted '+str(len(z.namelist()))+' files')" $TEAM_LEAD_URL $RUNNER_ROOT
 if ($LASTEXITCODE -ne 0) {{ throw "Download/extract failed (exit $LASTEXITCODE)" }}
 
+$INSTALL_STAGE = "pip_install"
 $pipArgs = @()
 if ($USE_CN_MIRROR) {{ $pipArgs = @("--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple") }}
 $req = Join-Path $RUNNER_ROOT "requirements-runner.txt"
-if (Test-Path $req) {{ & $PYTHON -m pip install @pipArgs -r $req 2>$null | Out-Null }}
+if (Test-Path $req) {{
+    try {{ & $PYTHON -m pip install @pipArgs -r $req *>$null }} catch {{
+        Write-Host "[Warn] pip install failed (non-fatal): $($_.Exception.Message)" -ForegroundColor Yellow
+    }}
+}}
 
+$INSTALL_STAGE = "config_write"
 New-Item -Force -ItemType Directory -Path "$env:USERPROFILE\\.emerge" | Out-Null
 $cfg = @{{
     team_lead_url = $TEAM_LEAD_URL
@@ -583,6 +589,7 @@ $cfg = @{{
 }} | ConvertTo-Json -Depth 3
 $cfg | Out-File -FilePath "$env:USERPROFILE\\.emerge\\runner-config.json" -Encoding utf8
 
+$INSTALL_STAGE = "vbs_write"
 $pythonPath = (Get-Command $PYTHON -ErrorAction SilentlyContinue).Source
 if (-not $pythonPath) {{ $pythonPath = $PYTHON }}
 $vbsPath = "$env:USERPROFILE\\.emerge\\start_emerge_runner.vbs"
