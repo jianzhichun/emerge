@@ -578,7 +578,11 @@ if (Test-Path $req) {{
     $ErrorActionPreference = "Continue"
     & $PYTHON -m pip install @pipArgs -r $req
     if ($LASTEXITCODE -ne 0) {{
-        Write-Host "[Warn] pip install exited $LASTEXITCODE (non-fatal)" -ForegroundColor Yellow
+        Write-Host "[Warn] pip failed, retrying with CN mirror..." -ForegroundColor Yellow
+        & $PYTHON -m pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple -r $req
+        if ($LASTEXITCODE -ne 0) {{
+            Write-Host "[Warn] pip install failed (non-fatal, tray icon disabled)" -ForegroundColor Yellow
+        }}
     }}
     $ErrorActionPreference = "Stop"
 }}
