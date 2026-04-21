@@ -106,7 +106,8 @@ class DaemonHTTPServer:
         # Connected runners: runner_profile → {connected_at_ms, last_event_ts_ms, machine_id, last_alert}
         self._connected_runners: dict[str, dict] = {}
         self._runners_lock = threading.Lock()
-        # runner_profile → wfile for SSE command push
+        # runner_profile → {"wfile": ..., "lock": Lock()} for SSE command push.
+        # Per-entry lock ensures concurrent runner_notify calls never interleave writes.
         self._runner_sse_clients: dict[str, Any] = {}
         # popup_id → threading.Event
         self._popup_futures: dict[str, threading.Event] = {}
@@ -325,49 +326,48 @@ class DaemonHTTPServer:
         if ev:
             ev.set()
 
+    def _sse_write(self, runner_profile: str, data: bytes) -> str:
+        """Write bytes to runner SSE stream under per-entry lock. Returns "" on success
+        or an error string ("runner_not_connected" / "runner_disconnected")."""
+        with self._runners_lock:
+            entry = self._runner_sse_clients.get(runner_profile)
+        if entry is None:
+            return "runner_not_connected"
+        try:
+            with entry["lock"]:
+                entry["wfile"].write(data)
+                entry["wfile"].flush()
+            return ""
+        except OSError:
+            with self._runners_lock:
+                cur = self._runner_sse_clients.get(runner_profile)
+                if cur is not None and cur["wfile"] is entry["wfile"]:
+                    self._runner_sse_clients.pop(runner_profile)
+            return "runner_disconnected"
+
     def request_popup(self, runner_profile: str, ui_spec: dict, timeout_s: float = 30.0) -> dict:
         """Send popup to runner via SSE, wait for result. Blocks calling thread."""
         if ui_spec.get("type") == "toast":
-            # Fire-and-forget: popup_id="" is an intentional sentinel — runner never posts back
-            # a popup-result for toasts, so there is nothing to correlate.
+            # Fire-and-forget: popup_id="" sentinel — runner never posts back for toasts.
             command = json.dumps({"type": "notify", "popup_id": "", "ui_spec": ui_spec})
-            with self._runners_lock:
-                wfile = self._runner_sse_clients.get(runner_profile)
-            if wfile is None:
-                return {"ok": False, "error": "runner_not_connected"}
-            try:
-                wfile.write(f"data: {command}\n\n".encode())
-                wfile.flush()
-                return {"ok": True}
-            except OSError:
-                with self._runners_lock:
-                    self._runner_sse_clients.pop(runner_profile, None)
-                return {"ok": False, "error": "runner_disconnected"}
+            err = self._sse_write(runner_profile, f"data: {command}\n\n".encode())
+            if err:
+                return {"ok": False, "error": err}
+            return {"ok": True}
         popup_id = uuid.uuid4().hex
         ev = threading.Event()
         with self._popup_lock:
             self._popup_futures[popup_id] = ev
-        # upload_url is intentionally NOT injected here; the runner derives it from
-        # its own team_lead_url so remote runners reach the correct daemon address.
+        # upload_url is intentionally NOT injected here; runner derives it from team_lead_url.
         command = json.dumps({"type": "notify", "popup_id": popup_id, "ui_spec": ui_spec})
-        with self._runners_lock:
-            wfile = self._runner_sse_clients.get(runner_profile)
-        if wfile is not None:
-            try:
-                wfile.write(f"data: {command}\n\n".encode())
-                wfile.flush()
-            except OSError:
-                with self._runners_lock:
-                    self._runner_sse_clients.pop(runner_profile, None)
-                with self._popup_lock:
-                    self._popup_futures.pop(popup_id, None)
-                return {"ok": False, "error": "runner_disconnected"}
-        else:
+        err = self._sse_write(runner_profile, f"data: {command}\n\n".encode())
+        if err:
             with self._popup_lock:
                 self._popup_futures.pop(popup_id, None)
-            return {"ok": False, "error": "runner_not_connected"}
-
-        total_timeout = float(ui_spec.get("timeout_s", 30)) + 5.0
+            return {"ok": False, "error": err}
+        # Give the runner enough time to show the popup even if it was queued behind
+        # another in-flight popup (30 s buffer on top of the UI-level timeout).
+        total_timeout = float(ui_spec.get("timeout_s", 30)) + 30.0
         fired = ev.wait(timeout=total_timeout)
         with self._popup_lock:
             self._popup_futures.pop(popup_id, None)
@@ -636,10 +636,12 @@ def _make_handler(srv: "DaemonHTTPServer"):
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
+            my_wfile = self.wfile
+            my_entry: dict = {"wfile": my_wfile, "lock": threading.Lock()}
             if runner_profile:
                 now_ms = int(time.time() * 1000)
                 with srv._runners_lock:
-                    srv._runner_sse_clients[runner_profile] = self.wfile
+                    srv._runner_sse_clients[runner_profile] = my_entry
                     if runner_profile not in srv._connected_runners:
                         srv._connected_runners[runner_profile] = {
                             "connected_at_ms": now_ms,
@@ -651,20 +653,21 @@ def _make_handler(srv: "DaemonHTTPServer"):
                         srv._connected_runners[runner_profile]["machine_id"] = machine_id
                 srv._write_monitor_state()
                 srv._notify_cockpit_broadcast({"monitors_updated": True})
-            my_wfile = self.wfile
             try:
                 while True:
                     time.sleep(15)
-                    my_wfile.write(b": keepalive\n\n")
-                    my_wfile.flush()
+                    with my_entry["lock"]:
+                        my_wfile.write(b": keepalive\n\n")
+                        my_wfile.flush()
             except OSError:
                 pass
             finally:
                 if runner_profile:
                     with srv._runners_lock:
-                        # Only evict if we're still the registered client — a reconnect
+                        # Only evict if we're still the registered entry — a reconnect
                         # may have already replaced our entry before this finally runs.
-                        if srv._runner_sse_clients.get(runner_profile) is my_wfile:
+                        cur = srv._runner_sse_clients.get(runner_profile)
+                        if cur is my_entry:
                             srv._runner_sse_clients.pop(runner_profile)
                             srv._connected_runners.pop(runner_profile, None)
                             do_notify = True
