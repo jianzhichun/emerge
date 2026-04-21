@@ -266,6 +266,7 @@ _RUNNER_FILES: list[str] = [
     "scripts/exec_session.py",
     "scripts/runner_client.py",
     "scripts/policy_config.py",
+    "scripts/operator_popup.py",
     "requirements-runner.txt",
     "assets/icon-tray.png",
 ]
