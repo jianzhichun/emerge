@@ -618,6 +618,12 @@ try {{
     }}
 }}
 
+$INSTALL_STAGE = "stop_old"
+Get-WmiObject Win32_Process -Filter "Name='python.exe' OR Name='python3.exe'" |
+    Where-Object {{ $_.CommandLine -like '*runner_watchdog*' -or $_.CommandLine -like '*remote_runner*' }} |
+    ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
+Start-Sleep 1
+
 Start-Process "wscript.exe" -ArgumentList "`"$vbsPath`""
 
 $INSTALL_STAGE = "health_check"
