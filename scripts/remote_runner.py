@@ -489,10 +489,16 @@ class RunnerSSEClient:
     def _run(self) -> None:
         import urllib.request as _ur
         import urllib.error as _ue
+        import socket as _sock
+        try:
+            _machine_id = _sock.gethostname()
+        except OSError:
+            _machine_id = self._runner_profile
         backoff = 1.0
         while not self._stop.is_set():
             try:
-                url = f"{self._url}/runner/sse?runner_profile={self._runner_profile}"
+                url = (f"{self._url}/runner/sse?runner_profile={self._runner_profile}"
+                       f"&machine_id={_machine_id}")
                 req = _ur.Request(url, headers={"Accept": "text/event-stream"})
                 with _ur.urlopen(req, timeout=None) as resp:
                     backoff = 1.0

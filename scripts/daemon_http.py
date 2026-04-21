@@ -535,7 +535,8 @@ def _make_handler(srv: "DaemonHTTPServer"):
                 import urllib.parse as _up2
                 qs2 = _up2.parse_qs(_up2.urlparse(self.path).query)
                 profile = qs2.get("runner_profile", [""])[0].strip()
-                self._handle_runner_sse(profile)
+                mid_sse = qs2.get("machine_id", [""])[0].strip()
+                self._handle_runner_sse(profile, mid_sse)
             elif path == "/runner-dist/runner.zip":
                 from scripts.admin.runner import _build_runner_zip
                 _plugin_root = Path(__file__).resolve().parents[1]
@@ -626,7 +627,7 @@ def _make_handler(srv: "DaemonHTTPServer"):
             except OSError:
                 pass
 
-        def _handle_runner_sse(self, runner_profile: str):
+        def _handle_runner_sse(self, runner_profile: str, machine_id: str = ""):
             import re as _re_sse
             if runner_profile and not _re_sse.fullmatch(r"[a-zA-Z0-9_.-]+", runner_profile):
                 self._send_json(400, {"error": "invalid runner_profile"})
@@ -636,8 +637,20 @@ def _make_handler(srv: "DaemonHTTPServer"):
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             if runner_profile:
+                now_ms = int(time.time() * 1000)
                 with srv._runners_lock:
                     srv._runner_sse_clients[runner_profile] = self.wfile
+                    if runner_profile not in srv._connected_runners:
+                        srv._connected_runners[runner_profile] = {
+                            "connected_at_ms": now_ms,
+                            "last_event_ts_ms": 0,
+                            "machine_id": machine_id or runner_profile,
+                            "last_alert": None,
+                        }
+                    elif machine_id:
+                        srv._connected_runners[runner_profile]["machine_id"] = machine_id
+                srv._write_monitor_state()
+                srv._notify_cockpit_broadcast({"monitors_updated": True})
             try:
                 while True:
                     time.sleep(15)
