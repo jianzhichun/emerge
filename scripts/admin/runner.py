@@ -585,7 +585,7 @@ $cfg = @{{
     port = $RUNNER_PORT
     installed_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 }} | ConvertTo-Json -Depth 3
-$cfg | Out-File -FilePath "$env:USERPROFILE\\.emerge\\runner-config.json" -Encoding utf8
+[System.IO.File]::WriteAllText("$env:USERPROFILE\\.emerge\\runner-config.json", $cfg, (New-Object System.Text.UTF8Encoding($false)))
 
 $INSTALL_STAGE = "vbs_write"
 $pythonPath = (Get-Command $PYTHON -ErrorAction SilentlyContinue).Source
