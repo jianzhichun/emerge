@@ -642,6 +642,7 @@ def cmd_runner_install_url(
     *,
     runner_port: int = 8787,
     daemon_port: int = 8789,
+    team_lead_url: str | None = None,
 ) -> dict:
     """Return copy-paste install commands for Linux/macOS and Windows.
 
@@ -652,8 +653,10 @@ def cmd_runner_install_url(
         raise ValueError("runner_port must be in 1..65535")
     if daemon_port <= 0 or daemon_port > 65535:
         raise ValueError("daemon_port must be in 1..65535")
-    lan_ip = _detect_lan_ip()
-    team_lead_url = f"http://{lan_ip}:{daemon_port}".rstrip("/")
+    if not team_lead_url:
+        lan_ip = _detect_lan_ip()
+        team_lead_url = f"http://{lan_ip}:{daemon_port}"
+    team_lead_url = team_lead_url.rstrip("/")
     from urllib.parse import quote
 
     qp = quote(str(runner_port), safe="")

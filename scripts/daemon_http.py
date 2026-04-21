@@ -68,23 +68,14 @@ def resolve_daemon_bind(override: str | None = None) -> str:
 
 
 def _runtime_fingerprint() -> str:
-    """Hash key runtime files so ensure-running can detect stale daemon code."""
+    """Return plugin version as the restart signal — daemon restarts when version bumps."""
     root = Path(__file__).resolve().parents[1]
-    watched = (
-        root / "scripts" / "daemon_http.py",
-        root / "scripts" / "emerge_daemon.py",
-        root / "scripts" / "admin" / "cockpit.py",
-        root / "scripts" / "admin" / "control_plane.py",
-        root / "scripts" / "admin" / "cockpit" / "dist" / "index.html",
-    )
-    h = hashlib.sha1()
-    for p in watched:
-        try:
-            st = p.stat()
-            h.update(f"{p.name}:{st.st_mtime_ns}:{st.st_size}".encode("utf-8"))
-        except OSError:
-            h.update(f"{p.name}:missing".encode("utf-8"))
-    return h.hexdigest()
+    plugin_json = root / ".claude-plugin" / "plugin.json"
+    try:
+        import json as _json
+        return _json.loads(plugin_json.read_text(encoding="utf-8")).get("version", "unknown")
+    except OSError:
+        return "unknown"
 
 
 class DaemonHTTPServer:

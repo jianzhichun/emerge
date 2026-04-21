@@ -341,11 +341,16 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
                 hsrv = getattr(self._cockpit._daemon, "_http_server", None)
                 if hsrv is not None:
                     daemon_port = int(hsrv.port)
+            req_host = self.headers.get("Host", "").strip()
+            tlu = None
+            if req_host and not req_host.startswith(("0.0.0.0", "127.0.0.1", "localhost")):
+                tlu = f"http://{req_host}"
             try:
                 self._json(
                     cmd_runner_install_url(
                         runner_port=runner_port,
                         daemon_port=daemon_port,
+                        team_lead_url=tlu,
                     )
                 )
             except OSError as exc:
