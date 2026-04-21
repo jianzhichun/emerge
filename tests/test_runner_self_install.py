@@ -95,10 +95,8 @@ def test_generate_install_ps1_embeds_config():
     assert "EMERGE_PROFILE" in script
     assert "$RUNNER_PORT = 8787" in script
     assert "EmergeRunner" in script
-    assert "runner.tar.gz" in script
-    assert "runner.tar.gz.sha256" in script
-    assert "SHA256 mismatch" in script
-    assert "-Encoding utf8" in script
+    assert "runner.zip" in script
+    assert "runner-dist/runner.zip" in script
     assert "$INSTALL_STAGE = " in script
     assert "[Install][$INSTALL_STAGE]" in script
     assert "start_mode=$START_MODE" in script
@@ -210,7 +208,7 @@ def test_daemon_serves_install_scripts(tmp_path, monkeypatch):
         assert resp.status == 200
         assert "#!/usr/bin/env bash" in text
         assert "hostname" in text
-        assert "runner.tar.gz" in text
+        assert "runner.tar.gz" in text  # bash installer still uses tar.gz
 
         ps_req = urllib.request.Request(
             f"http://127.0.0.1:{port}/runner-install.ps1"

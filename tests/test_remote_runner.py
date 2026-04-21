@@ -168,7 +168,7 @@ def test_start_tray_runs_icon_when_pystray_available(tmp_path, monkeypatch):
         def stop(self): pass
 
     class _MockMenuItem:
-        def __init__(self, label, action): pass
+        def __init__(self, label, action, **kwargs): pass
 
     class _MockMenu:
         def __init__(self, *items): pass
