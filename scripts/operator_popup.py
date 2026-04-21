@@ -255,7 +255,7 @@ def show_notify(ui_spec: dict) -> dict[str, Any]:
 
 
 def _set_window_icon(root: Any) -> None:
-    """Set emerge icon on a tkinter Tk window. Silently no-ops on any error."""
+    """Set emerge icon on a tkinter Tk/Toplevel window. Silently no-ops on any error."""
     try:
         from pathlib import Path
         from PIL import Image, ImageTk  # type: ignore[import]
@@ -268,122 +268,174 @@ def _set_window_icon(root: Any) -> None:
         pass
 
 
+# ── Tkinter 专用线程调度器 ─────────────────────────────────────────────────
+# tkinter 不是线程安全的，Tk() 必须在固定线程创建和驱动。
+# 所有阻塞弹窗通过 _tk_dispatch 派发到该线程，用 Toplevel + wait_window 执行。
+import queue as _queue
+import threading as _threading
+
+_tk_dispatch_queue: _queue.Queue = _queue.Queue()
+_tk_root: Any = None
+_tk_thread: "_threading.Thread | None" = None
+_tk_thread_lock = _threading.Lock()
+
+
+def _ensure_tk_thread() -> None:
+    global _tk_root, _tk_thread
+    with _tk_thread_lock:
+        if _tk_thread is not None and _tk_thread.is_alive():
+            return
+        ready = _threading.Event()
+
+        def _run() -> None:
+            global _tk_root
+            import tkinter as tk
+            _tk_root = tk.Tk()
+            _tk_root.withdraw()  # 隐藏根窗口，所有可见弹窗用 Toplevel
+            _tk_root.after(50, _tk_poll)
+            ready.set()
+            _tk_root.mainloop()
+
+        _tk_thread = _threading.Thread(target=_run, name="tk-main", daemon=True)
+        _tk_thread.start()
+        ready.wait(timeout=5)
+
+
+def _tk_poll() -> None:
+    global _tk_root
+    try:
+        while True:
+            fn, ev, holder = _tk_dispatch_queue.get_nowait()
+            try:
+                holder.append(fn(_tk_root))
+            except Exception as exc:
+                holder.append({"action": "dismissed", "value": "", "error": str(exc)})
+            ev.set()
+    except _queue.Empty:
+        pass
+    if _tk_root is not None:
+        _tk_root.after(50, _tk_poll)
+
+
+def _tk_dispatch(fn: Callable) -> dict[str, Any]:
+    """把 fn(root) 调度到 tk 主线程执行，阻塞调用方直到完成（最多 120 s）。"""
+    _ensure_tk_thread()
+    holder: list = []
+    ev = _threading.Event()
+    _tk_dispatch_queue.put((fn, ev, holder))
+    ev.wait(timeout=120)
+    return holder[0] if holder else {"action": "dismissed", "value": ""}
+
+
+# ── 弹窗渲染函数 ────────────────────────────────────────────────────────────
+
 def _render_choice(*, body: str, options: list[str], title: str, timeout_s: int) -> dict[str, Any]:
-    import tkinter as tk
+    def _build(root: Any) -> dict[str, Any]:
+        import tkinter as tk
+        win = tk.Toplevel(root)
+        win.title(title)
+        _set_window_icon(win)
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        result: dict[str, Any] = {"action": "dismissed", "value": ""}
 
-    root = tk.Tk()
-    root.title(title)
-    _set_window_icon(root)
-    root.attributes("-topmost", True)
-    root.resizable(False, False)
-    result: dict[str, Any] = {"action": "dismissed", "value": ""}
-
-    tk.Label(root, text=body, wraplength=300, font=("", 11), justify="center").pack(
-        pady=(16, 8), padx=16
-    )
-
-    if timeout_s > 0:
-        countdown_var = tk.StringVar(value=f"(Auto-selecting {options[0]} in {timeout_s}s)")
-        tk.Label(root, textvariable=countdown_var, font=("", 9), fg="gray").pack()
-        remaining = [timeout_s]
-
-        def update_countdown() -> None:
-            remaining[0] -= 1
-            if remaining[0] <= 0:
-                result["action"] = "selected"
-                result["value"] = options[0]
-                root.destroy()
-                return
-            countdown_var.set(f"(Auto-selecting {options[0]} in {remaining[0]}s)")
-            root.after(1000, update_countdown)
-
-        root.after(1000, update_countdown)
-
-    btn_frame = tk.Frame(root)
-    btn_frame.pack(pady=(8, 14))
-
-    for opt in options:
-        def make_handler(o: str) -> Any:
-            def handler() -> None:
-                result["action"] = "selected"
-                result["value"] = o
-                root.destroy()
-            return handler
-
-        tk.Button(btn_frame, text=opt, command=make_handler(opt), width=10).pack(
-            side="left", padx=6
+        tk.Label(win, text=body, wraplength=300, font=("", 11), justify="center").pack(
+            pady=(16, 8), padx=16
         )
 
-    root.mainloop()
-    return result
+        if timeout_s > 0:
+            countdown_var = tk.StringVar(value=f"(Auto-selecting {options[0]} in {timeout_s}s)")
+            tk.Label(win, textvariable=countdown_var, font=("", 9), fg="gray").pack()
+            remaining = [timeout_s]
+
+            def update_countdown() -> None:
+                remaining[0] -= 1
+                if remaining[0] <= 0:
+                    result["action"] = "selected"
+                    result["value"] = options[0]
+                    win.destroy()
+                    return
+                countdown_var.set(f"(Auto-selecting {options[0]} in {remaining[0]}s)")
+                win.after(1000, update_countdown)
+
+            win.after(1000, update_countdown)
+
+        btn_frame = tk.Frame(win)
+        btn_frame.pack(pady=(8, 14))
+
+        for opt in options:
+            def make_handler(o: str) -> Any:
+                def handler() -> None:
+                    result["action"] = "selected"
+                    result["value"] = o
+                    win.destroy()
+                return handler
+
+            tk.Button(btn_frame, text=opt, command=make_handler(opt), width=10).pack(
+                side="left", padx=6
+            )
+
+        win.wait_window()
+        return result
+
+    return _tk_dispatch(_build)
 
 
 def _render_input(*, body: str, prefill: str, title: str, upload_url: str = "") -> dict[str, Any]:
-    import tkinter as tk
-    root = tk.Tk()
-    _set_window_icon(root)
-    result: dict[str, Any] = {"action": "dismissed", "value": "", "attachments": []}
+    def _build(root: Any) -> dict[str, Any]:
+        import tkinter as tk
+        win = tk.Toplevel(root)
+        _set_window_icon(win)
+        result: dict[str, Any] = {"action": "dismissed", "value": "", "attachments": []}
 
-    tk.Label(root, text=body, wraplength=340, justify="left").pack(
-        pady=(12, 4), padx=16, anchor="w"
-    )
+        tk.Label(win, text=body, wraplength=340, justify="left").pack(
+            pady=(12, 4), padx=16, anchor="w"
+        )
 
-    def _on_submit(text: str, attachments: list) -> None:
-        result["action"] = "confirmed"
-        result["value"] = text
-        result["attachments"] = attachments
+        def _on_submit(text: str, attachments: list) -> None:
+            result["action"] = "confirmed"
+            result["value"] = text
+            result["attachments"] = attachments
 
-    widget = RichInputWidget(root, on_submit=_on_submit, upload_url=upload_url, title=title)
-    if prefill:
-        widget._text.insert("1.0", prefill)
-    root.mainloop()
-    return result
+        widget = RichInputWidget(win, on_submit=_on_submit, upload_url=upload_url, title=title)
+        if prefill:
+            widget._text.insert("1.0", prefill)
+        win.wait_window()
+        return result
+
+    return _tk_dispatch(_build)
 
 
 def _render_confirm(*, body: str, title: str) -> dict[str, Any]:
-    import sys
-    if sys.platform == "win32":
-        import subprocess
-        safe_body = body.replace("'", "''").replace("\r\n", " ").replace("\n", " ")
-        safe_title = title.replace("'", "''")
-        ps = (
-            "Add-Type -AssemblyName System.Windows.Forms;"
-            f"$r=[System.Windows.Forms.MessageBox]::Show('{safe_body}','{safe_title}',"
-            "[System.Windows.Forms.MessageBoxButtons]::OKCancel,"
-            "[System.Windows.Forms.MessageBoxIcon]::Question);"
-            "exit $(if ($r -eq 'OK') { 0 } else { 1 })"
+    def _build(root: Any) -> dict[str, Any]:
+        import tkinter as tk
+        win = tk.Toplevel(root)
+        win.title(title)
+        _set_window_icon(win)
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        result: dict[str, Any] = {"action": "dismissed", "value": ""}
+
+        tk.Label(win, text=body, wraplength=300, font=("", 11), justify="center").pack(
+            pady=(16, 8), padx=16
         )
-        ret = subprocess.run(["powershell", "-NoProfile", "-Command", ps], timeout=120)
-        if ret.returncode == 0:
-            return {"action": "confirmed", "value": "confirmed"}
-        return {"action": "dismissed", "value": ""}
+        btn_frame = tk.Frame(win)
+        btn_frame.pack(pady=(8, 14))
 
-    import tkinter as tk
+        def on_confirm() -> None:
+            result["action"] = "confirmed"
+            result["value"] = "confirmed"
+            win.destroy()
 
-    root = tk.Tk()
-    root.title(title)
-    _set_window_icon(root)
-    root.attributes("-topmost", True)
-    root.resizable(False, False)
-    result: dict[str, Any] = {"action": "dismissed", "value": ""}
+        def on_dismiss() -> None:
+            win.destroy()
 
-    tk.Label(root, text=body, wraplength=300, font=("", 11), justify="center").pack(
-        pady=(16, 8), padx=16
-    )
-    btn_frame = tk.Frame(root)
-    btn_frame.pack(pady=(8, 14))
+        tk.Button(btn_frame, text="Confirm", command=on_confirm, width=10).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Cancel", command=on_dismiss, width=10).pack(side="left", padx=6)
+        win.wait_window()
+        return result
 
-    def on_confirm() -> None:
-        result["action"] = "confirmed"
-        root.destroy()
-
-    def on_dismiss() -> None:
-        root.destroy()
-
-    tk.Button(btn_frame, text="Confirm", command=on_confirm, width=10).pack(side="left", padx=6)
-    tk.Button(btn_frame, text="Cancel", command=on_dismiss, width=10).pack(side="left", padx=6)
-    root.mainloop()
-    return result
+    return _tk_dispatch(_build)
 
 
 def _render_toast(*, body: str, timeout_s: int) -> dict[str, Any]:
@@ -465,39 +517,31 @@ def _render_toast(*, body: str, timeout_s: int) -> dict[str, Any]:
 
 
 def _render_info(*, body: str, title: str) -> dict[str, Any]:
-    import sys
-    if sys.platform == "win32":
-        import subprocess
-        safe_body = body.replace("'", "''").replace("\r\n", " ").replace("\n", " ")
-        safe_title = title.replace("'", "''")
-        ps = (
-            "Add-Type -AssemblyName System.Windows.Forms;"
-            f"[System.Windows.Forms.MessageBox]::Show('{safe_body}','{safe_title}',"
-            "[System.Windows.Forms.MessageBoxButtons]::OK,"
-            "[System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null"
+    def _build(root: Any) -> dict[str, Any]:
+        import tkinter as tk
+        win = tk.Toplevel(root)
+        win.title(title)
+        _set_window_icon(win)
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        tk.Label(win, text=body, wraplength=300, font=("", 11), justify="center").pack(
+            pady=(16, 8), padx=16
         )
-        subprocess.run(["powershell", "-NoProfile", "-Command", ps], timeout=120)
+        tk.Button(win, text="Close", command=win.destroy, width=10).pack(pady=(0, 14))
+        win.wait_window()
         return {"action": "dismissed", "value": ""}
 
-    import tkinter as tk
-
-    root = tk.Tk()
-    root.title(title)
-    _set_window_icon(root)
-    root.attributes("-topmost", True)
-    root.resizable(False, False)
-    tk.Label(root, text=body, wraplength=300, font=("", 11), justify="center").pack(
-        pady=(16, 8), padx=16
-    )
-    tk.Button(root, text="Close", command=root.destroy, width=10).pack(pady=(0, 14))
-    root.mainloop()
-    return {"action": "dismissed", "value": ""}
+    return _tk_dispatch(_build)
 
 
 def show_input_bubble(on_submit: "Callable[[str, list], None]", upload_url: str = "") -> None:
     """Open RichInputWidget bubble. Calls on_submit(text, attachments) on send."""
-    import tkinter as tk
-    root = tk.Tk()
-    _set_window_icon(root)
-    RichInputWidget(root, on_submit=on_submit, upload_url=upload_url, title="emerge")
-    root.mainloop()
+    def _build(root: Any) -> dict[str, Any]:
+        import tkinter as tk
+        win = tk.Toplevel(root)
+        _set_window_icon(win)
+        RichInputWidget(win, on_submit=on_submit, upload_url=upload_url, title="emerge")
+        win.wait_window()
+        return {}
+
+    _tk_dispatch(_build)
