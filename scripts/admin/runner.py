@@ -574,9 +574,9 @@ $pipArgs = @()
 if ($USE_CN_MIRROR) {{ $pipArgs = @("--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple") }}
 $req = Join-Path $RUNNER_ROOT "requirements-runner.txt"
 if (Test-Path $req) {{
-    try {{ & $PYTHON -m pip install @pipArgs -r $req *>$null }} catch {{
-        Write-Host "[Warn] pip install failed (non-fatal): $($_.Exception.Message)" -ForegroundColor Yellow
-    }}
+    $ErrorActionPreference = "Continue"
+    & $PYTHON -m pip install @pipArgs -r $req --quiet --quiet 2>&1 | Out-Null
+    $ErrorActionPreference = "Stop"
 }}
 
 $INSTALL_STAGE = "config_write"
