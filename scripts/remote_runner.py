@@ -199,11 +199,16 @@ class RunnerExecutor:
             pystray.MenuItem("退出", lambda icon, item: icon.stop()),
         )
         icon = pystray.Icon("emerge", img, "emerge runner", menu)
+        _tray_log = Path.home() / ".emerge" / "tray.log"
         try:
             icon.run_detached()
+            _tray_log.write_text("run_detached ok\n", encoding="utf-8")
         except (NotImplementedError, AttributeError):
-            # run_detached() not available on this backend — fall back to daemon thread
+            _tray_log.write_text("run_detached unavailable, using thread\n", encoding="utf-8")
             threading.Thread(target=icon.run, daemon=True, name="EmergeTrayIcon").start()
+        except Exception as _e:
+            import traceback as _tb
+            _tray_log.write_text(f"tray error:\n{_tb.format_exc()}", encoding="utf-8")
 
     def show_notify(self, params: dict) -> dict:
         """Show OS-native notification dialog. Blocks until user responds.
