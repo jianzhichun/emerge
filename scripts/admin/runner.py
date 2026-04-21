@@ -576,7 +576,10 @@ if ($USE_CN_MIRROR) {{ $pipArgs = @("--index-url", "https://pypi.tuna.tsinghua.e
 $req = Join-Path $RUNNER_ROOT "requirements-runner.txt"
 if (Test-Path $req) {{
     $ErrorActionPreference = "Continue"
-    & $PYTHON -m pip install @pipArgs -r $req --quiet --quiet 2>&1 | Out-Null
+    & $PYTHON -m pip install @pipArgs -r $req
+    if ($LASTEXITCODE -ne 0) {{
+        Write-Host "[Warn] pip install exited $LASTEXITCODE (non-fatal)" -ForegroundColor Yellow
+    }}
     $ErrorActionPreference = "Stop"
 }}
 
