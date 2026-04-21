@@ -195,8 +195,7 @@ class RunnerExecutor:
             ).start()
 
         menu = pystray.Menu(
-            pystray.MenuItem("发送消息", _on_send_message),
-            pystray.MenuItem("退出", lambda icon, item: icon.stop()),
+            pystray.MenuItem("发送消息", _on_send_message, default=True, visible=False),
         )
         icon = pystray.Icon("emerge", img, "emerge runner", menu)
         _tray_log = Path.home() / ".emerge" / "tray.log"
