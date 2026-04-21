@@ -528,13 +528,7 @@ trap {{
 
 Write-Host "=== Emerge Runner Installer ===" -ForegroundColor Cyan
 
-$USE_CN_MIRROR = $false
-try {{
-    $null = Invoke-WebRequest -Uri "https://pypi.org" -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
-}} catch {{
-    Write-Host "[CN] Using pip mirror: pypi.tuna.tsinghua.edu.cn"
-    $USE_CN_MIRROR = $true
-}}
+$USE_CN_MIRROR = $true
 
 $PYTHON = $null
 foreach ($py in @("python", "python3")) {{
@@ -578,11 +572,7 @@ if (Test-Path $req) {{
     $ErrorActionPreference = "Continue"
     & $PYTHON -m pip install @pipArgs -r $req
     if ($LASTEXITCODE -ne 0) {{
-        Write-Host "[Warn] pip failed, retrying with CN mirror..." -ForegroundColor Yellow
-        & $PYTHON -m pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple -r $req
-        if ($LASTEXITCODE -ne 0) {{
-            Write-Host "[Warn] pip install failed (non-fatal, tray icon disabled)" -ForegroundColor Yellow
-        }}
+        Write-Host "[Warn] pip install failed (non-fatal, tray icon disabled)" -ForegroundColor Yellow
     }}
     $ErrorActionPreference = "Stop"
 }}
