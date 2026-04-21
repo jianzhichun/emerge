@@ -596,7 +596,7 @@ $vbsPath = "$env:USERPROFILE\\.emerge\\start_emerge_runner.vbs"
 $vbs = ('Set sh = CreateObject("WScript.Shell")' + [char]13 + [char]10 +
         'sh.CurrentDirectory = "' + $RUNNER_ROOT + '"' + [char]13 + [char]10 +
         'sh.Run Chr(34) & "' + $pythonPath + '" & Chr(34) & " " & Chr(34) & "' + $RUNNER_ROOT + '\\scripts\\runner_watchdog.py" & Chr(34) & " --host 0.0.0.0 --port ' + $RUNNER_PORT + '", 0, False')
-[System.IO.File]::WriteAllText($vbsPath, $vbs, [System.Text.Encoding]::UTF8)
+[System.IO.File]::WriteAllText($vbsPath, $vbs, (New-Object System.Text.UTF8Encoding($false)))
 
 $regKey = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
 $INSTALL_STAGE = "autostart"
