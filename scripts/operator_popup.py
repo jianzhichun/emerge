@@ -294,7 +294,12 @@ def _ensure_tk_thread() -> None:
             global _tk_root
             import tkinter as tk
             _tk_root = tk.Tk()
-            _tk_root.withdraw()  # 隐藏根窗口，所有可见弹窗用 Toplevel
+            # Keep a 1×1 off-screen transparent window so Windows background
+            # processes keep the event loop pumping (withdraw() exits mainloop
+            # immediately when no visible windows exist on some configs).
+            _tk_root.overrideredirect(True)
+            _tk_root.geometry("1x1+-10000+-10000")
+            _tk_root.attributes("-alpha", 0.0)
             _tk_root.after(50, _tk_poll)
             ready.set()
             _tk_root.mainloop()
@@ -312,6 +317,8 @@ def _tk_poll() -> None:
             try:
                 fn(_tk_root, on_result)  # non-blocking; on_result called later by button handler
             except Exception as exc:
+                import logging as _lg
+                _lg.warning("tk-poll: _build raised %s: %s", type(exc).__name__, exc, exc_info=True)
                 on_result({"action": "dismissed", "value": "", "error": str(exc)})
     except _queue.Empty:
         pass
@@ -344,6 +351,8 @@ def _render_choice(*, body: str, options: list[str], title: str, timeout_s: int)
         _set_window_icon(win)
         win.attributes("-topmost", True)
         win.resizable(False, False)
+        win.lift()
+        win.focus_force()
         result: dict[str, Any] = {"action": "dismissed", "value": ""}
         fired = [False]
 
@@ -437,6 +446,8 @@ def _render_confirm(*, body: str, title: str) -> dict[str, Any]:
         _set_window_icon(win)
         win.attributes("-topmost", True)
         win.resizable(False, False)
+        win.lift()
+        win.focus_force()
         result: dict[str, Any] = {"action": "dismissed", "value": ""}
         fired = [False]
 
@@ -554,6 +565,8 @@ def _render_info(*, body: str, title: str) -> dict[str, Any]:
         _set_window_icon(win)
         win.attributes("-topmost", True)
         win.resizable(False, False)
+        win.lift()
+        win.focus_force()
         result: dict[str, Any] = {"action": "dismissed", "value": ""}
         fired = [False]
 

@@ -651,20 +651,28 @@ def _make_handler(srv: "DaemonHTTPServer"):
                         srv._connected_runners[runner_profile]["machine_id"] = machine_id
                 srv._write_monitor_state()
                 srv._notify_cockpit_broadcast({"monitors_updated": True})
+            my_wfile = self.wfile
             try:
                 while True:
                     time.sleep(15)
-                    self.wfile.write(b": keepalive\n\n")
-                    self.wfile.flush()
+                    my_wfile.write(b": keepalive\n\n")
+                    my_wfile.flush()
             except OSError:
                 pass
             finally:
                 if runner_profile:
                     with srv._runners_lock:
-                        srv._runner_sse_clients.pop(runner_profile, None)
-                        srv._connected_runners.pop(runner_profile, None)
-                    srv._write_monitor_state()
-                    srv._notify_cockpit_broadcast({"monitors_updated": True})
+                        # Only evict if we're still the registered client — a reconnect
+                        # may have already replaced our entry before this finally runs.
+                        if srv._runner_sse_clients.get(runner_profile) is my_wfile:
+                            srv._runner_sse_clients.pop(runner_profile)
+                            srv._connected_runners.pop(runner_profile, None)
+                            do_notify = True
+                        else:
+                            do_notify = False
+                    if do_notify:
+                        srv._write_monitor_state()
+                        srv._notify_cockpit_broadcast({"monitors_updated": True})
 
         def do_POST(self):  # noqa: N802
             import urllib.parse as _up
