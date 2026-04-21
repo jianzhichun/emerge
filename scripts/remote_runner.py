@@ -547,8 +547,9 @@ class RunnerSSEClient:
                 ui_spec = {**ui_spec, "upload_url": f"{self._url}/runner/upload"}
             try:
                 result = self._show_notify(ui_spec)
-            except Exception:
-                result = {"value": None}
+            except Exception as _exc:
+                logging.warning("show_notify failed: %s", _exc, exc_info=True)
+                result = {"value": None, "error": str(_exc)}
             if ui_spec.get("type") != "toast":
                 self._post_result(popup_id, result)
 
