@@ -341,6 +341,23 @@ def _render_input(*, body: str, prefill: str, title: str, upload_url: str = "") 
 
 
 def _render_confirm(*, body: str, title: str) -> dict[str, Any]:
+    import sys
+    if sys.platform == "win32":
+        import subprocess
+        safe_body = body.replace("'", "''").replace("\r\n", " ").replace("\n", " ")
+        safe_title = title.replace("'", "''")
+        ps = (
+            "Add-Type -AssemblyName System.Windows.Forms;"
+            f"$r=[System.Windows.Forms.MessageBox]::Show('{safe_body}','{safe_title}',"
+            "[System.Windows.Forms.MessageBoxButtons]::OKCancel,"
+            "[System.Windows.Forms.MessageBoxIcon]::Question);"
+            "exit $(if ($r -eq 'OK') { 0 } else { 1 })"
+        )
+        ret = subprocess.run(["powershell", "-NoProfile", "-Command", ps], timeout=120)
+        if ret.returncode == 0:
+            return {"action": "confirmed", "value": "confirmed"}
+        return {"action": "dismissed", "value": ""}
+
     import tkinter as tk
 
     root = tk.Tk()
@@ -448,6 +465,20 @@ def _render_toast(*, body: str, timeout_s: int) -> dict[str, Any]:
 
 
 def _render_info(*, body: str, title: str) -> dict[str, Any]:
+    import sys
+    if sys.platform == "win32":
+        import subprocess
+        safe_body = body.replace("'", "''").replace("\r\n", " ").replace("\n", " ")
+        safe_title = title.replace("'", "''")
+        ps = (
+            "Add-Type -AssemblyName System.Windows.Forms;"
+            f"[System.Windows.Forms.MessageBox]::Show('{safe_body}','{safe_title}',"
+            "[System.Windows.Forms.MessageBoxButtons]::OK,"
+            "[System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null"
+        )
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps], timeout=120)
+        return {"action": "dismissed", "value": ""}
+
     import tkinter as tk
 
     root = tk.Tk()
