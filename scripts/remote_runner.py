@@ -183,7 +183,7 @@ class RunnerExecutor:
         try:
             img = Image.open(_tray_png).convert("RGBA")
         except Exception:
-            img = Image.new("RGBA", (64, 64), (255, 255, 255, 200))
+            img = Image.new("RGBA", (64, 64), (82, 130, 255, 255))
 
         def _on_send_message(icon: Any, item: Any) -> None:
             from scripts.operator_popup import show_input_bubble

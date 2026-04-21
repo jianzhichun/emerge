@@ -267,6 +267,7 @@ _RUNNER_FILES: list[str] = [
     "scripts/runner_client.py",
     "scripts/policy_config.py",
     "requirements-runner.txt",
+    "assets/icon-tray.png",
 ]
 
 
