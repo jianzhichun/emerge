@@ -35,6 +35,7 @@ class _RunnerServer:
         executor = RunnerExecutor(root=ROOT, state_root=self._state_root)
         handler_cls = type("TestRunnerHTTPHandler", (RunnerHTTPHandler,), {"executor": executor})
         self._server = ThreadingHTTPServer((host, port), handler_cls)
+        self._server.daemon_threads = True  # prevent request threads from blocking pytest exit
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
         self.url = f"http://{host}:{port}"
@@ -1863,7 +1864,7 @@ def test_pre_tool_use_rejects_legacy_read_connector_name_order():
     hook_out = out.get("hookSpecificOutput", {})
     assert hook_out.get("permissionDecision") == "deny"
     reason = hook_out.get("permissionDecisionReason", "")
-    assert "Must be <connector>.(read|write).<name>" in reason
+    assert "Must be <connector>.(read|write|workflow).<name>" in reason
 
 
 def test_pre_tool_use_accepts_valid_intent_signature():
@@ -2091,7 +2092,7 @@ def _make_span_daemon(tmp_path, monkeypatch):
     from scripts.emerge_daemon import EmergeDaemon
     state = tmp_path / "state"
     hook_state = tmp_path / "hook-state"
-    hook_state.mkdir(parents=True)
+    hook_state.mkdir(parents=True, exist_ok=True)
     (hook_state / "state.json").write_text("{}", encoding="utf-8")
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(state))
     monkeypatch.setenv("EMERGE_HOOK_STATE_ROOT", str(hook_state))
@@ -3634,7 +3635,7 @@ def test_state_deltas_merges_tool_deltas_jsonl(tmp_path):
     from scripts.emerge_daemon import EmergeDaemon
 
     hook_root = tmp_path / "hook-state"
-    hook_root.mkdir(parents=True)
+    hook_root.mkdir(parents=True, exist_ok=True)
     # Write a peripheral delta to tool-deltas.jsonl
     peripheral = {
         "id": "d-999-Bash",

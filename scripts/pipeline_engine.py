@@ -136,6 +136,63 @@ class PipelineEngine:
             rollback_result=rollback_result,
         )
 
+    def run_workflow(self, args: dict[str, Any]) -> dict[str, Any]:
+        connector = args.get("connector", "").strip()
+        pipeline = args.get("pipeline", "").strip()
+        if not connector or not pipeline:
+            raise ValueError(
+                f"run_workflow: 'connector' and 'pipeline' are required (got connector={connector!r}, pipeline={pipeline!r})"
+            )
+        self._validate_path_segment(connector, "connector")
+        self._validate_path_segment(pipeline, "pipeline")
+        metadata, module = self._load_pipeline(connector, "workflow", pipeline)
+        has_write_steps = isinstance(metadata.get("write_steps"), list) and len(metadata["write_steps"]) > 0
+        if has_write_steps:
+            action_result = module.run_write(metadata=metadata, args=args)
+            verify_fn = getattr(module, "verify_write", None)
+            if not callable(verify_fn):
+                raise ValueError("verify_write is required for workflow pipelines with write_steps")
+            verify_result = verify_fn(metadata=metadata, args=args, action_result=action_result)
+            if not isinstance(verify_result, dict):
+                raise ValueError("verify_write must return an object")
+            verification_state = "verified" if verify_result.get("ok") else "degraded"
+            policy = str(metadata.get("rollback_or_stop_policy", "stop"))
+            rollback_executed = False
+            rollback_result: dict[str, Any] | None = None
+            stop_triggered = False
+            if verification_state == "degraded":
+                if policy == "rollback":
+                    rollback_fn = getattr(module, "rollback_write", None)
+                    if callable(rollback_fn):
+                        try:
+                            rollback_payload = rollback_fn(metadata=metadata, args=args, action_result=action_result)
+                            rollback_result = rollback_payload if isinstance(rollback_payload, dict) else {"ok": False, "error": "rollback_write must return object"}
+                        except Exception as exc:
+                            rollback_result = {"ok": False, "error": str(exc)}
+                        rollback_executed = True
+                    else:
+                        rollback_result = {"ok": False, "error": "rollback_write not implemented"}
+                        stop_triggered = True
+                else:
+                    stop_triggered = True
+            return self._build_write_result(
+                connector=connector, pipeline=pipeline, mode="workflow",
+                metadata=metadata, action_result=action_result, verify_result=verify_result,
+                stop_triggered=stop_triggered, rollback_executed=rollback_executed, rollback_result=rollback_result,
+            )
+        else:
+            rows = module.run_read(metadata=metadata, args=args)
+            verify_result_r = {"ok": True}
+            verify_fn_r = getattr(module, "verify_read", None)
+            if callable(verify_fn_r):
+                verify_result_r = verify_fn_r(metadata=metadata, args=args, rows=rows)
+                if not isinstance(verify_result_r, dict):
+                    raise ValueError("verify_read must return an object")
+            return self._build_read_result(
+                connector=connector, pipeline=pipeline, mode="workflow",
+                metadata=metadata, rows=rows, verify_result=verify_result_r,
+            )
+
     @staticmethod
     def _build_read_result(
         *,
@@ -144,10 +201,11 @@ class PipelineEngine:
         metadata: dict[str, Any],
         rows: Any,
         verify_result: dict[str, Any],
+        mode: str = "read",
     ) -> dict[str, Any]:
         verification_state = "verified" if bool(verify_result.get("ok", False)) else "degraded"
         return {
-            "pipeline_id": f"{connector}.read.{pipeline}",
+            "pipeline_id": f"{connector}.{mode}.{pipeline}",
             "intent_signature": metadata.get("intent_signature", ""),
             "rows": rows,
             "verify_result": verify_result,
@@ -165,11 +223,12 @@ class PipelineEngine:
         stop_triggered: bool,
         rollback_executed: bool,
         rollback_result: dict[str, Any] | None,
+        mode: str = "write",
     ) -> dict[str, Any]:
         verification_state = "verified" if bool(verify_result.get("ok", False)) else "degraded"
         policy = str(metadata.get("rollback_or_stop_policy", "stop"))
         return {
-            "pipeline_id": f"{connector}.write.{pipeline}",
+            "pipeline_id": f"{connector}.{mode}.{pipeline}",
             "intent_signature": metadata.get("intent_signature", ""),
             "action_result": action_result,
             "verify_result": verify_result,
@@ -370,9 +429,9 @@ class PipelineEngine:
                 f"invalid intent_signature {intent_signature!r}: expected connector.mode.name"
             )
         connector, mode, pipeline = parts
-        if mode not in ("read", "write"):
+        if mode not in ("read", "write", "workflow"):
             raise ValueError(
-                f"invalid intent_signature mode {mode!r}: expected 'read' or 'write'"
+                f"invalid intent_signature mode {mode!r}: expected 'read', 'write', or 'workflow'"
             )
         PipelineEngine._validate_path_segment(connector, "connector")
         PipelineEngine._validate_path_segment(pipeline, "pipeline")

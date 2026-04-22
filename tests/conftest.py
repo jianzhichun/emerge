@@ -12,12 +12,24 @@ _TESTS_DIR = Path(__file__).resolve().parent
 
 
 @pytest.fixture(autouse=True)
-def _mock_connector_root(monkeypatch):
-    """Point EMERGE_CONNECTOR_ROOT at tests/connectors so PipelineEngine finds
-    the mock connector during testing.  The mock directory lives here rather than
-    in the plugin root so it is not shipped when Claude Code installs the plugin.
+def _mock_connector_root(monkeypatch, tmp_path):
+    """Isolate all production state paths for every test.
+
+    - EMERGE_CONNECTOR_ROOT → tests/connectors/ (mock connector, not shipped)
+    - EMERGE_STATE_ROOT     → tmp_path/state   (prevent flywheel bridge from
+      hitting stable production intents and executing live pipelines)
+    - EMERGE_METRICS_SINK   → null             (no EventAppender thread; prevents
+      accumulated fsync contention across tests on the shared metrics file)
+    - EMERGE_HOOK_STATE_ROOT→ tmp_path/hook-state (prevent tests from writing
+      deltas/span-WAL to the developer's production hook-state)
     """
     monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(_TESTS_DIR / "connectors"))
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("EMERGE_METRICS_SINK", "null")
+    hook_state = tmp_path / "hook-state"
+    hook_state.mkdir(parents=True, exist_ok=True)
+    (hook_state / "state.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("EMERGE_HOOK_STATE_ROOT", str(hook_state))
 
 
 @pytest.fixture(autouse=True)

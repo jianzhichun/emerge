@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -27,7 +28,7 @@ def get_sink(
     *,
     default_path: Path | None = None,
 ) -> "LocalJSONLSink | NullSink":
-    kind = str(settings.get("metrics_sink", "local_jsonl"))
+    kind = os.environ.get("EMERGE_METRICS_SINK") or str(settings.get("metrics_sink", "local_jsonl"))
     if kind == "null":
         return NullSink()
     path = default_path or (Path.home() / ".emerge" / "metrics.jsonl")

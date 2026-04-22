@@ -346,7 +346,12 @@ class EmergeDaemon:
                 result = self._run_pipeline_remotely(mode, arguments, _client)
                 execution_path = "remote"
             else:
-                result = self.pipeline.run_read(arguments) if mode == "read" else self.pipeline.run_write(arguments)
+                if mode == "read":
+                    result = self.pipeline.run_read(arguments)
+                elif mode == "workflow":
+                    result = self.pipeline.run_workflow(arguments)
+                else:
+                    result = self.pipeline.run_write(arguments)
                 execution_path = "local"
             response = self._tool_ok_json(result)
             try:

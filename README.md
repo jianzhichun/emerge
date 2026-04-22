@@ -181,6 +181,7 @@ Installer URLs point at your machineâ€™s LAN address (`http://<lan-ip>:<port>/â€
 | `EMERGE_MONITOR_POLL_S`     | EventBus poll interval (seconds)                                                              | `5`                         |
 | `EMERGE_MONITOR_MACHINES`   | Comma-separated runner profile names to monitor                                               | `default`                   |
 | `EMERGE_STATE_ROOT`         | Override where session state (WAL, checkpoints, registry) is written                          | `~/.emerge/state`           |
+| `EMERGE_METRICS_SINK`       | `null` to disable metrics emission (no `EventAppender` thread created); useful in tests       | `local_jsonl`               |
 | `EMERGE_SESSION_ID`         | Override the derived session identifier                                                       | derived from cwd+git        |
 | `EMERGE_RUNNER_CONFIG_PATH` | Path to `runner-map.json` (overrides default location)                                        | `~/.emerge/runner-map.json` |
 | `EMERGE_SETTINGS_PATH`      | Override settings file path                                                                   | `~/.emerge/settings.json`   |

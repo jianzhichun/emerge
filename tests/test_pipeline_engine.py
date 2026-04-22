@@ -263,3 +263,64 @@ def test_valid_connector_pipeline_not_rejected():
         pe.run_read({"connector": "zwcad", "pipeline": "nonexistent-pipeline"})
     with pytest.raises(PipelineMissingError):
         pe.run_read({"connector": "my-connector", "pipeline": "sub.pipeline.name"})
+
+
+def test_run_workflow_read_steps(tmp_path):
+    """workflow pipeline with read_steps dispatches as read."""
+    import os
+    conn_dir = tmp_path / "connectors" / "myconn" / "pipelines" / "workflow"
+    conn_dir.mkdir(parents=True)
+    (conn_dir / "daily.yaml").write_text(
+        "intent_signature: myconn.workflow.daily\n"
+        "rollback_or_stop_policy: stop\n"
+        "read_steps:\n  - run_read\n"
+        "verify_steps:\n  - verify_read\n"
+    )
+    (conn_dir / "daily.py").write_text(
+        "def run_read(metadata, args):\n    return [{'count': 1}]\n"
+        "def verify_read(metadata, args, rows):\n    return {'ok': bool(rows)}\n"
+    )
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path / "connectors")
+    try:
+        from scripts.pipeline_engine import PipelineEngine
+        result = PipelineEngine().run_workflow({"connector": "myconn", "pipeline": "daily"})
+        assert result["pipeline_id"] == "myconn.workflow.daily"
+        assert result["intent_signature"] == "myconn.workflow.daily"
+        assert result["rows"] == [{"count": 1}]
+        assert result["verification_state"] == "verified"
+    finally:
+        os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+
+
+def test_run_workflow_write_steps(tmp_path):
+    """workflow pipeline with write_steps dispatches as write."""
+    import os
+    conn_dir = tmp_path / "connectors" / "myconn" / "pipelines" / "workflow"
+    conn_dir.mkdir(parents=True)
+    (conn_dir / "notify.yaml").write_text(
+        "intent_signature: myconn.workflow.notify\n"
+        "rollback_or_stop_policy: stop\n"
+        "write_steps:\n  - run_write\n"
+        "verify_steps:\n  - verify_write\n"
+    )
+    (conn_dir / "notify.py").write_text(
+        "def run_write(metadata, args):\n    return {'ok': True, 'sent': True}\n"
+        "def verify_write(metadata, args, action_result):\n    return {'ok': action_result.get('ok', False)}\n"
+    )
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path / "connectors")
+    try:
+        from scripts.pipeline_engine import PipelineEngine
+        result = PipelineEngine().run_workflow({"connector": "myconn", "pipeline": "notify"})
+        assert result["pipeline_id"] == "myconn.workflow.notify"
+        assert result["intent_signature"] == "myconn.workflow.notify"
+        assert result["action_result"]["sent"] is True
+        assert result["verification_state"] == "verified"
+    finally:
+        os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+
+
+def test_parse_intent_signature_rejects_unknown_mode():
+    """Mode not in read/write/workflow must be rejected."""
+    from scripts.pipeline_engine import PipelineEngine
+    with pytest.raises(ValueError, match="'read', 'write', or 'workflow'"):
+        PipelineEngine._parse_intent_signature("conn.foobar.pipeline")
