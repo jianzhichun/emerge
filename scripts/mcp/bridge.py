@@ -24,6 +24,7 @@ class FlywheelBridge:
         run_remotely: Callable[..., dict],
         run_local_read: Callable[[dict], dict],
         run_local_write: Callable[[dict], dict],
+        run_local_workflow: "Callable[[dict], dict] | None" = None,
         record_bridge_outcome: Callable[..., dict],
         sink_emit: Callable[[str, dict], None],
     ) -> None:
@@ -32,6 +33,7 @@ class FlywheelBridge:
         self._run_remotely = run_remotely
         self._run_local_read = run_local_read
         self._run_local_write = run_local_write
+        self._run_local_workflow = run_local_workflow
         self._record_bridge_outcome = record_bridge_outcome
         self._sink_emit = sink_emit
         self.last_failure: dict[str, Any] | None = None
@@ -95,7 +97,7 @@ class FlywheelBridge:
                         "demotion_reason": "bridge_schema_drift",
                     }
 
-        if mode == "write":
+        if mode in ("write", "workflow"):
             action = result.get("action_result")
             if isinstance(action, dict) and action.get("ok") is False:
                 err = str(action.get("error", "") or "")
@@ -167,6 +169,8 @@ class FlywheelBridge:
                 result = self._run_remotely(mode, pipeline_args, _client)
             elif mode == "write":
                 result = self._run_local_write(pipeline_args)
+            elif mode == "workflow" and self._run_local_workflow is not None:
+                result = self._run_local_workflow(pipeline_args)
             else:
                 result = self._run_local_read(pipeline_args)
         except Exception as _bridge_exc:

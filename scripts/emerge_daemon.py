@@ -135,6 +135,7 @@ class EmergeDaemon:
             run_remotely=lambda mode, args, client: self._run_pipeline_remotely(mode, args, client),
             run_local_read=lambda args: self.pipeline.run_read(args),
             run_local_write=lambda args: self.pipeline.run_write(args),
+            run_local_workflow=lambda args: self.pipeline.run_workflow(args),
             record_bridge_outcome=self._policy_engine.record_bridge_outcome,
             sink_emit=lambda name, payload: self._sink.emit(name, payload),
         )

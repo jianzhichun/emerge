@@ -40,7 +40,14 @@ def run_pipeline_remotely(
     meta_repr = repr(json.dumps(metadata, ensure_ascii=True))
     args_repr = repr(json.dumps(arguments, ensure_ascii=True))
 
-    if mode == "read":
+    # workflow pipelines dispatch as read or write depending on their YAML steps.
+    if mode == "workflow":
+        has_write_steps = isinstance(metadata.get("write_steps"), list) and len(metadata["write_steps"]) > 0
+        effective_mode = "write" if has_write_steps else "read"
+    else:
+        effective_mode = mode
+
+    if effective_mode == "read":
         dispatch = (
             "_rows = run_read(metadata=_m, args=_a)\n"
             "_vfn = globals().get('verify_read')\n"
@@ -100,7 +107,7 @@ def run_pipeline_remotely(
         detail = result_err or fallback_text or "missing result_var_value"
         raise RuntimeError(f"remote pipeline exec missing structured output: {detail}")
 
-    if mode == "read":
+    if effective_mode == "read":
         rows = output.get("rows", [])
         verify = output.get("verify", {"ok": True})
         return PipelineEngine._build_read_result(
@@ -109,6 +116,7 @@ def run_pipeline_remotely(
             metadata=metadata,
             rows=rows,
             verify_result=verify,
+            mode=mode,
         )
     else:
         act = output.get("action_result", {})
@@ -125,4 +133,5 @@ def run_pipeline_remotely(
             stop_triggered=st,
             rollback_executed=rb,
             rollback_result=rr,
+            mode=mode,
         )
