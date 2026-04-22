@@ -53,8 +53,7 @@ def main() -> None:
         _skip_reminder = False
         if turn_count == _SPAN_REMINDER_INTERVAL:
             try:
-                _raw = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
-                _skip_reminder = bool(_raw.get("_span_nudge_sent"))
+                _skip_reminder = (state_root / "span-nudge-sent").exists()
             except Exception:
                 pass
         if not _skip_reminder:

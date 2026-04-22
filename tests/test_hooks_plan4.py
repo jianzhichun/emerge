@@ -131,8 +131,8 @@ def test_worktree_remove_returns_empty(tmp_path):
     assert out == {}
 
 
-def test_worktree_create_clears_active_span(tmp_path):
-    """WorktreeCreate hook clears active_span_id from state.json."""
+def test_worktree_create_keeps_parent_span_and_prepares_sidecar(tmp_path):
+    """WorktreeCreate keeps parent span state intact and prepares worktree sidecar."""
     import json as _json
     state_root = tmp_path / "emerge" / "repl"
     state_root.mkdir(parents=True)
@@ -154,14 +154,17 @@ def test_worktree_create_clears_active_span(tmp_path):
     )
     assert result.returncode == 0
     updated = _json.loads(state_path.read_text(encoding="utf-8"))
-    assert "active_span_id" not in updated
-    assert "active_span_intent" not in updated
+    assert updated.get("active_span_id") == "stale-span"
+    assert updated.get("active_span_intent") == "demo.write.thing"
+    sidecar_root = state_root / "worktrees"
+    sidecars = list(sidecar_root.glob("*.json"))
+    assert sidecars
     out = _json.loads(result.stdout.strip() or "{}")
-    assert "systemMessage" in out  # reported the cleanup
+    assert "systemMessage" in out
 
 
-def test_worktree_create_no_op_when_no_span(tmp_path):
-    """WorktreeCreate returns {} when no active span is in state."""
+def test_worktree_create_still_prepares_sidecar_without_span(tmp_path):
+    """WorktreeCreate returns info message and creates sidecar even without span."""
     import json as _json
     state_root = tmp_path / "emerge" / "repl"
     state_root.mkdir(parents=True)
@@ -178,7 +181,8 @@ def test_worktree_create_no_op_when_no_span(tmp_path):
     )
     assert result.returncode == 0
     out = _json.loads(result.stdout.strip() or "{}")
-    assert out == {}
+    assert "systemMessage" in out
+    assert list((state_root / "worktrees").glob("*.json"))
 
 
 # ---------------------------------------------------------------------------
@@ -202,12 +206,12 @@ def test_task_created_no_op_without_active_span(tmp_path):
         capture_output=True, text=True, env=env,
     )
     assert result.returncode == 0
-    wal_path = state_root / "span-wal" / "spans.jsonl"
-    assert not wal_path.exists()
+    actions = state_root / "active-span-actions.jsonl"
+    assert not actions.exists()
 
 
-def test_task_created_writes_wal_when_span_active(tmp_path):
-    """TaskCreated writes a task_created entry to span WAL when span is open."""
+def test_task_created_writes_action_buffer_when_span_active(tmp_path):
+    """TaskCreated appends a task_created action record for active span."""
     import json as _json
     state_root = tmp_path / "emerge" / "repl"
     state_root.mkdir(parents=True)
@@ -230,12 +234,12 @@ def test_task_created_writes_wal_when_span_active(tmp_path):
         capture_output=True, text=True, env=env,
     )
     assert result.returncode == 0
-    wal_path = state_root / "span-wal" / "spans.jsonl"
-    assert wal_path.exists()
-    entries = [_json.loads(l) for l in wal_path.read_text().splitlines() if l.strip()]
+    actions_path = state_root / "active-span-actions.jsonl"
+    assert actions_path.exists()
+    entries = [_json.loads(l) for l in actions_path.read_text().splitlines() if l.strip()]
     assert len(entries) == 1
     e = entries[0]
-    assert e["action"] == "task_created"
+    assert e["tool_name"] == "task_created"
     assert e["span_id"] == "span-xyz"
     assert e["task_subject"] == "Build feature X"
     assert e["task_id"] == "t-42"

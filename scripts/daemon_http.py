@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from scripts.policy_config import events_root
+from scripts.event_appender import EventAppender
+from scripts.runner_state_service import RunnerStateService
+from scripts.sse_hub import SSEHub
 
 _KEEPALIVE_INTERVAL_S = 20.0
 _RUNNER_DISCONNECT_GRACE_MS = 45_000
@@ -105,12 +108,15 @@ class DaemonHTTPServer:
         self._state_root = state_root or (Path.home() / ".emerge" / "state")
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
-        # Runner monitor state: runner_profile → metadata including current SSE status.
-        self._connected_runners: dict[str, dict] = {}
-        self._runners_lock = threading.Lock()
+        # Runner monitor metadata is managed by an extracted service.
+        self._runner_state = RunnerStateService()
+        # Backward-compatibility aliases for existing tests/admin code paths.
+        self._connected_runners = self._runner_state.runners
+        self._runners_lock = self._runner_state.lock
         # runner_profile → {"wfile": ..., "lock": Lock()} for SSE command push.
         # Per-entry lock ensures concurrent runner_notify calls never interleave writes.
         self._runner_sse_clients: dict[str, Any] = {}
+        self._runner_clients_lock = threading.Lock()
         # popup_id → threading.Event
         self._popup_futures: dict[str, threading.Event] = {}
         # Timestamp of the last POST /mcp request (CC tool call)
@@ -125,22 +131,27 @@ class DaemonHTTPServer:
         # Cockpit UI + /api/* when served on the same port as MCP (see InProcessCockpitBridge)
         self._cockpit_sse_clients: list[Any] = []
         self._cockpit_sse_lock = threading.Lock()
+        self._cockpit_sse_hub = SSEHub(queue_size=64)
         self._cockpit_injected_html: dict[str, Any] = {}
         self._cockpit_inject_lock = threading.Lock()
+        self._event_appender = EventAppender(flush_interval_s=0.05, batch_size=64)
+        self._runner_sse_hub = SSEHub(queue_size=64)
+        self._request_count = 0
+        self._request_error_count = 0
 
     def cockpit_broadcast(self, event: dict) -> None:
         """Push SSE event to cockpit browsers connected to /api/sse/status."""
         data = f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
-        with self._cockpit_sse_lock:
-            dead = []
-            for wfile in self._cockpit_sse_clients:
-                try:
-                    wfile.write(data)
-                    wfile.flush()
-                except OSError:
-                    dead.append(wfile)
-            for wfile in dead:
-                self._cockpit_sse_clients.remove(wfile)
+        self._cockpit_sse_hub.broadcast(data)
+
+    def register_cockpit_sse_client(self, client_id: str, wfile: Any) -> None:
+        self._cockpit_sse_hub.register(client_id, wfile)
+
+    def unregister_cockpit_sse_client(self, client_id: str) -> None:
+        self._cockpit_sse_hub.unregister(client_id)
+
+    def connected_runners_snapshot(self) -> list[dict]:
+        return self._runner_state.snapshot()
 
     def _notify_cockpit_broadcast(self, event: dict) -> None:
         """Tests may set daemon._cockpit_server to a mock; else use merged cockpit SSE."""
@@ -173,6 +184,7 @@ class DaemonHTTPServer:
     def stop(self) -> None:
         if self._server:
             self._server.shutdown()
+        self._event_appender.stop()
         self._pid_path.unlink(missing_ok=True)
 
     def _write_pid(self) -> None:
@@ -215,20 +227,7 @@ class DaemonHTTPServer:
         if not _re.fullmatch(r"[a-zA-Z0-9_.-]+", runner_profile) or len(runner_profile) > 64:
             raise ValueError(f"invalid runner_profile: {runner_profile!r}")
         now_ms = int(time.time() * 1000)
-        with self._runners_lock:
-            prev = self._connected_runners.get(runner_profile, {})
-            self._connected_runners[runner_profile] = {
-                "connected_at_ms": now_ms,
-                "last_event_ts_ms": int(prev.get("last_event_ts_ms", 0)),
-                "machine_id": machine_id,
-                "last_alert": prev.get("last_alert"),
-                "last_online_ts_ms": now_ms,
-                "last_sse_connected_ts_ms": int(prev.get("last_sse_connected_ts_ms", 0)),
-                "last_sse_disconnected_ts_ms": int(prev.get("last_sse_disconnected_ts_ms", 0)),
-                # Treat explicit /runner/online heartbeat as active presence even
-                # before the SSE stream is established.
-                "sse_connected": bool(prev.get("sse_connected", True)),
-            }
+        self._runner_state.on_online(runner_profile, machine_id, now_ms)
         logging.warning("runner online: profile=%s machine_id=%s", runner_profile, machine_id)
         self._append_event(events_root(self._state_root) / "events.jsonl", {
             "type": "runner_discovered",
@@ -252,17 +251,17 @@ class DaemonHTTPServer:
         if machine_id:
             _validate_machine_id(machine_id)
             machine_dir = self._event_root / machine_id
-            machine_dir.mkdir(parents=True, exist_ok=True)
-            with (machine_dir / "events.jsonl").open("a", encoding="utf-8") as f:
-                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            self._event_appender.append_wait(
+                machine_dir / "events.jsonl",
+                payload,
+                ensure_ascii=False,
+            )
         if runner_profile:
             import re as _re2
             if not _re2.fullmatch(r"[a-zA-Z0-9_.-]+", runner_profile) or len(runner_profile) > 64:
                 runner_profile = ""  # invalid profile, skip per-runner event file
         if runner_profile:
-            with self._runners_lock:
-                if runner_profile in self._connected_runners:
-                    self._connected_runners[runner_profile]["last_event_ts_ms"] = ts_ms
+            self._runner_state.on_event(runner_profile, ts_ms)
             _orig_type = payload.get("type", "")
             _written_type = _orig_type if _orig_type == "operator_message" else "runner_event"
             self._append_event(events_root(self._state_root) / f"events-{runner_profile}.jsonl", {
@@ -313,13 +312,14 @@ class DaemonHTTPServer:
                 self._append_event(
                     events_root(self._state_root) / f"events-{runner_profile}.jsonl", alert
                 )
-                with self._runners_lock:
-                    if runner_profile in self._connected_runners:
-                        self._connected_runners[runner_profile]["last_alert"] = {
-                            "stage": stage,
-                            "intent_signature": summary.intent_signature,
-                            "ts_ms": ts_ms,
-                        }
+                self._runner_state.set_alert(
+                    runner_profile,
+                    {
+                        "stage": stage,
+                        "intent_signature": summary.intent_signature,
+                        "ts_ms": ts_ms,
+                    },
+                )
 
             # Single _write_monitor_state call captures both last_event_ts_ms and last_alert
             self._write_monitor_state()
@@ -339,26 +339,24 @@ class DaemonHTTPServer:
             ev.set()
 
     def _sse_write(self, runner_profile: str, data: bytes) -> str:
-        """Write bytes to runner SSE stream under per-entry lock. Returns "" on success
+        """Write bytes to runner SSE stream. Returns "" on success
         or an error string ("runner_not_connected" / "runner_disconnected")."""
-        with self._runners_lock:
+        with self._runner_clients_lock:
             entry = self._runner_sse_clients.get(runner_profile)
         if entry is None:
             return "runner_not_connected"
-        try:
-            with entry["lock"]:
-                entry["wfile"].write(data)
-                entry["wfile"].flush()
+        if self._runner_sse_hub.send(runner_profile, data):
             return ""
-        except OSError:
-            with self._runners_lock:
+        else:
+            with self._runner_clients_lock:
                 cur = self._runner_sse_clients.get(runner_profile)
-                if cur is not None and cur["wfile"] is entry["wfile"]:
+                if cur is not None and cur.get("connection_id") == entry.get("connection_id"):
                     self._runner_sse_clients.pop(runner_profile)
-                    info = self._connected_runners.get(runner_profile)
-                    if info is not None:
-                        info["sse_connected"] = False
-                        info["last_sse_disconnected_ts_ms"] = int(time.time() * 1000)
+            self._runner_state.mark_sse_disconnected(
+                runner_profile,
+                int(time.time() * 1000),
+                _RUNNER_DISCONNECT_GRACE_MS,
+            )
             self._write_monitor_state()
             self._notify_cockpit_broadcast({"monitors_updated": True})
             logging.warning("runner sse write failed; marked disconnected: profile=%s", runner_profile)
@@ -396,43 +394,12 @@ class DaemonHTTPServer:
         return {"ok": True, "value": result.get("value"), "attachments": result.get("attachments", []), "popup_id": popup_id}
 
     def _append_event(self, path: Path, event: dict) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+        self._event_appender.append_wait(path, event, ensure_ascii=False)
 
     def _write_monitor_state(self) -> None:
         """Write current runner state to runner-monitor-state.json for cockpit."""
-        import tempfile as _tf
-        with self._runners_lock:
-            runners = [
-                {
-                    "runner_profile": profile,
-                    "connected": bool(info.get("sse_connected", True)),
-                    "connected_at_ms": info.get("connected_at_ms", 0),
-                    "last_event_ts_ms": info.get("last_event_ts_ms", 0),
-                    "machine_id": info.get("machine_id", ""),
-                    "last_alert": info.get("last_alert"),
-                    "last_online_ts_ms": info.get("last_online_ts_ms", 0),
-                    "last_sse_connected_ts_ms": info.get("last_sse_connected_ts_ms", 0),
-                    "last_sse_disconnected_ts_ms": info.get("last_sse_disconnected_ts_ms", 0),
-                }
-                for profile, info in self._connected_runners.items()
-            ]
-        connected_count = sum(1 for r in runners if r.get("connected"))
-        state = {"runners": runners, "team_active": connected_count > 0,
-                 "updated_ts_ms": int(time.time() * 1000)}
         path = events_root(self._state_root) / "runner-monitor-state.json"
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with _tf.NamedTemporaryFile("w", dir=path.parent, delete=False,
-                                        suffix=".tmp", encoding="utf-8") as tf:
-                json.dump(state, tf)
-                tf.flush()
-                os.fsync(tf.fileno())
-                tf_path = tf.name
-            os.replace(tf_path, path)
-        except OSError:
-            pass
+        self._runner_state.write_monitor_state(path)
 
 
 def ensure_running_or_launch(
@@ -522,10 +489,18 @@ def _make_handler(srv: "DaemonHTTPServer"):
         def log_message(self, *args): pass
 
         def _send_json(self, code: int, payload: dict) -> None:
-            body = json.dumps(payload).encode()
+            req_id = getattr(self, "_request_id", "")
+            out = dict(payload)
+            if req_id and "request_id" not in out:
+                out["request_id"] = req_id
+            if code >= 400:
+                srv._request_error_count += 1
+            body = json.dumps(out).encode()
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            if req_id:
+                self.send_header("X-Request-Id", req_id)
             self.end_headers()
             self.wfile.write(body)
 
@@ -539,6 +514,8 @@ def _make_handler(srv: "DaemonHTTPServer"):
             self.send_error(404)
 
         def do_GET(self):  # noqa: N802
+            self._request_id = uuid.uuid4().hex[:12]
+            srv._request_count += 1
             import urllib.parse as _up
             _coerce_request_target_to_path(self)
             path = _up.urlparse(self.path).path or "/"
@@ -554,6 +531,25 @@ def _make_handler(srv: "DaemonHTTPServer"):
                     self._send_json(200, {"ok": True, "service": "emerge-daemon"})
             elif path == "/health":
                 self._send_json(200, {"ok": True})
+            elif path == "/health/deep":
+                connected = srv._runner_state.counts()
+                with srv._runner_clients_lock:
+                    sse_registered = len(srv._runner_sse_clients)
+                self._send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "metrics": {
+                            "requests_total": srv._request_count,
+                            "request_errors": srv._request_error_count,
+                            "runner_connected": connected,
+                            "runner_sse_registered": sse_registered,
+                            "runner_sse_hub_clients": srv._runner_sse_hub.client_count(),
+                            "cockpit_sse_hub_clients": srv._cockpit_sse_hub.client_count(),
+                            "event_appender_queue_depth": srv._event_appender.queue_depth(),
+                        },
+                    },
+                )
             elif path == "/runner/sse":
                 import urllib.parse as _up2
                 qs2 = _up2.parse_qs(_up2.urlparse(self.path).query)
@@ -662,33 +658,16 @@ def _make_handler(srv: "DaemonHTTPServer"):
             my_wfile = self.wfile
             connection_id = uuid.uuid4().hex[:8]
             my_entry: dict = {
-                "wfile": my_wfile,
-                "lock": threading.Lock(),
                 "connection_id": connection_id,
                 "connected_at_ms": int(time.time() * 1000),
             }
             if runner_profile:
                 now_ms = int(time.time() * 1000)
-                with srv._runners_lock:
+                with srv._runner_clients_lock:
                     prev_entry = srv._runner_sse_clients.get(runner_profile)
                     srv._runner_sse_clients[runner_profile] = my_entry
-                    if runner_profile not in srv._connected_runners:
-                        srv._connected_runners[runner_profile] = {
-                            "connected_at_ms": now_ms,
-                            "last_event_ts_ms": 0,
-                            "machine_id": machine_id or runner_profile,
-                            "last_alert": None,
-                            "last_online_ts_ms": now_ms,
-                            "last_sse_connected_ts_ms": now_ms,
-                            "last_sse_disconnected_ts_ms": 0,
-                            "sse_connected": True,
-                        }
-                    else:
-                        info = srv._connected_runners[runner_profile]
-                        if machine_id:
-                            info["machine_id"] = machine_id
-                        info["sse_connected"] = True
-                        info["last_sse_connected_ts_ms"] = now_ms
+                    srv._runner_sse_hub.register(runner_profile, my_wfile)
+                srv._runner_state.on_sse_connected(runner_profile, machine_id, now_ms)
                 srv._write_monitor_state()
                 srv._notify_cockpit_broadcast({"monitors_updated": True})
                 if prev_entry is not None:
@@ -709,44 +688,30 @@ def _make_handler(srv: "DaemonHTTPServer"):
             try:
                 while True:
                     time.sleep(15)
-                    with my_entry["lock"]:
-                        my_wfile.write(b": keepalive\n\n")
-                        my_wfile.flush()
+                    my_wfile.write(b": keepalive\n\n")
+                    my_wfile.flush()
             except OSError:
                 pass
             finally:
                 if runner_profile:
-                    with srv._runners_lock:
+                    with srv._runner_clients_lock:
                         # Only evict if we're still the registered entry — a reconnect
                         # may have already replaced our entry before this finally runs.
                         cur = srv._runner_sse_clients.get(runner_profile)
                         if cur is my_entry:
                             srv._runner_sse_clients.pop(runner_profile)
+                            srv._runner_sse_hub.unregister(runner_profile)
                             now_ms = int(time.time() * 1000)
-                            info = srv._connected_runners.get(runner_profile)
-                            if info is not None:
-                                info["sse_connected"] = False
-                                info["last_sse_disconnected_ts_ms"] = now_ms
-                                last_seen_ms = max(
-                                    int(info.get("last_event_ts_ms", 0)),
-                                    int(info.get("last_online_ts_ms", 0)),
-                                    int(info.get("last_sse_connected_ts_ms", 0)),
-                                )
-                                if now_ms - last_seen_ms > _RUNNER_DISCONNECT_GRACE_MS:
-                                    srv._connected_runners.pop(runner_profile, None)
-                                    logging.warning(
-                                        "runner sse disconnect: profile=%s conn=%s removed=true last_seen_age_ms=%d",
-                                        runner_profile,
-                                        connection_id,
-                                        now_ms - last_seen_ms,
-                                    )
-                                else:
-                                    logging.warning(
-                                        "runner sse disconnect: profile=%s conn=%s removed=false last_seen_age_ms=%d",
-                                        runner_profile,
-                                        connection_id,
-                                        now_ms - last_seen_ms,
-                                    )
+                            removed, age_ms = srv._runner_state.mark_sse_disconnected(
+                                runner_profile, now_ms, _RUNNER_DISCONNECT_GRACE_MS
+                            )
+                            logging.warning(
+                                "runner sse disconnect: profile=%s conn=%s removed=%s last_seen_age_ms=%d",
+                                runner_profile,
+                                connection_id,
+                                str(bool(removed)).lower(),
+                                age_ms,
+                            )
                             do_notify = True
                         else:
                             do_notify = False
@@ -755,6 +720,8 @@ def _make_handler(srv: "DaemonHTTPServer"):
                         srv._notify_cockpit_broadcast({"monitors_updated": True})
 
         def do_POST(self):  # noqa: N802
+            self._request_id = uuid.uuid4().hex[:12]
+            srv._request_count += 1
             import urllib.parse as _up
             _coerce_request_target_to_path(self)
             parsed = _up.urlparse(self.path)

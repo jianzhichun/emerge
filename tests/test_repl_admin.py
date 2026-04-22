@@ -734,13 +734,13 @@ def test_hook_state_returns_expected_fields(tmp_path, monkeypatch):
         "turn_count": 7,
         "active_span_id": "span-abc123",
         "active_span_intent": "zwcad.write.apply-change",
-        "_span_nudge_sent": True,
         "open_risks": [],
         "deltas": [],
         "verification_state": "verified",
         "consistency_window_ms": 0,
     }
     (tmp_path / "state.json").write_text(json.dumps(state_data), encoding="utf-8")
+    (tmp_path / "span-nudge-sent").write_text("", encoding="utf-8")
 
     result = repl_admin.cmd_control_plane_hook_state()
     assert result["ok"] is True

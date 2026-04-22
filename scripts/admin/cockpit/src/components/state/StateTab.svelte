@@ -9,6 +9,7 @@
 
   export let sessionId: string | undefined;
   export let refreshSignal = 0;
+  export let refreshEpoch = 0;
 
   let loading = false;
   let error: string | null = null;
@@ -19,6 +20,8 @@
   let selectedKey = '';
   let writing = false;
   let observedRefreshSignal = refreshSignal;
+  let observedRefreshEpoch = refreshEpoch;
+  let requestEpoch = 0;
 
   $: indexMap = Object.fromEntries(rows.map((r) => [r.key, r]));
   $: filtered = rows.filter((r) => {
@@ -49,6 +52,7 @@
   ).length;
 
   async function loadStateTabData(): Promise<void> {
+    const reqId = ++requestEpoch;
     loading = true;
     error = null;
     try {
@@ -68,6 +72,9 @@
       const nextFingerprint = nextRows
         .map((r) => `${r.key}|${r.kind}|${r.ts}|${r.status}|${r.intent}|${r.title}`)
         .join('~');
+      if (reqId !== requestEpoch) {
+        return;
+      }
       if (rowsFingerprint !== null && nextFingerprint === rowsFingerprint) {
         loading = false;
         return;
@@ -75,10 +82,15 @@
       rowsFingerprint = nextFingerprint;
       rows = nextRows;
     } catch (e) {
+      if (reqId !== requestEpoch) {
+        return;
+      }
       error = e instanceof Error ? e.message : String(e);
       rows = [];
     } finally {
-      loading = false;
+      if (reqId === requestEpoch) {
+        loading = false;
+      }
     }
   }
 
@@ -113,6 +125,10 @@
 
   $: if (refreshSignal !== observedRefreshSignal) {
     observedRefreshSignal = refreshSignal;
+    void loadStateTabData();
+  }
+  $: if (refreshEpoch !== observedRefreshEpoch) {
+    observedRefreshEpoch = refreshEpoch;
     void loadStateTabData();
   }
 </script>

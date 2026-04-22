@@ -56,8 +56,9 @@ def _validate_icc_exec(args: dict, sig: str) -> str | None:
     if not _SIG_RE.match(sig):
         return (
             f"icc_exec: intent_signature {sig!r} is invalid. "
-            "Must be <connector>.(read|write).<name> — e.g. 'zwcad.read.state', "
-            "'hypermesh.write.apply-change'. Middle segment must be 'read' or 'write'. "
+            "Must be <connector>.(read|write|workflow).<name> — e.g. 'zwcad.read.state', "
+            "'hypermesh.write.apply-change', 'brief.workflow.daily'. "
+            "Middle segment must be 'read', 'write', or 'workflow'. "
             "Check connector://notes to see existing intents for this connector."
         )
     result_var = str(args.get("result_var", "")).strip()
@@ -103,12 +104,12 @@ def _validate_icc_span_open(args: dict, sig: str) -> str | None:
         return (
             "icc_span_open: 'intent_signature' is required "
             "(e.g. 'lark.read.get-doc'). "
-            "Format: <connector>.(read|write).<name>"
+            "Format: <connector>.(read|write|workflow).<name>"
         )
     if not _SIG_RE.match(sig):
         return (
             f"icc_span_open: intent_signature {sig!r} is invalid. "
-            "Must be <connector>.(read|write).<name> — e.g. 'lark.read.get-doc'."
+            "Must be <connector>.(read|write|workflow).<name> — e.g. 'lark.read.get-doc'."
         )
     return None
 
@@ -180,7 +181,7 @@ def _validate_icc_span_approve(args: dict, sig: str) -> str | None:
     if not _SIG_RE.match(sig):
         return (
             f"icc_span_approve: intent_signature {sig!r} is invalid. "
-            "Must be <connector>.(read|write).<name> — e.g. 'lark.read.get-doc'."
+            "Must be <connector>.(read|write|workflow).<name> — e.g. 'lark.read.get-doc'."
         )
     return None
 

@@ -16,23 +16,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.policy_config import default_hook_state_root  # noqa: E402
-from scripts.state_tracker import load_tracker  # noqa: E402
+from scripts.span_service import SpanService  # noqa: E402
 
 
 def main() -> None:
     sys.stdin.read()
 
-    state_root = Path(default_hook_state_root())
-    state_path = state_root / "state.json"
-
-    try:
-        tracker = load_tracker(state_path)
-        active_span_id = str(tracker.state.get("active_span_id") or "")
-        active_span_intent = str(tracker.state.get("active_span_intent") or "")
-    except Exception:
-        print("{}")
-        return
+    active_span_id, active_span_intent = SpanService().get_active()
 
     if not active_span_id:
         print("{}")

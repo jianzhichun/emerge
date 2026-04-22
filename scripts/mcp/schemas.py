@@ -28,7 +28,7 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                 "properties": {
                     "intent_signature": {
                         "type": "string",
-                        "description": "<connector>.(read|write).<name> — e.g. 'lark.read.get-doc'",
+                        "description": "<connector>.(read|write|workflow).<name> — e.g. 'lark.read.get-doc'",
                     },
                     "description": {"type": "string"},
                     "args": {"type": "object", "description": "Input args for this span"},
@@ -69,8 +69,9 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
             "description": (
                 "Close the current intent span and commit it to the flywheel WAL. "
-                "When the intent reaches stable, auto-generates a Python skeleton "
-                "in _pending/ for review. Call icc_span_approve after completing the skeleton."
+                "When the intent reaches stable, auto-activates the generated "
+                "pipeline by default. Set EMERGE_REQUIRE_APPROVE=1 to keep the "
+                "manual _pending/ review + icc_span_approve path."
             ),
             "inputSchema": {
                 "type": "object",
@@ -201,7 +202,7 @@ def get_tool_schemas() -> list[dict[str, Any]]:
         },
         # icc_read and icc_write are intentionally omitted from the schema.
         # They remain callable internally but are deprecated for CC use.
-        # Use icc_span_open(intent_signature='<connector>.(read|write).<name>')
+        # Use icc_span_open(intent_signature='<connector>.(read|write|workflow).<name>')
         # instead — the span bridge executes the pipeline automatically when stable.
         {
             "name": "icc_reconcile",

@@ -377,6 +377,7 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Access-Control-Allow-Origin", self._cors_origin())
             self.end_headers()
+            client_id = uuid.uuid4().hex[:8]
             msg = json.dumps({
                 "status": "online",
                 "pid": os.getpid(),
@@ -384,8 +385,11 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             }, ensure_ascii=False)
             self.wfile.write(f"data: {msg}\n\n".encode())
             self.wfile.flush()
-            with self._cockpit._sse_lock:
-                self._cockpit._sse_clients.append(self.wfile)
+            if hasattr(self._cockpit, "register_sse_client"):
+                self._cockpit.register_sse_client(client_id, self.wfile)
+            else:
+                with self._cockpit._sse_lock:
+                    self._cockpit._sse_clients.append(self.wfile)
             try:
                 while True:
                     time.sleep(25)
@@ -394,9 +398,12 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             except OSError:
                 pass
             finally:
-                with self._cockpit._sse_lock:
-                    if self.wfile in self._cockpit._sse_clients:
-                        self._cockpit._sse_clients.remove(self.wfile)
+                if hasattr(self._cockpit, "unregister_sse_client"):
+                    self._cockpit.unregister_sse_client(client_id)
+                else:
+                    with self._cockpit._sse_lock:
+                        if self.wfile in self._cockpit._sse_clients:
+                            self._cockpit._sse_clients.remove(self.wfile)
             return
         else:
             self._err(404)
@@ -693,23 +700,32 @@ class InProcessCockpitBridge:
 
     def get_monitor_data(self) -> dict:
         hsrv = self._http_srv
-        with hsrv._runners_lock:
-            items = list(hsrv._connected_runners.items())
-        runners = [
-            {
-                "runner_profile": profile,
-                "connected": True,
-                "connected_at_ms": info.get("connected_at_ms", 0),
-                "last_event_ts_ms": info.get("last_event_ts_ms", 0),
-                "machine_id": info.get("machine_id", ""),
-                "last_alert": info.get("last_alert"),
-            }
-            for profile, info in items
-        ]
+        if hasattr(hsrv, "connected_runners_snapshot"):
+            runners = hsrv.connected_runners_snapshot()
+        else:
+            with hsrv._runners_lock:
+                items = list(hsrv._connected_runners.items())
+            runners = [
+                {
+                    "runner_profile": profile,
+                    "connected": True,
+                    "connected_at_ms": info.get("connected_at_ms", 0),
+                    "last_event_ts_ms": info.get("last_event_ts_ms", 0),
+                    "machine_id": info.get("machine_id", ""),
+                    "last_alert": info.get("last_alert"),
+                }
+                for profile, info in items
+            ]
         return {"runners": runners, "team_active": len(runners) > 0}
 
     def broadcast(self, event: dict) -> None:
         self._http_srv.cockpit_broadcast(event)
+
+    def register_sse_client(self, client_id: str, wfile: Any) -> None:
+        self._http_srv.register_cockpit_sse_client(client_id, wfile)
+
+    def unregister_sse_client(self, client_id: str) -> None:
+        self._http_srv.unregister_cockpit_sse_client(client_id)
 
     def write_event(self, event: dict) -> None:
         self._http_srv._append_event(events_root(self._http_srv._state_root) / "events.jsonl", event)
@@ -726,7 +742,7 @@ class CockpitHTTPServer:
     or standalone (CLI mode via cmd_serve).
 
     In in-process mode, daemon._http_server is set and get_monitor_data() reads
-    _connected_runners from memory (zero file I/O). In standalone mode, fallback
+    runner snapshot from memory (zero file I/O). In standalone mode, fallback
     reads runner-monitor-state.json.
     """
 
@@ -748,6 +764,14 @@ class CockpitHTTPServer:
         self._injected_html: dict = {}
         self._inject_lock = threading.Lock()
         self.url: str | None = None
+
+    def register_sse_client(self, _client_id: str, wfile: Any) -> None:
+        with self._sse_lock:
+            self._sse_clients.append(wfile)
+
+    def unregister_sse_client(self, _client_id: str) -> None:
+        # client id is not used in standalone mode; remove stale writers lazily in broadcast path.
+        return
 
     def start(self) -> str:
         """Start cockpit HTTP server in daemon thread. Returns URL."""
@@ -802,19 +826,22 @@ class CockpitHTTPServer:
         """Return runner monitor data. Reads from daemon memory; falls back to file."""
         hsrv = getattr(self._daemon, "_http_server", None)
         if hsrv is not None:
-            with hsrv._runners_lock:
-                items = list(hsrv._connected_runners.items())
-            runners = [
-                {
-                    "runner_profile": profile,
-                    "connected": True,
-                    "connected_at_ms": info.get("connected_at_ms", 0),
-                    "last_event_ts_ms": info.get("last_event_ts_ms", 0),
-                    "machine_id": info.get("machine_id", ""),
-                    "last_alert": info.get("last_alert"),
-                }
-                for profile, info in items
-            ]
+            if hasattr(hsrv, "connected_runners_snapshot"):
+                runners = hsrv.connected_runners_snapshot()
+            else:
+                with hsrv._runners_lock:
+                    items = list(hsrv._connected_runners.items())
+                runners = [
+                    {
+                        "runner_profile": profile,
+                        "connected": True,
+                        "connected_at_ms": info.get("connected_at_ms", 0),
+                        "last_event_ts_ms": info.get("last_event_ts_ms", 0),
+                        "machine_id": info.get("machine_id", ""),
+                        "last_alert": info.get("last_alert"),
+                    }
+                    for profile, info in items
+                ]
             return {"runners": runners, "team_active": len(runners) > 0}
         # Standalone mode: fallback to file
         state_path = events_root(self._state_root) / "runner-monitor-state.json"

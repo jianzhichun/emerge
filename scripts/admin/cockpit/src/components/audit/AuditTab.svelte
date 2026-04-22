@@ -16,11 +16,14 @@
 
   export let sessionId: string | undefined;
   export let refreshSignal = 0;
+  export let refreshEpoch = 0;
 
   let loading = false;
   let error: string | null = null;
   let items: AuditItem[] = [];
   let observedRefreshSignal = refreshSignal;
+  let observedRefreshEpoch = refreshEpoch;
+  let requestEpoch = 0;
 
   function toText(value: unknown): string {
     if (value === null || value === undefined) {
@@ -99,6 +102,7 @@
   }
 
   async function refreshAudit(): Promise<void> {
+    const reqId = ++requestEpoch;
     loading = true;
     error = null;
     try {
@@ -117,14 +121,22 @@
       const spanItems = (spanPayload.spans ?? []).map((event, index) => mapSpan(event as JsonObject, index));
       const toolItems = (toolPayload.events ?? []).map((event, index) => mapTool(event as JsonObject, index));
 
+      if (reqId !== requestEpoch) {
+        return;
+      }
       items = [...execItems, ...pipelineItems, ...spanItems, ...toolItems]
         .sort((a, b) => b.ts - a.ts)
         .slice(0, 100);
     } catch (loadError) {
+      if (reqId !== requestEpoch) {
+        return;
+      }
       error = loadError instanceof Error ? loadError.message : String(loadError);
       items = [];
     } finally {
-      loading = false;
+      if (reqId === requestEpoch) {
+        loading = false;
+      }
     }
   }
 
@@ -141,6 +153,10 @@
 
   $: if (refreshSignal !== observedRefreshSignal) {
     observedRefreshSignal = refreshSignal;
+    void refreshAudit();
+  }
+  $: if (refreshEpoch !== observedRefreshEpoch) {
+    observedRefreshEpoch = refreshEpoch;
     void refreshAudit();
   }
 

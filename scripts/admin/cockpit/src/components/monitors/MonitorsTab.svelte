@@ -7,14 +7,13 @@
   import RunnerCard from './RunnerCard.svelte';
 
   export let refreshSignal = 0;
+  export let refreshEpoch = 0;
 
-  const pollIntervalMs = 10_000;
-
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
   let feedLoadingByProfile: Record<string, boolean> = {};
   let refreshInFlight = false;
   let pendingRefresh = false;
   let observedRefreshSignal = refreshSignal;
+  let observedRefreshEpoch = refreshEpoch;
 
   let installBash = '';
   let installPs = '';
@@ -77,24 +76,12 @@
     }
   }
 
-  function startPolling(): void {
-    if (pollTimer) {
-      return;
-    }
-    pollTimer = setInterval(() => {
-      void queueRefresh();
-    }, pollIntervalMs);
-  }
-
-  function stopPolling(): void {
-    if (pollTimer) {
-      clearInterval(pollTimer);
-      pollTimer = null;
-    }
-  }
-
   $: if (refreshSignal !== observedRefreshSignal) {
     observedRefreshSignal = refreshSignal;
+    void queueRefresh();
+  }
+  $: if (refreshEpoch !== observedRefreshEpoch) {
+    observedRefreshEpoch = refreshEpoch;
     void queueRefresh();
   }
 
@@ -125,12 +112,9 @@
   }
 
   onMount(() => {
-    startPolling();
     void queueRefresh();
     void loadInstallUrl();
-    return () => {
-      stopPolling();
-    };
+    return () => {};
   });
 
   $: runnerCount = $monitorsStore.runners.length;

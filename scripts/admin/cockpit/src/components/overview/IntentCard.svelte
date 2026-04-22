@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import type { PolicyIntent } from '../../lib/types';
+  import ConfirmModal from '../shared/ConfirmModal.svelte';
 
   interface IntentActionEvent {
     action: string;
@@ -30,6 +31,10 @@
   export let hideConnector = false;
 
   const dispatch = createEventDispatcher<{ queueAction: IntentActionEvent }>();
+  let confirmOpen = false;
+  let confirmTitle = '';
+  let confirmMessage = '';
+  let pendingAction: string | null = null;
 
   function parseKey(key: string): { connector: string; mode: string; name: string } {
     const [connector = '', mode = '', ...rest] = key.split('.');
@@ -41,24 +46,36 @@
   }
 
   function sendAction(action: string): void {
-    if (action === 'delete') {
-      const confirmed = window.confirm(`Delete intent "${String(intent.key ?? '')}"? This removes tracking data.`);
-      if (!confirmed) {
-        return;
+    if (action === 'delete' || action === 'promote-stable') {
+      pendingAction = action;
+      confirmOpen = true;
+      if (action === 'delete') {
+        confirmTitle = 'Delete intent';
+        confirmMessage = `Delete intent "${String(intent.key ?? '')}"? This removes tracking data.`;
+      } else {
+        confirmTitle = 'Promote to stable';
+        confirmMessage = `Promote "${String(intent.key ?? '')}" to stable? Stable intents can bypass LLM inference.`;
       }
+      return;
     }
-    if (action === 'promote-stable') {
-      const confirmed = window.confirm(
-        `Promote "${String(intent.key ?? '')}" to stable? Stable intents can bypass LLM inference.`
-      );
-      if (!confirmed) {
-        return;
-      }
+    emitAction(action);
+  }
+
+  function emitAction(action: string): void {
+    dispatch('queueAction', { action, key: String(intent.key ?? '') });
+  }
+
+  function handleConfirm(): void {
+    if (pendingAction) {
+      emitAction(pendingAction);
     }
-    dispatch('queueAction', {
-      action,
-      key: String(intent.key ?? '')
-    });
+    confirmOpen = false;
+    pendingAction = null;
+  }
+
+  function handleCancel(): void {
+    confirmOpen = false;
+    pendingAction = null;
   }
 
   function metricClass(rate: number | null): string {
@@ -138,26 +155,33 @@
     {/if}
   </div>
 </article>
+<ConfirmModal
+  open={confirmOpen}
+  title={confirmTitle}
+  message={confirmMessage}
+  on:confirm={handleConfirm}
+  on:cancel={handleCancel}
+/>
 
 <style>
   .pipeline-card {
-    background: #161b22;
-    border: 1px solid #21262d;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
     border-radius: 6px;
     padding: 8px 12px;
     margin-bottom: 4px;
   }
 
   .pipeline-card.critical {
-    border-left: 3px solid #f85149;
+    border-left: 3px solid var(--color-red);
   }
 
   .pipeline-card.canary {
-    border-left: 3px solid #d29922;
+    border-left: 3px solid var(--color-yellow);
   }
 
   .pipeline-card.stable {
-    border-left: 3px solid #3fb950;
+    border-left: 3px solid var(--color-green);
   }
 
   .pipeline-card.queued {
@@ -209,7 +233,7 @@
 
   .key-name {
     font-size: 12px;
-    color: #e6edf3;
+    color: var(--color-text);
     font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -243,7 +267,7 @@
 
   .pipeline-desc {
     font-size: 10px;
-    color: #6e7681;
+    color: var(--color-text-faint);
     margin: 2px 0 0;
     font-style: italic;
     white-space: nowrap;
@@ -253,7 +277,7 @@
 
   .pipeline-metrics {
     font-size: 10px;
-    color: #8b949e;
+    color: var(--color-text-muted);
     margin-top: 3px;
     display: flex;
     gap: 10px;
@@ -261,11 +285,11 @@
   }
 
   .pipeline-metrics .warn {
-    color: #f85149;
+    color: var(--color-red);
   }
 
   .pipeline-metrics .good {
-    color: #3fb950;
+    color: var(--color-green);
   }
 
   .pipeline-actions {

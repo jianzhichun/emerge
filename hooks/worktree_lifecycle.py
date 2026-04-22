@@ -14,6 +14,7 @@ Output contract: top-level systemMessage for the cleared-span case;
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -35,26 +36,33 @@ def main() -> None:
         print(json.dumps({}))
         return
 
-    # WorktreeCreate: clear stale span state so the new worktree starts clean.
+    # WorktreeCreate: keep parent state intact; prepare an isolated hook-state
+    # sidecar for the worktree session.
     try:
         from scripts.policy_config import default_hook_state_root
-        state_root = Path(default_hook_state_root())
-        from scripts.state_tracker import load_tracker, save_tracker
-        state_path = state_root / "state.json"
-        tracker = load_tracker(state_path)
-        cleared = False
-        for field in ("active_span_id", "active_span_intent"):
-            if tracker.state.pop(field, None) is not None:
-                cleared = True
-        if cleared:
-            save_tracker(state_path, tracker)
-            print(json.dumps({
-                "systemMessage": (
-                    "Worktree created: cleared inherited active_span_id from parent session. "
-                    "This worktree has no active span."
-                )
-            }))
-            return
+        state_root = Path(default_hook_state_root()) / "worktrees"
+        state_root.mkdir(parents=True, exist_ok=True)
+        raw_id = str(
+            payload.get("worktree_id")
+            or payload.get("worktree_path")
+            or payload.get("path")
+            or payload.get("cwd")
+            or "unknown"
+        )
+        worktree_id = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_id).strip("._-") or "unknown"
+        sidecar = state_root / f"{worktree_id}.json"
+        if not sidecar.exists():
+            sidecar.write_text(
+                json.dumps({"active_span_id": None, "active_span_intent": None}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        print(json.dumps({
+            "systemMessage": (
+                f"Worktree created: isolated span sidecar prepared ({sidecar.name}); "
+                "parent session active span remains unchanged."
+            )
+        }))
+        return
     except Exception:
         pass
 

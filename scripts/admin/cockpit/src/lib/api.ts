@@ -11,6 +11,7 @@ import type {
   SessionResetRequest,
   SessionResetResponse,
   HookStateResponse,
+  HealthDeepResponse,
   SessionResponse,
   SessionsResponse,
   StatusResponse,
@@ -138,6 +139,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request<SessionResponse>('/api/control-plane/session', { sessionId }),
     getHookState: () =>
       request<HookStateResponse>('/api/control-plane/hook-state'),
+    getHealthDeep: () =>
+      request<HealthDeepResponse>('/health/deep'),
     postDeltaReconcile: (
       body: { delta_id: string; outcome: string; intent_signature?: string },
       sessionId?: string

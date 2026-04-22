@@ -47,6 +47,10 @@ Steps:
    This updates `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` (both version fields) atomically.
 
 5. **Run documentation consistency gate** using `docs/doc-consistency-checklist.md`:
+   - Run the automated checker first (hard gate):
+     ```bash
+     python3 scripts/check_doc_consistency.py
+     ```
    - Verify architecture/data-flow docs are current (`README.md` canonical diagrams, `CLAUDE.md` invariants aligned).
    - Verify command/skill docs are current (`commands/*.md`, `skills/*/SKILL.md`) and do not describe deprecated connector stub loading behavior.
    - Verify MCP surface docs match `scripts/emerge_daemon.py`.

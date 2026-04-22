@@ -2,7 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   import JsonViewerBlock from '../shared/JsonViewerBlock.svelte';
   import { api } from '../../lib/api';
-  import type { HookStateResponse, SessionResponse } from '../../lib/types';
+  import type { HealthDeepResponse, HookStateResponse, SessionResponse } from '../../lib/types';
 
   export let session: SessionResponse | null = null;
   export let hookPlane: HookStateResponse | null = null;
@@ -18,6 +18,7 @@
 
   let pendingReset = false;
   let pendingExport = false;
+  let opsMetrics: Record<string, number> = {};
 
   function toText(value: unknown): string {
     if (value === null || value === undefined) {
@@ -35,6 +36,16 @@
 
   function refreshNow(): void {
     dispatch('refreshRequested', {});
+    void loadOpsMetrics();
+  }
+
+  async function loadOpsMetrics(): Promise<void> {
+    try {
+      const payload: HealthDeepResponse = await api.getHealthDeep();
+      opsMetrics = payload.metrics ?? {};
+    } catch {
+      opsMetrics = {};
+    }
   }
 
   async function exportSession(): Promise<void> {
@@ -94,6 +105,14 @@
   $: registeredHooks = Array.isArray(hookPlane?.registered_hooks) ? hookPlane!.registered_hooks! : [];
   $: contextPreview = toText(hookPlane?.context_preview);
   $: hookOk = Boolean(hookPlane?.hook_fields);
+  $: requestsTotal = Number(opsMetrics.requests_total ?? 0);
+  $: requestErrors = Number(opsMetrics.request_errors ?? 0);
+  $: runnerConnected = Number(opsMetrics.runner_connected ?? 0);
+  $: eventQueueDepth = Number(opsMetrics.event_appender_queue_depth ?? 0);
+
+  $: if (session || hookPlane) {
+    void loadOpsMetrics();
+  }
 </script>
 
 <section class="session-tab">
@@ -172,6 +191,30 @@
         {/if}
       </div>
     {/if}
+
+    <div style="margin-bottom: 16px; border: 1px solid #21262d; border-radius: 6px; padding: 12px">
+      <div style="font-size: 12px; color: #e6edf3; margin-bottom: 10px; font-weight: 600">Ops Metrics</div>
+      <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px">
+        <div class="cp-stat-card" style="padding: 8px">
+          <div class="cp-stat-num" style="font-size: 16px">{requestsTotal}</div>
+          <div class="cp-stat-label">Requests</div>
+        </div>
+        <div class="cp-stat-card" style="padding: 8px">
+          <div class="cp-stat-num" style="font-size: 16px; color: {requestErrors ? '#f85149' : '#3fb950'}">
+            {requestErrors}
+          </div>
+          <div class="cp-stat-label">Errors</div>
+        </div>
+        <div class="cp-stat-card" style="padding: 8px">
+          <div class="cp-stat-num" style="font-size: 16px">{runnerConnected}</div>
+          <div class="cp-stat-label">Runner</div>
+        </div>
+        <div class="cp-stat-card" style="padding: 8px">
+          <div class="cp-stat-num" style="font-size: 16px">{eventQueueDepth}</div>
+          <div class="cp-stat-label">Event Queue</div>
+        </div>
+      </div>
+    </div>
 
     {#if contextPreview}
       <div style="margin-bottom: 16px; border: 1px solid #21262d; border-radius: 6px; padding: 12px">

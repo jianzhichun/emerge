@@ -191,6 +191,10 @@ export interface HookStateResponse extends ApiOkResponse {
   registered_hooks?: RegisteredHookEntry[];
 }
 
+export interface HealthDeepResponse extends ApiOkResponse {
+  metrics?: Record<string, number>;
+}
+
 export interface EventListResponse<TEvent = JsonObject> extends ApiOkResponse {
   events?: TEvent[];
 }

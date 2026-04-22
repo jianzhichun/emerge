@@ -13,6 +13,7 @@
   import ThresholdsBar from './components/shared/ThresholdsBar.svelte';
   import { api } from './lib/api';
   import { navigate, readRouteFromUrl } from './lib/router';
+  import { createRefreshScheduler } from './lib/refresh';
   import { createSseClient } from './lib/sse';
   import type { ActionTypeEntry, AssetConnector } from './lib/types';
   import { monitorsStore } from './stores/monitors';
@@ -49,6 +50,7 @@
   let monitorsRefreshSignal = 0;
   let auditRefreshSignal = 0;
   let stateRefreshSignal = 0;
+  let refreshEpoch = 0;
   let serverPending = false;
   let ccActive = false;
   let hasCockpitSubmission = false;
@@ -242,6 +244,11 @@
     monitorsRefreshSignal += 1;
   }
 
+  const refreshScheduler = createRefreshScheduler(async () => {
+    await refreshShellData();
+    refreshEpoch = refreshScheduler.epoch;
+  });
+
   function enqueuePrompt(event: CustomEvent<{ prompt: string }>): void {
     const prompt = event.detail.prompt;
     queueStore.enqueue({
@@ -325,9 +332,9 @@
 
   onMount(() => {
     syncTabFromUrl();
-    void refreshShellData();
+    refreshScheduler.schedule();
     const fallbackInterval = setInterval(() => {
-      void refreshShellData();
+      refreshScheduler.schedule();
     }, FALLBACK_REFRESH_MS);
     const sse = createSseClient<Record<string, unknown>>({
       onStatus: (status) => {
@@ -345,11 +352,7 @@
           queueMonitorsRefresh();
         }
         if ('data_updated' in payload && Boolean((payload as { data_updated?: unknown }).data_updated)) {
-          const route = readRouteFromUrl();
-          void policyStore.refresh(route.session);
-          void stateStore.refresh();
-          auditRefreshSignal += 1;
-          stateRefreshSignal += 1;
+          refreshScheduler.schedule();
         }
       }
     });
@@ -499,9 +502,9 @@
           on:openConnector={handleOverviewConnectorOpen}
         />
       {:else if activeTab === 'monitors'}
-        <MonitorsTab refreshSignal={monitorsRefreshSignal} />
+        <MonitorsTab refreshSignal={monitorsRefreshSignal} refreshEpoch={refreshEpoch} />
       {:else if activeTab === 'audit'}
-        <AuditTab sessionId={routeSessionId ?? undefined} refreshSignal={auditRefreshSignal} />
+        <AuditTab sessionId={routeSessionId ?? undefined} refreshSignal={auditRefreshSignal} refreshEpoch={refreshEpoch} />
       {:else if activeTab === 'session'}
         <SessionTab
           session={$sessionStore.session}
@@ -513,7 +516,7 @@
           on:notify={handleSessionNotify}
         />
       {:else if activeTab === 'state'}
-        <StateTab sessionId={routeSessionId ?? undefined} refreshSignal={stateRefreshSignal} />
+        <StateTab sessionId={routeSessionId ?? undefined} refreshSignal={stateRefreshSignal} refreshEpoch={refreshEpoch} />
       {:else if isConnectorTab(activeTab)}
         <ConnectorTab
           connectorName={activeTab}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,8 @@ class PipelineEngine:
             self._connector_roots = [Path(env_root).expanduser(), _USER_CONNECTOR_ROOT, self.root / "connectors"]
         else:
             self._connector_roots = [_USER_CONNECTOR_ROOT, self.root / "connectors"]
+        self._cache_lock = threading.Lock()
+        self._pipeline_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     @staticmethod
     def _validate_path_segment(value: str, label: str) -> None:
@@ -230,39 +233,134 @@ class PipelineEngine:
         Used by the daemon to send pipeline code to a remote runner as inline
         icc_exec code, keeping connector assets local and the runner stateless.
         """
-        for connector_root in self._connector_roots:
-            base = connector_root / connector / "pipelines" / mode
-            meta_path = base / f"{pipeline}.yaml"
-            code_path = base / f"{pipeline}.py"
-            if meta_path.exists() and code_path.exists():
-                break
-        else:
-            searched = ", ".join(str(r / connector) for r in self._connector_roots)
-            raise PipelineMissingError(
-                connector=connector, mode=mode, pipeline=pipeline, searched=searched
-            )
-        metadata = self._load_metadata(meta_path)
-        py_source = code_path.read_text(encoding="utf-8")
+        metadata, _, py_source = self._load_pipeline_artifacts(
+            connector=connector,
+            mode=mode,
+            pipeline=pipeline,
+            need_module=False,
+            need_source=True,
+        )
         return metadata, py_source
 
     def _load_pipeline(
         self, connector: str, mode: str, pipeline: str
     ) -> tuple[dict[str, Any], Any]:
+        metadata, module, _ = self._load_pipeline_artifacts(
+            connector=connector,
+            mode=mode,
+            pipeline=pipeline,
+            need_module=True,
+            need_source=False,
+        )
+        return metadata, module
+
+    def invalidate_cache(
+        self,
+        *,
+        connector: str | None = None,
+        mode: str | None = None,
+        pipeline: str | None = None,
+    ) -> None:
+        with self._cache_lock:
+            if connector is None and mode is None and pipeline is None:
+                self._pipeline_cache.clear()
+                return
+            keep: dict[tuple[str, str, str], dict[str, Any]] = {}
+            for key, value in self._pipeline_cache.items():
+                k_connector, k_mode, k_pipeline = key
+                if connector is not None and k_connector != connector:
+                    keep[key] = value
+                    continue
+                if mode is not None and k_mode != mode:
+                    keep[key] = value
+                    continue
+                if pipeline is not None and k_pipeline != pipeline:
+                    keep[key] = value
+                    continue
+            self._pipeline_cache = keep
+
+    def _resolve_pipeline_paths(
+        self, connector: str, mode: str, pipeline: str
+    ) -> tuple[Path, Path]:
         for connector_root in self._connector_roots:
             base = connector_root / connector / "pipelines" / mode
             meta_path = base / f"{pipeline}.yaml"
             code_path = base / f"{pipeline}.py"
             if meta_path.exists() and code_path.exists():
-                break
-        else:
-            searched = ", ".join(str(r / connector) for r in self._connector_roots)
-            raise PipelineMissingError(
-                connector=connector, mode=mode, pipeline=pipeline, searched=searched
-            )
+                return meta_path, code_path
+        searched = ", ".join(str(r / connector) for r in self._connector_roots)
+        raise PipelineMissingError(
+            connector=connector, mode=mode, pipeline=pipeline, searched=searched
+        )
 
-        metadata = self._load_metadata(meta_path)
-        module = self._load_module(code_path, f"emerge_{connector}_{mode}_{pipeline}")
-        return metadata, module
+    def _load_pipeline_artifacts(
+        self,
+        *,
+        connector: str,
+        mode: str,
+        pipeline: str,
+        need_module: bool,
+        need_source: bool,
+    ) -> tuple[dict[str, Any], Any | None, str]:
+        meta_path, code_path = self._resolve_pipeline_paths(connector, mode, pipeline)
+        key = (connector, mode, pipeline)
+        meta_mtime_ns = meta_path.stat().st_mtime_ns
+        code_mtime_ns = code_path.stat().st_mtime_ns
+        metadata: dict[str, Any]
+        module: Any | None = None
+        source = ""
+        with self._cache_lock:
+            entry = self._pipeline_cache.get(key)
+            valid = bool(
+                entry
+                and entry.get("meta_mtime_ns") == meta_mtime_ns
+                and entry.get("code_mtime_ns") == code_mtime_ns
+            )
+            if valid:
+                metadata = dict(entry["metadata"])
+                module = entry.get("module")
+                source = str(entry.get("source") or "")
+                needs_module_load = need_module and module is None
+                needs_source_load = need_source and not source
+            else:
+                needs_module_load = need_module
+                needs_source_load = need_source
+                metadata = self._load_metadata(meta_path)
+        if not valid:
+            if need_module:
+                module = self._load_module(code_path, f"emerge_{connector}_{mode}_{pipeline}")
+            if need_source:
+                source = code_path.read_text(encoding="utf-8")
+            with self._cache_lock:
+                self._pipeline_cache[key] = {
+                    "meta_mtime_ns": meta_mtime_ns,
+                    "code_mtime_ns": code_mtime_ns,
+                    "metadata": dict(metadata),
+                    "module": module,
+                    "source": source,
+                }
+        elif needs_module_load or needs_source_load:
+            loaded_module = module
+            loaded_source = source
+            if needs_module_load:
+                loaded_module = self._load_module(
+                    code_path, f"emerge_{connector}_{mode}_{pipeline}"
+                )
+            if needs_source_load:
+                loaded_source = code_path.read_text(encoding="utf-8")
+            with self._cache_lock:
+                entry = self._pipeline_cache.get(key)
+                if entry and entry.get("meta_mtime_ns") == meta_mtime_ns and entry.get("code_mtime_ns") == code_mtime_ns:
+                    if needs_module_load:
+                        entry["module"] = loaded_module
+                    if needs_source_load:
+                        entry["source"] = loaded_source
+                    module = entry.get("module")
+                    source = str(entry.get("source") or "")
+                else:
+                    module = loaded_module
+                    source = loaded_source
+        return metadata, module, source
 
     @staticmethod
     def _parse_intent_signature(intent_signature: str) -> tuple[str, str, str]:

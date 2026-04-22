@@ -1,7 +1,8 @@
 ---
-name: distilling-operator-flows
+
+## name: distilling-operator-flows
+
 description: Use when wiring a new vertical to capture operator actions on a remote runner and distill them into pipelines — the full `observe → detect pattern → crystallize → promote` loop. Complements `initializing-vertical-flywheel` (static assets) and `operator-monitor-debug` (diagnosing a broken loop).
----
 
 # Distilling Operator Flows
 
@@ -27,7 +28,7 @@ icc_exec with that intent_signature (WAL records code)
    ↓
 icc_crystallize → `.py` + `.yaml` under ~/.emerge/connectors/<v>/pipelines/
    ↓
-PolicyEngine: explore → canary (5 wins) → stable (window rate ≥ 0.9)
+PolicyEngine: explore → canary (attempt/success/verify/human-fix gates) → stable (strict stage gates + operator confirmation)
    ↓
 span-bridge / exec-bridge: zero-LLM takeover on next match
 ```
@@ -39,12 +40,14 @@ span-bridge / exec-bridge: zero-LLM takeover on next match
 - Debugging why `distiller.distill()` is producing an `intent_signature` you did not expect.
 
 Do **not** use when:
+
 - The runner has not yet been installed — run `initializing-vertical-flywheel` first.
 - Pattern detection works but elicitation / channel notify is silent — use `operator-monitor-debug`.
 
 ## Key APIs
 
 ### Event shape (operator-produced)
+
 ```python
 {
   "ts_ms": 1776401020761,
@@ -60,13 +63,17 @@ Do **not** use when:
 ```
 
 ### Three production paths
-| Path | Trigger | Destination | Notes |
-|---|---|---|---|
-| Tray input bubble | Operator clicks "发送消息" in pystray menu on runner | `POST /runner/event` → `events/events-{profile}.jsonl` with `type="operator_message"` | Fastest human → CC channel; `PatternDetector` skips `operator_message` |
-| Pipeline hook | Inside pipeline `start()` or `verify()` Python code | `event_bus.emit_event(machine_id, event_type, payload)` → `operator-events/<machine_id>/events.jsonl` | Use when a pipeline itself wants to report operator-observable side effects |
-| icc_exec takeover | CC runs exploratory code via `icc_exec` with `intent_signature` | `_write_operator_event` in daemon (`session_role=monitor_sub`) | Filtered by `PatternDetector._frequency_check` — never self-reinforces |
+
+
+| Path              | Trigger                                                         | Destination                                                                                           | Notes                                                                       |
+| ----------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Tray input bubble | Operator clicks "发送消息" in pystray menu on runner                | `POST /runner/event` → `events/events-{profile}.jsonl` with `type="operator_message"`                 | Fastest human → CC channel; `PatternDetector` skips `operator_message`      |
+| Pipeline hook     | Inside pipeline `start()` or `verify()` Python code             | `event_bus.emit_event(machine_id, event_type, payload)` → `operator-events/<machine_id>/events.jsonl` | Use when a pipeline itself wants to report operator-observable side effects |
+| icc_exec takeover | CC runs exploratory code via `icc_exec` with `intent_signature` | `_write_operator_event` in daemon (`session_role=monitor_sub`)                                        | Filtered by `PatternDetector._frequency_check` — never self-reinforces      |
+
 
 ### PatternDetector thresholds (from `scripts/pattern_detector.py`)
+
 - `FREQ_THRESHOLD = 3` events of same `(app, event_type, layer)` tuple
 - `FREQ_WINDOW_MS = 20 * 60_000` rolling window
 - `ERROR_RATE_THRESHOLD = 0.4` undos / total → fires "error-rate" summary
@@ -75,6 +82,7 @@ Do **not** use when:
 Tune these per-vertical by overriding the class; do **not** edit the base constants — tests lock them.
 
 ### Distiller.distill contract (from `scripts/distiller.py`)
+
 - `distill(summary, confirmed=False)` → returns **normalized** `intent_signature` (lowercase, `_` separators, dots preserved, ≤200 chars)
 - `confirmed=True` additionally writes `intent_confirmed` event with `session_role="monitor_sub"` into `operator-events/<machine_id>/events.jsonl`
 - Input `machine_id` is path-traversal validated; reject `..`, `/`, leading/trailing whitespace
@@ -82,6 +90,7 @@ Tune these per-vertical by overriding the class; do **not** edit the base consta
 ## Step-by-Step: Add a New Vertical Distillation Loop
 
 ### 1. Confirm runner readiness
+
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" runner-status --pretty
 # proceed only when Runner reachable: True
@@ -92,6 +101,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" runner-status --pretty
 Choose ONE based on operator UX:
 
 **(a) Tray path** — operator drives UX; already built into `RunnerExecutor._start_tray()`. No code needed; verify icon is present on runner:
+
 ```bash
 # via icc_exec targeting the runner profile
 import os; print(os.environ.get("DISPLAY") or os.environ.get("USERNAME"))
@@ -99,6 +109,7 @@ import os; print(os.environ.get("DISPLAY") or os.environ.get("USERNAME"))
 ```
 
 **(b) Pipeline hook path** — instrument the pipeline that represents operator work:
+
 ```python
 # inside a pipeline .py, after a successful operator-observable action
 from scripts.event_bus import emit_event
@@ -112,15 +123,18 @@ emit_event({
 ```
 
 ### 3. Observe events accumulating
+
 ```bash
 # on runner (or via icc_exec to the target profile)
 tail -f ~/.emerge/state/events/events-<profile>.jsonl
 # OR
 tail -f ~/.emerge/operator-events/<machine_id>/events.jsonl
 ```
+
 Keep this running while the operator performs the flow 3+ times within 20 minutes.
 
 ### 4. Verify PatternDetector fires
+
 ```python
 import json
 from pathlib import Path
@@ -132,21 +146,27 @@ summaries = PatternDetector().ingest(events[-200:])
 for s in summaries:
     print(s.intent_signature, s.occurrences, s.detector_signals)
 ```
+
 If empty:
+
 - Confirm `session_role == "operator"` (not `monitor_sub`) — `_on_runner_event` sets this correctly for tray events; pipeline hooks must set it explicitly.
 - Confirm `(app, event_type, layer)` tuple is **stable** across occurrences — varying `layer` splits the group and keeps each bucket below threshold.
 
 ### 5. Distill a canonical intent_signature
+
 ```python
 from scripts.distiller import Distiller
 d = Distiller()
 sig = d.distill(summaries[0], confirmed=True)
 print(sig)  # e.g. "zwcad.entity_added.label_room"
 ```
+
 The normalizer enforces the `<connector>.(read|write).<name>` convention via post-hoc edits — review and rename segments if needed (PolicyEngine rejects 2-part sigs via `pre_tool_use.py`).
 
 ### 6. Record exec WAL with that intent_signature
+
 CC runs exploratory code with the signature:
+
 ```
 icc_exec(
   intent_signature="zwcad.write.label_room",
@@ -154,9 +174,11 @@ icc_exec(
   target_profile="<runner>"
 )
 ```
+
 `FlywheelRecorder.record_exec_event` updates session `candidates.json` **and** hands evidence to `PolicyEngine.apply_evidence` in one atomic step.
 
 ### 7. Crystallize after 3+ successes
+
 ```
 icc_crystallize(
   intent_signature="zwcad.write.label_room",
@@ -165,15 +187,19 @@ icc_crystallize(
   mode="write"
 )
 ```
+
 Writes `~/.emerge/connectors/zwcad/pipelines/write/label_room.{py,yaml}`. The `.py` is WAL-extracted; the `.yaml` metadata is strict YAML (no JSON-style payloads).
 
 ### 8. Watch policy promotion
+
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" control-plane intents --pretty | grep zwcad
 ```
-Thresholds (from `scripts/policy_engine.py`):
-- `explore → canary`: 5 successful attempts, `verify_rate ≥ threshold`
-- `canary → stable`: window success rate `≥ 0.9`
+
+Thresholds (from `scripts/policy_config.py` + `scripts/policy_engine.py`):
+
+- `explore → canary`: `attempts >= 20`, `success_rate >= 0.95`, `verify_rate >= 0.98`, `human_fix_rate <= 0.05`
+- `canary → stable`: `attempts >= 40`, `success_rate >= 0.97`, `verify_rate >= 0.99`, and at least one operator confirmation
 - `stable → bridge`: immediate next call bypasses LLM via `_try_flywheel_bridge`
 
 ## Vertical-Specific Distillation Profiles
@@ -194,13 +220,13 @@ Different verticals sit on fundamentally different observation surfaces. Treat t
 - **Observation surface**: MCP tool call results — **not** keystrokes. The operator works inside CC conversation; the "action" is a successful tool response.
 - **Event source**: `icc_exec` takeover path. `_write_operator_event` with `session_role="monitor_sub"` so this path is **self-filtered by PatternDetector** — promotion must come from `FlywheelRecorder.record_exec_event` → `PolicyEngine.apply_evidence`, not from pattern detection.
 - **Grouping tuple**: N/A — skip `PatternDetector` entirely. Promotion is driven by repeated successful `icc_exec` calls with the same `intent_signature`.
-- **Thresholds**: PolicyEngine defaults (5 successes → canary; ≥0.9 window rate → stable). Don't lower; SaaS APIs have clean success signals.
-- **Takeover risk**: low for reads, medium for writes. Writes should require `canary` confirmation; reads can go `explore → stable` fast.
+- **Thresholds**: use the global PolicyEngine defaults (`20/40` attempts + strict success/verify gates + operator confirmation). Don't lower them by default; SaaS APIs are clean enough to pass naturally.
+- **Takeover risk**: low for reads, medium for writes. Writes should require `canary` confirmation; reads still pass through canary/stable gates rather than jumping directly from explore.
 - **Intent signature shape**: `<saas>.(read|write).<resource>_<verb>` — e.g. `lark.read.doc_content`, `lark.write.calendar_event`.
 
 ### C. Browser / Web-app verticals (Chrome extension, CDP, Playwright)
 
-- **Observation surface**: DOM mutation + navigation events via `mcp__claude-in-chrome__*` or CDP. Much noisier than COM — most events are irrelevant.
+- **Observation surface**: DOM mutation + navigation events via `mcp__claude-in-chrome__`* or CDP. Much noisier than COM — most events are irrelevant.
 - **Event source**: pipeline hook + aggressive pre-filter. Only emit events for semantically meaningful actions (form submit, button click on named target) — not every DOM mutation.
 - **Grouping tuple**: `(app=hostname, event_type, payload.selector_hash)` — hash a normalized CSS selector to avoid splitting on dynamic IDs.
 - **Thresholds**: **raise** `FREQ_THRESHOLD` to 5 and **shrink** `FREQ_WINDOW_MS` to 10min — web flows repeat faster and noise is higher.
@@ -227,25 +253,29 @@ Different verticals sit on fundamentally different observation surfaces. Treat t
 
 ### Picking a profile
 
-| Operator UX | Profile | Event path |
-|---|---|---|
-| Driving a native desktop app with mouse/keyboard | A. Desktop COM/AX | pipeline hook, `session_role=operator` |
-| Typing into CC, expecting API results | B. Cloud API/SaaS | `icc_exec` takeover, `session_role=monitor_sub`, no PatternDetector |
-| Clicking around a web app in Chrome | C. Browser/Web | pipeline hook, pre-filtered DOM events |
-| Downloading meeting transcripts / batch artifacts | D. Chat/Meeting | cross-machine detector, batch ingestion |
-| Running shell commands in a loop | E. CLI/shell | shell hook or pipeline wrapper, low freq threshold |
+
+| Operator UX                                       | Profile           | Event path                                                          |
+| ------------------------------------------------- | ----------------- | ------------------------------------------------------------------- |
+| Driving a native desktop app with mouse/keyboard  | A. Desktop COM/AX | pipeline hook, `session_role=operator`                              |
+| Typing into CC, expecting API results             | B. Cloud API/SaaS | `icc_exec` takeover, `session_role=monitor_sub`, no PatternDetector |
+| Clicking around a web app in Chrome               | C. Browser/Web    | pipeline hook, pre-filtered DOM events                              |
+| Downloading meeting transcripts / batch artifacts | D. Chat/Meeting   | cross-machine detector, batch ingestion                             |
+| Running shell commands in a loop                  | E. CLI/shell      | shell hook or pipeline wrapper, low freq threshold                  |
+
 
 When in doubt: profile B is the safest default — works for any vertical with a clean API surface, skips pattern detection, relies purely on PolicyEngine's exec-event counting.
 
 ## Common Pitfalls
 
-| Symptom | Root cause | Fix |
-|---|---|---|
-| `PatternDetector` never fires | `session_role=monitor_sub` on producer side | Pipeline hook must set `session_role="operator"` explicitly |
-| Signatures like `unknown.pattern` | `PatternSummary.intent_signature` was empty before distill | Fix the detector's naming rule, not the distiller |
-| intent stuck in explore despite 10+ runs | `verify_observed=True` but `verify_rate < 0.9` | Add real `verify()` checks to the pipeline, not stubs |
-| `canary → explore` ping-pong | `two_consecutive_failures` demotion | Use cockpit `/api/control-plane/intent-history` to inspect `last_demotion.reason` |
-| Bridge failure warning but counters unchanged | Correct by design — `_try_flywheel_bridge` surfaces telemetry only; subsequent `icc_exec` fallback produces the authoritative evidence | No action; bridge is honest about failure |
+
+| Symptom                                       | Root cause                                                                                                                             | Fix                                                                                                 |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `PatternDetector` never fires                 | `session_role=monitor_sub` on producer side                                                                                            | Pipeline hook must set `session_role="operator"` explicitly                                         |
+| Signatures like `unknown.pattern`             | `PatternSummary.intent_signature` was empty before distill                                                                             | Fix the detector's naming rule, not the distiller                                                   |
+| intent stuck in explore despite many runs     | `verify_observed=True` but `verify_rate < 0.98` or `success_rate < 0.95`                                                               | Add real `verify()` checks and improve execution reliability; stubs and flaky code will not promote |
+| `canary → explore` ping-pong                  | `two_consecutive_failures` demotion                                                                                                    | Use cockpit `/api/control-plane/intent-history` to inspect `last_demotion.reason`                   |
+| Bridge failure warning but counters unchanged | Correct by design — `_try_flywheel_bridge` surfaces telemetry only; subsequent `icc_exec` fallback produces the authoritative evidence | No action; bridge is honest about failure                                                           |
+
 
 ## Files Touched
 
@@ -262,3 +292,4 @@ When in doubt: profile B is the safest default — works for any vertical with a
 - `operator-monitor-debug` — diagnose when this loop breaks
 - `remote-runner-dev` — deploy/redeploy runner code after edits
 - `policy-optimization` — tune promotion thresholds once distillation works
+

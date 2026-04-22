@@ -11,7 +11,8 @@ if str(ROOT) not in sys.path:
 
 from scripts.policy_config import REFLECTION_CACHE_TTL_MS, default_state_root, default_hook_state_root  # noqa: E402
 from scripts.span_tracker import SpanTracker  # noqa: E402
-from scripts.state_tracker import StateTracker, load_tracker, save_tracker  # noqa: E402
+from scripts.state_tracker import load_tracker  # noqa: E402
+from scripts.span_service import SpanService  # noqa: E402
 
 _BUDGET_CHARS = 800
 
@@ -53,9 +54,8 @@ def main() -> None:
         + f"\n\nFLYWHEEL_TOKEN\n{token_json}"
     )
 
-    # Reset tracker so the next session starts fresh.
-    fresh = StateTracker()
-    save_tracker(state_path, fresh)
+    # Reset tracker so the next session starts fresh, but preserve active span identity.
+    SpanService(Path(default_hook_state_root())).preserve_for_compact()
     # Clear peripheral deltas (tool_audit.py) so post-compaction State tab is fresh.
     (state_root / "tool-deltas.jsonl").unlink(missing_ok=True)
     (state_root / "span-nudge-sent").unlink(missing_ok=True)

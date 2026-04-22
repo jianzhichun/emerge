@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.policy_config import default_hook_state_root  # noqa: E402
+from scripts.span_service import SpanService  # noqa: E402
 
 
 def main() -> None:
@@ -18,17 +18,7 @@ def main() -> None:
     except Exception:
         payload = {}
 
-    state_path = Path(default_hook_state_root()) / "state.json"
-
-    active_span_id: str = ""
-    active_span_intent: str = ""
-    try:
-        if state_path.exists():
-            raw = json.loads(state_path.read_text(encoding="utf-8"))
-            active_span_id = str(raw.get("active_span_id") or "")
-            active_span_intent = str(raw.get("active_span_intent") or "")
-    except Exception:
-        pass
+    active_span_id, active_span_intent = SpanService().get_active()
 
     if active_span_id:
         sig = active_span_intent or active_span_id

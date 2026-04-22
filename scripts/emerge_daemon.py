@@ -285,10 +285,21 @@ class EmergeDaemon:
         self._bridge.last_failure = value
 
     def _crystallize(self, **kwargs: Any) -> dict[str, Any]:
-        return PipelineCrystallizer(self._state_root).crystallize(**kwargs)
+        result = PipelineCrystallizer(self._state_root).crystallize(**kwargs)
+        self.pipeline.invalidate_cache(
+            connector=str(kwargs.get("connector", "")).strip() or None,
+            mode=str(kwargs.get("mode", "")).strip() or None,
+            pipeline=str(kwargs.get("pipeline_name", "")).strip() or None,
+        )
+        return result
 
     def _auto_crystallize(self, **kwargs: Any) -> None:
         PipelineCrystallizer(self._state_root).auto_crystallize(**kwargs)
+        self.pipeline.invalidate_cache(
+            connector=str(kwargs.get("connector", "")).strip() or None,
+            mode=str(kwargs.get("mode", "")).strip() or None,
+            pipeline=str(kwargs.get("pipeline_name", "")).strip() or None,
+        )
 
     def _generate_span_skeleton(self, **kwargs: Any) -> "Path | None":
         return PipelineCrystallizer(self._state_root).generate_span_skeleton(**kwargs)

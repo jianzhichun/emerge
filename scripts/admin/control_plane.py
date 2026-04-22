@@ -240,19 +240,12 @@ def cmd_control_plane_hook_state() -> dict:
     from scripts.span_tracker import SpanTracker
     tracker = load_tracker(state_path)
 
-    raw_state: dict = {}
-    if state_path.exists():
-        try:
-            raw_state = json.loads(state_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-
     state = tracker.state
     hook_fields = {
         "turn_count": int(state.get("turn_count", 0) or 0),
         "active_span_id": state.get("active_span_id") or None,
         "active_span_intent": state.get("active_span_intent") or None,
-        "span_nudge_sent": bool(raw_state.get("_span_nudge_sent")),
+        "span_nudge_sent": (hook_state_root / "span-nudge-sent").exists(),
     }
 
     try:

@@ -170,6 +170,19 @@ def test_sse_channel_established(tmp_path):
     srv.stop()
 
 
+def test_health_deep_exposes_metrics_and_request_id(tmp_path):
+    srv = _make_server(tmp_path)
+    req = urllib.request.Request(f"http://localhost:{srv.port}/health/deep")
+    with urllib.request.urlopen(req, timeout=5) as r:
+        payload = json.loads(r.read().decode("utf-8"))
+        req_id = r.headers.get("X-Request-Id", "")
+    assert payload.get("ok") is True
+    assert isinstance(payload.get("metrics"), dict)
+    assert payload.get("request_id") == req_id
+    assert isinstance(payload["metrics"].get("requests_total", 0), int)
+    srv.stop()
+
+
 def test_pid_file_written(tmp_path):
     srv = _make_server(tmp_path)
     pid_path = tmp_path / "d.pid"

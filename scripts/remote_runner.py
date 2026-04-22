@@ -72,6 +72,7 @@ class RunnerExecutor:
         self._repl_lock = threading.Lock()
         self._event_write_lock = threading.Lock()
         self._event_root = self._state_root.parent / "operator-events"
+        self._sse_client: RunnerSSEClient | None = None
 
         # Team lead config (optional — runners in agents-team mode)
         import json as _json
@@ -111,10 +112,11 @@ class RunnerExecutor:
 
         # Forward to team lead daemon (fire-and-forget, non-blocking)
         if self._team_lead_url and self._runner_profile:
-            try:
-                self._forward_q.put_nowait(event)
-            except queue.Full:
-                logging.warning("runner forward queue full — dropping event")
+            if not self._forward_event_to_daemon(event):
+                try:
+                    self._forward_q.put_nowait(event)
+                except queue.Full:
+                    logging.warning("runner forward queue full — dropping event")
 
     def _forward_worker_loop(self) -> None:
         while True:
@@ -138,7 +140,7 @@ class RunnerExecutor:
         import urllib.request as _ur
         req = _ur.Request(url, data=body, headers={"Content-Type": "application/json"})
         try:
-            with _urlopen_no_proxy(req, timeout=3):
+            with _urlopen_no_proxy(req, timeout=1):
                 pass
             return True
         except (_ue.URLError, OSError):
@@ -345,6 +347,19 @@ class RunnerExecutor:
             (Path.home() / ".emerge" / "assets").resolve(),
         ]
 
+    def sse_status(self) -> dict[str, Any]:
+        client = self._sse_client
+        if client is None:
+            return {
+                "enabled": False,
+                "queue_depth": 0,
+                "queue_capacity": 0,
+                "received": 0,
+                "submitted": 0,
+                "dropped": 0,
+            }
+        return client.status()
+
     def _is_allowed_script_path(self, path: Path) -> bool:
         resolved = path.resolve()
         for root in self._script_roots:
@@ -437,6 +452,7 @@ class RunnerHTTPHandler(BaseHTTPRequestHandler):
                     "pid": os.getpid(),
                     "python": sys.executable,
                     "root": str(ROOT),
+                    "sse": self.executor.sse_status(),
                 },
             )
             return
@@ -496,15 +512,34 @@ class RunnerSSEClient:
         self._runner_profile = runner_profile
         self._show_notify = executor_show_notify
         self._stop = threading.Event()
+        self._dispatch_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=64)
+        self._workers: list[threading.Thread] = []
+        self._worker_count = 4
+        self._stats_lock = threading.Lock()
+        self._received_commands = 0
+        self._submitted_commands = 0
+        self._dropped_commands = 0
         self._thread = threading.Thread(
             target=self._run, daemon=True, name="RunnerSSEClient"
         )
 
     def start(self) -> None:
+        for idx in range(self._worker_count):
+            worker = threading.Thread(
+                target=self._worker_loop,
+                daemon=True,
+                name=f"RunnerSSEWorker-{idx+1}",
+            )
+            self._workers.append(worker)
+            worker.start()
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
+        try:
+            self._dispatch_queue.put_nowait({})
+        except queue.Full:
+            pass
 
     def _run(self) -> None:
         import urllib.request as _ur
@@ -561,11 +596,50 @@ class RunnerSSEClient:
             cmd = json.loads(payload)
         except json.JSONDecodeError:
             return
-        threading.Thread(
-            target=self._dispatch_command,
-            args=(cmd,),
-            daemon=True,
-        ).start()
+        # Unit tests may instantiate RunnerSSEClient via __new__ and bypass __init__.
+        # Fall back to direct dispatch when queue infra is absent.
+        if not hasattr(self, "_dispatch_queue"):
+            self._dispatch_command(cmd)
+            return
+        with self._stats_lock:
+            self._received_commands += 1
+        try:
+            self._dispatch_queue.put_nowait(cmd)
+        except queue.Full:
+            try:
+                self._dispatch_queue.get_nowait()  # drop oldest
+            except queue.Empty:
+                pass
+            with self._stats_lock:
+                self._dropped_commands += 1
+            try:
+                self._dispatch_queue.put_nowait(cmd)
+            except queue.Full:
+                with self._stats_lock:
+                    self._dropped_commands += 1
+
+    def _worker_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                cmd = self._dispatch_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if not isinstance(cmd, dict) or not cmd:
+                continue
+            self._dispatch_command(cmd)
+            with self._stats_lock:
+                self._submitted_commands += 1
+
+    def status(self) -> dict[str, int | bool]:
+        with self._stats_lock:
+            return {
+                "enabled": True,
+                "queue_depth": self._dispatch_queue.qsize(),
+                "queue_capacity": self._dispatch_queue.maxsize,
+                "received": self._received_commands,
+                "submitted": self._submitted_commands,
+                "dropped": self._dropped_commands,
+            }
 
     def _dispatch_command(self, cmd: dict) -> None:
         cmd_type = cmd.get("type")
@@ -631,6 +705,7 @@ def _start_sse_client(executor: "RunnerExecutor") -> "RunnerSSEClient | None":
         runner_profile=executor._runner_profile,
         executor_show_notify=executor.show_notify,
     )
+    executor._sse_client = client
     client.start()
     return client
 

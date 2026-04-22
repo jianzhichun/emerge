@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import sys
-import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,31 +30,10 @@ def main() -> None:
         payload = {}
 
     try:
-        from scripts.policy_config import default_hook_state_root
-        state_root = Path(default_hook_state_root())
-        from scripts.state_tracker import load_tracker
-        tracker = load_tracker(state_root / "state.json")
-        span_id = tracker.state.get("active_span_id")
-        span_intent = tracker.state.get("active_span_intent")
-        if not span_id:
-            print(json.dumps({}))
-            return
-
-        # Write a task_created action into the span WAL
+        from scripts.span_service import SpanService
         task_subject = str(payload.get("subject") or payload.get("task_subject") or "")
         task_id = str(payload.get("task_id") or "")
-        wal_dir = state_root / "span-wal"
-        wal_dir.mkdir(parents=True, exist_ok=True)
-        entry = {
-            "span_id": span_id,
-            "intent_signature": span_intent,
-            "action": "task_created",
-            "task_id": task_id,
-            "task_subject": task_subject,
-            "ts_ms": int(time.time() * 1000),
-        }
-        with (wal_dir / "spans.jsonl").open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        SpanService().append_task_created_action(task_id=task_id, task_subject=task_subject)
     except Exception:
         pass
 
