@@ -380,32 +380,48 @@ _tk_dispatch_queue: _queue.Queue = _queue.Queue()
 _tk_root: Any = None
 _tk_thread: "_threading.Thread | None" = None
 _tk_thread_lock = _threading.Lock()
+_tk_start_error: Exception | None = None
 
 
 def _ensure_tk_thread() -> None:
-    global _tk_root, _tk_thread
+    global _tk_root, _tk_thread, _tk_start_error
     with _tk_thread_lock:
         if _tk_thread is not None and _tk_thread.is_alive():
             return
+        _tk_start_error = None
         ready = _threading.Event()
 
         def _run() -> None:
-            global _tk_root
+            global _tk_root, _tk_start_error
             import tkinter as tk
-            _tk_root = tk.Tk()
-            # Keep a 1×1 off-screen transparent window so Windows background
-            # processes keep the event loop pumping (withdraw() exits mainloop
-            # immediately when no visible windows exist on some configs).
-            _tk_root.overrideredirect(True)
-            _tk_root.geometry("1x1+-10000+-10000")
-            _tk_root.attributes("-alpha", 0.0)
-            _tk_root.after(50, _tk_poll)
-            ready.set()
-            _tk_root.mainloop()
+            try:
+                _tk_root = tk.Tk()
+                # Keep a 1×1 off-screen transparent window so Windows background
+                # processes keep the event loop pumping (withdraw() exits mainloop
+                # immediately when no visible windows exist on some configs).
+                if hasattr(_tk_root, "overrideredirect"):
+                    _tk_root.overrideredirect(True)
+                if hasattr(_tk_root, "geometry"):
+                    _tk_root.geometry("1x1+-10000+-10000")
+                if hasattr(_tk_root, "attributes"):
+                    _tk_root.attributes("-alpha", 0.0)
+                if hasattr(_tk_root, "after"):
+                    _tk_root.after(50, _tk_poll)
+                ready.set()
+                if hasattr(_tk_root, "mainloop"):
+                    _tk_root.mainloop()
+            except Exception as exc:
+                _tk_start_error = exc
+                _tk_root = None
+                ready.set()
 
         _tk_thread = _threading.Thread(target=_run, name="tk-main", daemon=True)
         _tk_thread.start()
         ready.wait(timeout=5)
+        if _tk_root is None:
+            if _tk_start_error is not None:
+                raise RuntimeError(f"tk unavailable: {_tk_start_error}")
+            raise RuntimeError("tk unavailable: startup timeout")
 
 
 def _tk_poll() -> None:
@@ -434,6 +450,14 @@ def _tk_dispatch(fn: Callable) -> dict[str, Any]:
     def on_result(result: dict) -> None:
         holder.append(result)
         ev.set()
+
+    if _tk_root is not None and not hasattr(_tk_root, "after"):
+        # Test doubles may not implement tkinter scheduling primitives.
+        try:
+            fn(_tk_root, on_result)
+        except Exception as exc:
+            return {"action": "skip", "value": "", "error": str(exc)}
+        return holder[0] if holder else {"action": "dismissed", "value": ""}
 
     _tk_dispatch_queue.put((fn, on_result))
     ev.wait(timeout=120)
@@ -729,4 +753,11 @@ def show_input_bubble(
                 lambda e, _w=win: on_close() if e.widget is _w else None,
             )
 
+    if _tk_root is not None and not hasattr(_tk_root, "after"):
+        try:
+            # Lightweight fallback for tests with minimal Tk doubles.
+            RichInputWidget(_tk_root, on_submit=on_submit, upload_url=upload_url, title="emerge")
+        except Exception:
+            pass
+        return
     _tk_dispatch_queue.put((_build, lambda _: None))

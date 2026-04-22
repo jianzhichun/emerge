@@ -225,7 +225,9 @@ class DaemonHTTPServer:
                 "last_online_ts_ms": now_ms,
                 "last_sse_connected_ts_ms": int(prev.get("last_sse_connected_ts_ms", 0)),
                 "last_sse_disconnected_ts_ms": int(prev.get("last_sse_disconnected_ts_ms", 0)),
-                "sse_connected": bool(prev.get("sse_connected", False)),
+                # Treat explicit /runner/online heartbeat as active presence even
+                # before the SSE stream is established.
+                "sse_connected": bool(prev.get("sse_connected", True)),
             }
         logging.warning("runner online: profile=%s machine_id=%s", runner_profile, machine_id)
         self._append_event(events_root(self._state_root) / "events.jsonl", {

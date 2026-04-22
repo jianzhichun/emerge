@@ -231,8 +231,12 @@ class RunnerExecutor:
         Expects params = {"ui_spec": {...}}. Passes ui_spec to show_notify.
         """
         from scripts.operator_popup import show_notify
-        ui_spec = params.get("ui_spec", {})
-        if not isinstance(ui_spec, dict):
+        # Accept both {"ui_spec": {...}} and raw {...} for compatibility.
+        if isinstance(params, dict) and isinstance(params.get("ui_spec"), dict):
+            ui_spec = params.get("ui_spec", {})
+        elif isinstance(params, dict):
+            ui_spec = params
+        else:
             ui_spec = {}
         return show_notify(ui_spec)
 
@@ -572,7 +576,7 @@ class RunnerSSEClient:
             if ui_spec.get("type") == "input" and "upload_url" not in ui_spec:
                 ui_spec = {**ui_spec, "upload_url": f"{self._url}/runner/upload"}
             try:
-                result = self._show_notify({"ui_spec": ui_spec})
+                result = self._show_notify(ui_spec)
             except Exception as _exc:
                 logging.warning("show_notify failed: %s", _exc, exc_info=True)
                 result = {"value": None, "error": str(_exc)}
