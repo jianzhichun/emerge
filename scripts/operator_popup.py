@@ -59,11 +59,76 @@ def _upload_file(upload_url: str, filepath: "Path") -> "Attachment":
         raise RuntimeError(f"upload failed: {exc}") from exc
 
 
+# ── Emerge Design System ─────────────────────────────────────────────────────
+# Dark palette — slate scale + cyan accent, readable on any monitor.
+_T = {
+    "bg":      "#0f172a",   # slate-900  window background
+    "surface": "#1e293b",   # slate-800  inputs / chips
+    "border":  "#334155",   # slate-700  borders / separators
+    "text":    "#e2e8f0",   # slate-200  primary text
+    "muted":   "#64748b",   # slate-500  countdown / hint text
+    "accent":  "#06b6d4",   # cyan-500   primary action / accent bar
+    "acc_dk":  "#0891b2",   # cyan-600   accent hover
+    "neutral": "#334155",   # slate-700  secondary button bg
+    "neu_dk":  "#475569",   # slate-600  secondary button hover
+    "danger":  "#1e293b",   # same as surface (cancel is low-key, not red)
+    "dan_dk":  "#334155",
+}
+_FONT    = ("TkDefaultFont", 11)
+_FONT_SM = ("TkDefaultFont", 9)
+_FONT_TT = ("TkFixedFont", 10)   # monospace for input area
+
+
+def _style_win(win: Any, title: str) -> None:
+    """Apply emerge dark theme to a Toplevel/Tk window."""
+    win.title(title)
+    win.configure(bg=_T["bg"])
+
+
+def _accent_bar(parent: Any) -> None:
+    """3px cyan accent strip pinned to the top of the window."""
+    import tkinter as tk
+    tk.Frame(parent, bg=_T["accent"], height=3).pack(fill="x", side="top")
+
+
+def _center_win(win: Any) -> None:
+    """Center window on screen after geometry is known."""
+    win.update_idletasks()
+    sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+    w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+    win.geometry(f"+{int(sw / 2 - w / 2)}+{int(sh / 2 - h / 2)}")
+
+
+def _mk_btn(
+    parent: Any,
+    text: str,
+    command: Any,
+    primary: bool = False,
+    width: int = 10,
+) -> Any:
+    """Flat themed button with hover effect."""
+    import tkinter as tk
+    bg  = _T["accent"]  if primary else _T["neutral"]
+    hvr = _T["acc_dk"] if primary else _T["neu_dk"]
+    b = tk.Button(
+        parent, text=text, command=command, width=width,
+        relief="flat", bd=0,
+        bg=bg, fg="#ffffff",
+        activebackground=hvr, activeforeground="#ffffff",
+        cursor="hand2", padx=12, pady=7,
+        font=_FONT,
+    )
+    b.bind("<Enter>", lambda _e, _b=b, _h=hvr: _b.config(bg=_h))
+    b.bind("<Leave>", lambda _e, _b=b, _bg=bg: _b.config(bg=_bg))
+    return b
+
+
 class RichInputWidget:
     """Claude-Code-style input widget: text area + attachment chips + upload.
 
     Layout:
         ┌────────────────────────────────────┐
+        │░░░░░░░ emerge accent bar ░░░░░░░░░░│
         │ multi-line Text area (4 rows)      │
         ├────────────────────────────────────┤
         │ [📎 file.py ×] [🖼 img.png ×]     │
@@ -86,27 +151,55 @@ class RichInputWidget:
         self._attachments: list[Attachment] = []
         self._pending: int = 0
 
-        parent.title(title)
+        _style_win(parent, title)
+        _accent_bar(parent)
         parent.attributes("-topmost", True)
         parent.resizable(True, False)
         parent.update_idletasks()
         sw = parent.winfo_screenwidth()
         sh = parent.winfo_screenheight()
-        w, h = 480, 160
+        w, h = 500, 192
         parent.geometry(f"{w}x{h}+{int(sw / 2 - w / 2)}+{int(sh / 2 - h / 2)}")
 
-        self._text = tk.Text(parent, height=4, width=56, relief="solid", bd=1, wrap="word")
-        self._text.pack(padx=10, pady=(10, 4), fill="x")
+        # Text area wrapped in a 1px border-frame (slate-700 bg = border colour)
+        text_border = tk.Frame(parent, bg=_T["border"])
+        text_border.pack(padx=12, pady=(10, 4), fill="x")
+        self._text = tk.Text(
+            text_border, height=4, width=56,
+            relief="flat", bd=0,
+            bg=_T["surface"], fg=_T["text"],
+            insertbackground=_T["text"],
+            selectbackground=_T["accent"],
+            font=_FONT_TT, wrap="word",
+            padx=8, pady=6,
+        )
+        self._text.pack(fill="x", padx=1, pady=1)
         self._text.focus_set()
 
-        self._chips_frame = tk.Frame(parent)
-        self._chips_frame.pack(padx=10, fill="x")
+        self._chips_frame = tk.Frame(parent, bg=_T["bg"])
+        self._chips_frame.pack(padx=12, fill="x")
 
-        toolbar = tk.Frame(parent)
-        toolbar.pack(padx=10, pady=(4, 10), fill="x")
-        tk.Button(toolbar, text="📁 文件", command=self._pick_file, width=8).pack(side="left", padx=(0, 4))
-        tk.Button(toolbar, text="🖼 图片", command=self._pick_image, width=8).pack(side="left")
-        self._send_btn = tk.Button(toolbar, text="发送 ↵", command=self._on_send, width=8)
+        # Separator
+        tk.Frame(parent, bg=_T["border"], height=1).pack(fill="x", padx=0, pady=(4, 0))
+
+        toolbar = tk.Frame(parent, bg=_T["bg"])
+        toolbar.pack(padx=12, pady=8, fill="x")
+
+        def _file_btn(text: str, cmd: Any) -> Any:
+            b = tk.Button(
+                toolbar, text=text, command=cmd,
+                relief="flat", bd=0,
+                bg=_T["surface"], fg=_T["muted"],
+                activebackground=_T["border"], activeforeground=_T["text"],
+                cursor="hand2", padx=8, pady=5, font=_FONT_SM,
+            )
+            b.bind("<Enter>", lambda _e, _b=b: _b.config(fg=_T["text"]))
+            b.bind("<Leave>", lambda _e, _b=b: _b.config(fg=_T["muted"]))
+            return b
+
+        _file_btn("📁 文件", self._pick_file).pack(side="left", padx=(0, 6))
+        _file_btn("🖼 图片", self._pick_image).pack(side="left")
+        self._send_btn = _mk_btn(toolbar, "发送 ↵", self._on_send, primary=True, width=9)
         self._send_btn.pack(side="right")
 
         parent.bind("<Control-Return>", lambda _e: self._on_send())
@@ -140,15 +233,13 @@ class RichInputWidget:
         import re
         from pathlib import Path
         raw = event.data if hasattr(event, "data") else str(event)
-        # tkinterdnd2 format: paths with spaces are wrapped in {}, e.g.:
-        #   /simple/path {/path with spaces/file.txt} /another/path
         paths = re.findall(r"\{([^}]+)\}|(\S+)", raw)
         for braced, plain in paths:
             p = Path(braced or plain)
             if p.exists():
                 self._add_attachment(p)
 
-    def _add_attachment(self, filepath: Path) -> None:
+    def _add_attachment(self, filepath: "Path") -> None:
         import tkinter as tk
         import threading
         import uuid as _uuid_mod
@@ -157,20 +248,29 @@ class RichInputWidget:
         cancelled: set[str] = set()
 
         chip_var = tk.StringVar(value=f"⏳ {filepath.name}")
-        chip_frame = tk.Frame(self._chips_frame, relief="solid", bd=1)
-        chip_frame.pack(side="left", padx=(0, 4), pady=2)
-        chip_label = tk.Label(chip_frame, textvariable=chip_var, font=("", 9))
-        chip_label.pack(side="left", padx=(4, 0))
+        chip_border = tk.Frame(self._chips_frame, bg=_T["border"])
+        chip_border.pack(side="left", padx=(0, 5), pady=3)
+        chip_inner = tk.Frame(chip_border, bg=_T["surface"])
+        chip_inner.pack(padx=1, pady=1)
+        chip_label = tk.Label(
+            chip_inner, textvariable=chip_var,
+            bg=_T["surface"], fg=_T["text"], font=_FONT_SM,
+        )
+        chip_label.pack(side="left", padx=(6, 2))
 
         def _remove_this_chip() -> None:
             cancelled.add(slot_id)
             self._attachments = [a for a in self._attachments if a.get("_slot") != slot_id]
-            chip_frame.destroy()
+            chip_border.destroy()
 
         tk.Button(
-            chip_frame, text="×", font=("", 9), relief="flat",
+            chip_inner, text="×", font=_FONT_SM,
+            relief="flat", bd=0,
+            bg=_T["surface"], fg=_T["muted"],
+            activebackground=_T["border"], activeforeground=_T["text"],
+            cursor="hand2",
             command=_remove_this_chip,
-        ).pack(side="left", padx=2)
+        ).pack(side="left", padx=(0, 4))
 
         self._pending += 1
         self._send_btn.config(state="disabled")
@@ -189,11 +289,10 @@ class RichInputWidget:
                     if slot_id not in cancelled:
                         self._attachments.append({**a, "_slot": slot_id})
                         chip_var.set(f"📎 {filepath.name}")
-                    # if cancelled: chip_frame already destroyed, nothing to update
                 _schedule(_on_success)
             except RuntimeError:
                 _schedule(lambda: chip_var.set(f"❌ {filepath.name}"))
-                _schedule(lambda: chip_label.config(fg="red"))
+                _schedule(lambda: chip_label.config(fg="#f43f5e"))
             finally:
                 def _finish():
                     self._pending -= 1
@@ -204,11 +303,11 @@ class RichInputWidget:
         threading.Thread(target=_do_upload, daemon=True).start()
 
     def _on_send(self) -> None:
-        if self._pending > 0:  # uploads in flight — send_btn is already disabled, but guard keyboard shortcut too
+        if self._pending > 0:  # uploads in flight — guard keyboard shortcut too
             return
         text = self._text.get("1.0", "end-1c").strip()
         self._root.destroy()
-        if text or self._attachments:  # allow attach-only messages (no text required)
+        if text or self._attachments:
             clean = [{k: v for k, v in a.items() if k != "_slot"} for a in self._attachments]
             self._on_submit(text, clean)
 
@@ -347,8 +446,9 @@ def _render_choice(*, body: str, options: list[str], title: str, timeout_s: int)
     def _build(root: Any, on_result: Callable) -> None:
         import tkinter as tk
         win = tk.Toplevel(root)
-        win.title(title)
+        _style_win(win, title)
         _set_window_icon(win)
+        _accent_bar(win)
         win.attributes("-topmost", True)
         win.resizable(False, False)
         win.lift()
@@ -361,13 +461,20 @@ def _render_choice(*, body: str, options: list[str], title: str, timeout_s: int)
                 fired[0] = True
                 on_result(r)
 
-        tk.Label(win, text=body, wraplength=300, font=("", 11), justify="center").pack(
-            pady=(16, 8), padx=16
-        )
+        tk.Label(
+            win, text=body,
+            wraplength=320, font=_FONT, justify="center",
+            bg=_T["bg"], fg=_T["text"],
+        ).pack(pady=(20, 6), padx=24)
 
         if timeout_s > 0:
-            countdown_var = tk.StringVar(value=f"(Auto-selecting {options[0]} in {timeout_s}s)")
-            tk.Label(win, textvariable=countdown_var, font=("", 9), fg="gray").pack()
+            countdown_var = tk.StringVar(
+                value=f"Auto-selecting '{options[0]}' in {timeout_s}s"
+            )
+            tk.Label(
+                win, textvariable=countdown_var,
+                font=_FONT_SM, bg=_T["bg"], fg=_T["muted"],
+            ).pack(pady=(0, 4))
             remaining = [timeout_s]
 
             def update_countdown() -> None:
@@ -380,15 +487,15 @@ def _render_choice(*, body: str, options: list[str], title: str, timeout_s: int)
                     win.destroy()
                     _finish(result)
                     return
-                countdown_var.set(f"(Auto-selecting {options[0]} in {remaining[0]}s)")
+                countdown_var.set(f"Auto-selecting '{options[0]}' in {remaining[0]}s")
                 win.after(1000, update_countdown)
 
             win.after(1000, update_countdown)
 
-        btn_frame = tk.Frame(win)
-        btn_frame.pack(pady=(8, 14))
+        btn_frame = tk.Frame(win, bg=_T["bg"])
+        btn_frame.pack(pady=(10, 20))
 
-        for opt in options:
+        for i, opt in enumerate(options):
             def make_handler(o: str) -> Any:
                 def handler() -> None:
                     result["action"] = "selected"
@@ -397,10 +504,11 @@ def _render_choice(*, body: str, options: list[str], title: str, timeout_s: int)
                     _finish(result)
                 return handler
 
-            tk.Button(btn_frame, text=opt, command=make_handler(opt), width=10).pack(
-                side="left", padx=6
+            _mk_btn(btn_frame, opt, make_handler(opt), primary=(i == 0)).pack(
+                side="left", padx=5
             )
 
+        _center_win(win)
         win.protocol("WM_DELETE_WINDOW", lambda: _finish(result))
 
     return _tk_dispatch(_build)
@@ -411,6 +519,9 @@ def _render_input(*, body: str, prefill: str, title: str, upload_url: str = "") 
         import tkinter as tk
         win = tk.Toplevel(root)
         _set_window_icon(win)
+        win.attributes("-topmost", True)
+        win.lift()
+        win.focus_force()
         result: dict[str, Any] = {"action": "dismissed", "value": "", "attachments": []}
         fired = [False]
 
@@ -419,9 +530,11 @@ def _render_input(*, body: str, prefill: str, title: str, upload_url: str = "") 
                 fired[0] = True
                 on_result(r)
 
-        tk.Label(win, text=body, wraplength=340, justify="left").pack(
-            pady=(12, 4), padx=16, anchor="w"
-        )
+        if body:
+            tk.Label(
+                win, text=body, wraplength=460, justify="left",
+                bg=_T["bg"], fg=_T["text"], font=_FONT,
+            ).pack(pady=(14, 4), padx=14, anchor="w")
 
         def _on_submit(text: str, attachments: list) -> None:
             result["action"] = "confirmed"
@@ -442,8 +555,9 @@ def _render_confirm(*, body: str, title: str) -> dict[str, Any]:
     def _build(root: Any, on_result: Callable) -> None:
         import tkinter as tk
         win = tk.Toplevel(root)
-        win.title(title)
+        _style_win(win, title)
         _set_window_icon(win)
+        _accent_bar(win)
         win.attributes("-topmost", True)
         win.resizable(False, False)
         win.lift()
@@ -456,11 +570,14 @@ def _render_confirm(*, body: str, title: str) -> dict[str, Any]:
                 fired[0] = True
                 on_result(r)
 
-        tk.Label(win, text=body, wraplength=300, font=("", 11), justify="center").pack(
-            pady=(16, 8), padx=16
-        )
-        btn_frame = tk.Frame(win)
-        btn_frame.pack(pady=(8, 14))
+        tk.Label(
+            win, text=body,
+            wraplength=320, font=_FONT, justify="center",
+            bg=_T["bg"], fg=_T["text"],
+        ).pack(pady=(20, 8), padx=24)
+
+        btn_frame = tk.Frame(win, bg=_T["bg"])
+        btn_frame.pack(pady=(8, 20))
 
         def on_confirm() -> None:
             result["action"] = "confirmed"
@@ -472,8 +589,9 @@ def _render_confirm(*, body: str, title: str) -> dict[str, Any]:
             win.destroy()
             _finish(result)
 
-        tk.Button(btn_frame, text="Confirm", command=on_confirm, width=10).pack(side="left", padx=6)
-        tk.Button(btn_frame, text="Cancel", command=on_dismiss, width=10).pack(side="left", padx=6)
+        _mk_btn(btn_frame, "Cancel", on_dismiss, primary=False).pack(side="left", padx=5)
+        _mk_btn(btn_frame, "Confirm", on_confirm, primary=True).pack(side="left", padx=5)
+        _center_win(win)
         win.protocol("WM_DELETE_WINDOW", on_dismiss)
 
     return _tk_dispatch(_build)
@@ -490,8 +608,6 @@ def _render_toast(*, body: str, timeout_s: int) -> dict[str, Any]:
     import subprocess, sys
 
     if sys.platform == "darwin":
-        # Escape for AppleScript string literal: collapse control chars
-        # (newlines break the single-line -e string), then escape double-quotes.
         safe = (
             body.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
                 .replace('"', '\\"')
@@ -507,8 +623,6 @@ def _render_toast(*, body: str, timeout_s: int) -> dict[str, Any]:
         return {"action": "dismissed", "value": ""}
 
     if sys.platform == "win32":
-        # PowerShell balloon tip via System.Windows.Forms (always available on Windows).
-        # Single-quotes safe for PS string; double-quotes escaped above for PS interpolation.
         safe = body.replace("'", "''").replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
         ps = (
             "Add-Type -AssemblyName System.Windows.Forms;"
@@ -525,24 +639,27 @@ def _render_toast(*, body: str, timeout_s: int) -> dict[str, Any]:
                 ["powershell", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                creationflags=0x08000000,  # CREATE_NO_WINDOW — suppress console flash
+                creationflags=0x08000000,
             )
         except FileNotFoundError:
             pass
         return {"action": "dismissed", "value": ""}
 
-    # Linux / other: tkinter in a subprocess (isolated display context).
+    # Linux / other: emerge-themed tkinter toast in a subprocess.
+    bg, text, accent = _T["bg"], _T["text"], _T["accent"]
     tk_script = (
         "import tkinter as tk\n"
         "root = tk.Tk()\n"
         "root.overrideredirect(True)\n"
         "root.attributes('-topmost', True)\n"
+        f"root.configure(bg={bg!r})\n"
         "root.update_idletasks()\n"
         "sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()\n"
-        "w, h = 300, 64\n"
+        "w, h = 320, 72\n"
         "root.geometry(f'{w}x{h}+{sw - w - 20}+{sh - h - 60}')\n"
-        f"tk.Label(root, text={body!r}, wraplength=280, font=('', 10), justify='left')"
-        ".pack(pady=8, padx=12, anchor='w')\n"
+        f"tk.Frame(root, bg={accent!r}, height=3).pack(fill='x', side='top')\n"
+        f"tk.Label(root, text={body!r}, wraplength=296, font=('TkDefaultFont',10),"
+        f" bg={bg!r}, fg={text!r}, justify='left').pack(pady=10, padx=12, anchor='w')\n"
         f"root.after({timeout_s * 1000}, root.destroy)\n"
         "root.mainloop()\n"
     )
@@ -561,8 +678,9 @@ def _render_info(*, body: str, title: str) -> dict[str, Any]:
     def _build(root: Any, on_result: Callable) -> None:
         import tkinter as tk
         win = tk.Toplevel(root)
-        win.title(title)
+        _style_win(win, title)
         _set_window_icon(win)
+        _accent_bar(win)
         win.attributes("-topmost", True)
         win.resizable(False, False)
         win.lift()
@@ -576,17 +694,28 @@ def _render_info(*, body: str, title: str) -> dict[str, Any]:
                 win.destroy()
                 on_result(result)
 
-        tk.Label(win, text=body, wraplength=300, font=("", 11), justify="center").pack(
-            pady=(16, 8), padx=16
-        )
-        tk.Button(win, text="Close", command=_finish, width=10).pack(pady=(0, 14))
+        tk.Label(
+            win, text=body,
+            wraplength=320, font=_FONT, justify="center",
+            bg=_T["bg"], fg=_T["text"],
+        ).pack(pady=(20, 8), padx=24)
+
+        _mk_btn(win, "Close", _finish, primary=False, width=10).pack(pady=(4, 20))
+        _center_win(win)
         win.protocol("WM_DELETE_WINDOW", _finish)
 
     return _tk_dispatch(_build)
 
 
-def show_input_bubble(on_submit: "Callable[[str, list], None]", upload_url: str = "") -> None:
-    """Open RichInputWidget bubble. Calls on_submit(text, attachments) on send."""
+def show_input_bubble(
+    on_submit: "Callable[[str, list], None]",
+    upload_url: str = "",
+    on_close: "Callable[[], None] | None" = None,
+) -> None:
+    """Open RichInputWidget bubble. Calls on_submit(text, attachments) on send.
+
+    on_close is called when the window is destroyed (submit or X button).
+    """
     _ensure_tk_thread()
 
     def _build(root: Any, _on_result: Callable) -> None:
@@ -594,6 +723,10 @@ def show_input_bubble(on_submit: "Callable[[str, list], None]", upload_url: str 
         win = tk.Toplevel(root)
         _set_window_icon(win)
         RichInputWidget(win, on_submit=on_submit, upload_url=upload_url, title="emerge")
-        # Self-managed: on_submit called by widget; no result to await
+        if on_close:
+            win.bind(
+                "<Destroy>",
+                lambda e, _w=win: on_close() if e.widget is _w else None,
+            )
 
     _tk_dispatch_queue.put((_build, lambda _: None))

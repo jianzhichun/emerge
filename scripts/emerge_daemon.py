@@ -775,7 +775,8 @@ def run_http(port: int = 8789, bind_host: str | None = None) -> None:
 
     pid_path = Path.home() / ".emerge" / "daemon.pid"
     srv = DaemonHTTPServer(
-        daemon=daemon, port=port, pid_path=pid_path, bind_host=bind_host
+        daemon=daemon, port=port, pid_path=pid_path, bind_host=bind_host,
+        state_root=daemon._state_root,
     )
     daemon._http_server = srv
     srv.start()

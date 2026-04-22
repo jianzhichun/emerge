@@ -429,10 +429,16 @@ if [ "$OS" = "Darwin" ]; then
   <key>WorkingDirectory</key><string>$RUNNER_ROOT</string>
 </dict></plist>
 PLIST
-  launchctl bootout gui/"$(id -u)" "$PLIST" 2>/dev/null || true
-  launchctl bootstrap gui/"$(id -u)" "$PLIST"
-  echo "[OK] macOS LaunchAgent registered"
-  START_MODE="launchctl"
+  if curl -s --max-time 3 "http://localhost:$RUNNER_PORT/health" 2>/dev/null | grep -q 'true'; then
+    touch "$RUNNER_ROOT/.watchdog-restart"
+    echo "[OK] Runner hot-reloaded (watchdog restart signal sent)"
+    START_MODE="hot-reload"
+  else
+    launchctl bootout gui/"$(id -u)" "$PLIST" 2>/dev/null || true
+    launchctl bootstrap gui/"$(id -u)" "$PLIST"
+    echo "[OK] macOS LaunchAgent registered"
+    START_MODE="launchctl"
+  fi
 else
   PYTHON_BIN="$(command -v "$PYTHON")"
   start_now() {{
@@ -462,13 +468,21 @@ SERVICE
       echo "[Warn] systemd user service unavailable — falling back to non-systemd autostart." >&2
     fi
   fi
+  _start_or_reload() {{
+    if curl -s --max-time 3 "http://localhost:$RUNNER_PORT/health" 2>/dev/null | grep -q 'true'; then
+      touch "$RUNNER_ROOT/.watchdog-restart"
+      echo "[OK] Runner hot-reloaded (watchdog restart signal sent)"
+    else
+      start_now
+    fi
+  }}
   if [ "$START_MODE" = "unknown" ] && command -v crontab >/dev/null 2>&1; then
     CRON_LINE="@reboot \"$PYTHON_BIN\" \"$RUNNER_ROOT/scripts/runner_watchdog.py\" --host 0.0.0.0 --port $RUNNER_PORT >/dev/null 2>&1"
     (
       crontab -l 2>/dev/null | awk 'index($0,"runner_watchdog.py")==0' || true
       echo "$CRON_LINE"
     ) | crontab -
-    start_now
+    _start_or_reload
     echo "[OK] cron @reboot configured"
     START_MODE="cron"
   fi
@@ -483,12 +497,12 @@ Exec="$PYTHON_BIN" "$RUNNER_ROOT/scripts/runner_watchdog.py" --host 0.0.0.0 --po
 X-GNOME-Autostart-enabled=true
 Terminal=false
 DESKTOP
-    start_now
+    _start_or_reload
     echo "[OK] XDG autostart desktop entry configured"
     START_MODE="xdg-autostart"
   fi
   if [ "$START_MODE" = "unknown" ]; then
-    start_now
+    _start_or_reload
     START_MODE="manual-no-boot-autostart"
     echo "[Warn] No autostart manager detected — started watchdog only for current session." >&2
   fi
@@ -528,6 +542,13 @@ trap {{
 }}
 
 Write-Host "=== Emerge Runner Installer ===" -ForegroundColor Cyan
+
+$INSTALL_STAGE = "check_running"
+$isRunning = $false
+try {{
+    $h = Invoke-RestMethod -Uri "http://localhost:$RUNNER_PORT/health" -TimeoutSec 3
+    if ($h.ok) {{ $isRunning = $true; Write-Host "[Info] Runner already running — will hot-reload after update." }}
+}} catch {{}}
 
 $USE_CN_MIRROR = $true
 
@@ -616,21 +637,23 @@ try {{
     }}
 }}
 
-$INSTALL_STAGE = "stop_old"
-Get-WmiObject Win32_Process -Filter "Name='python.exe' OR Name='python3.exe'" |
-    Where-Object {{ $_.CommandLine -like '*runner_watchdog*' -or $_.CommandLine -like '*remote_runner*' }} |
-    ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
-Start-Sleep 1
-
-Start-Process "wscript.exe" -ArgumentList "`"$vbsPath`""
-
-$INSTALL_STAGE = "health_check"
-Start-Sleep 4
-try {{
-    $h = Invoke-RestMethod -Uri "http://localhost:$RUNNER_PORT/health" -TimeoutSec 5
-    if ($h.ok) {{ Write-Host "[OK] Runner healthy" -ForegroundColor Green }}
-}} catch {{
-    Write-Host "[Warn] Runner may still be starting."
+if ($isRunning) {{
+    $INSTALL_STAGE = "hot_reload"
+    $START_MODE = "hot-reload"
+    [System.IO.File]::WriteAllText((Join-Path $RUNNER_ROOT ".watchdog-restart"), "")
+    Write-Host "[OK] Runner updated — watchdog reloading in ~5s" -ForegroundColor Green
+    Start-Sleep 6
+    try {{
+        $h = Invoke-RestMethod -Uri "http://localhost:$RUNNER_PORT/health" -TimeoutSec 5
+        if ($h.ok) {{ Write-Host "[OK] Runner healthy after reload" -ForegroundColor Green }}
+    }} catch {{
+        Write-Host "[Warn] Runner still restarting — check: Invoke-RestMethod http://localhost:$RUNNER_PORT/health"
+    }}
+}} else {{
+    Write-Host ""
+    Write-Host "  Runner installed. Start it in your interactive session (required for popups):" -ForegroundColor Yellow
+    Write-Host "    Double-click: $vbsPath" -ForegroundColor Yellow
+    Write-Host "  Runner will auto-start at next login via Registry Run key." -ForegroundColor Yellow
 }}
 
 $INSTALL_STAGE = "done"

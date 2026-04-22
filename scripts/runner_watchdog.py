@@ -25,10 +25,49 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 SIGNAL_FILE = ROOT / ".watchdog-restart"
+PID_FILE = ROOT / ".watchdog.pid"
 RESTART_DELAY_S = 3
 POLL_INTERVAL_S = 2
 
 _CONFIG_PATH = Path.home() / ".emerge" / "runner-config.json"
+
+
+def _pid_alive(pid: int) -> bool:
+    """Return True if a process with this PID is currently running."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            SYNCHRONIZE = 0x00100000
+            handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return True
+            return False
+        else:
+            os.kill(pid, 0)
+            return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def _acquire_lock() -> bool:
+    """Return True if this process is now the sole watchdog.
+
+    Reads existing PID file; if that process is alive, returns False.
+    Otherwise writes our PID and returns True.
+    """
+    if PID_FILE.exists():
+        try:
+            existing_pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+            if _pid_alive(existing_pid):
+                return False
+        except (ValueError, OSError):
+            pass
+    try:
+        PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+    except OSError:
+        pass
+    return True
 
 
 def _load_team_lead_url() -> str:
@@ -105,4 +144,12 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--python", default=sys.executable)
     args = parser.parse_args()
-    run(args.host, args.port, args.python)
+
+    if not _acquire_lock():
+        log("watchdog already running — exiting (single-instance enforced)")
+        sys.exit(0)
+
+    try:
+        run(args.host, args.port, args.python)
+    finally:
+        PID_FILE.unlink(missing_ok=True)

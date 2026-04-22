@@ -33,6 +33,16 @@ _LOG_FILE = ROOT / ".runner.log"
 _LOG_MAX_BYTES = 2 * 1024 * 1024  # 2 MB rolling
 
 
+def _urlopen_no_proxy(request: Any, *, timeout: float | None = None) -> Any:
+    """Open URL while explicitly bypassing system HTTP proxies."""
+    import urllib.request as _ur
+
+    opener = _ur.build_opener(_ur.ProxyHandler({}))
+    if timeout is None:
+        return opener.open(request)
+    return opener.open(request, timeout=timeout)
+
+
 def _setup_logging() -> None:
     handler = logging.handlers.RotatingFileHandler(
         _LOG_FILE, maxBytes=_LOG_MAX_BYTES, backupCount=2, encoding="utf-8"
@@ -120,15 +130,15 @@ class RunnerExecutor:
 
         Returns True on success, False on connection failure.
         """
-        import urllib.request as _ur
         import urllib.error as _ue
         import json as _j
         url = f"{self._team_lead_url}/runner/event"
         payload = {**event, "runner_profile": self._runner_profile}
         body = _j.dumps(payload, ensure_ascii=True).encode()
+        import urllib.request as _ur
         req = _ur.Request(url, data=body, headers={"Content-Type": "application/json"})
         try:
-            with _ur.urlopen(req, timeout=3):
+            with _urlopen_no_proxy(req, timeout=3):
                 pass
             return True
         except (_ue.URLError, OSError):
@@ -185,12 +195,18 @@ class RunnerExecutor:
         except Exception:
             img = Image.new("RGBA", (64, 64), (82, 130, 255, 255))
 
+        _bubble_open = threading.Event()
+
         def _on_send_message(icon: Any, item: Any) -> None:
+            if _bubble_open.is_set():
+                return
+            _bubble_open.set()
             from scripts.operator_popup import show_input_bubble
             upload_url = f"{self._team_lead_url}/runner/upload" if self._team_lead_url else ""
             threading.Thread(
                 target=show_input_bubble,
                 args=(self._post_operator_message, upload_url),
+                kwargs={"on_close": _bubble_open.clear},
                 daemon=True,
             ).start()
 
@@ -500,11 +516,14 @@ class RunnerSSEClient:
                 url = (f"{self._url}/runner/sse?runner_profile={self._runner_profile}"
                        f"&machine_id={_machine_id}")
                 req = _ur.Request(url, headers={"Accept": "text/event-stream"})
-                with _ur.urlopen(req, timeout=None) as resp:
+                logging.info("SSE connect start: url=%s profile=%s", url, self._runner_profile)
+                with _urlopen_no_proxy(req, timeout=None) as resp:
                     backoff = 1.0
+                    logging.info("SSE connected: profile=%s", self._runner_profile)
                     self._consume_sse_stream(resp)
             except (_ue.URLError, OSError):
                 if not self._stop.is_set():
+                    logging.warning("SSE connect failed: profile=%s backoff=%.1fs", self._runner_profile, min(backoff, 30))
                     self._stop.wait(timeout=min(backoff, 30))
                     backoff = min(backoff * 2, 30)
 
@@ -546,6 +565,7 @@ class RunnerSSEClient:
 
     def _dispatch_command(self, cmd: dict) -> None:
         cmd_type = cmd.get("type")
+        logging.info("SSE dispatch: type=%s keys=%s", cmd_type, list(cmd.keys()))
         if cmd_type == "notify":
             popup_id = str(cmd.get("popup_id", ""))
             ui_spec = cmd.get("ui_spec", {})
@@ -573,7 +593,7 @@ class RunnerSSEClient:
             data=body, headers={"Content-Type": "application/json"}
         )
         try:
-            with _ur.urlopen(req, timeout=5):
+            with _urlopen_no_proxy(req, timeout=5):
                 pass
         except (_ue.URLError, OSError):
             pass
@@ -597,10 +617,11 @@ def _start_sse_client(executor: "RunnerExecutor") -> "RunnerSSEClient | None":
             f"{executor._team_lead_url}/runner/online",
             data=body, headers={"Content-Type": "application/json"}
         )
-        with _ur.urlopen(req, timeout=5):
+        with _urlopen_no_proxy(req, timeout=5):
             pass
+        logging.info("runner online registered: profile=%s", executor._runner_profile)
     except (_ue.URLError, OSError):
-        pass
+        logging.warning("runner online register failed: profile=%s", executor._runner_profile)
     client = RunnerSSEClient(
         team_lead_url=executor._team_lead_url,
         runner_profile=executor._runner_profile,

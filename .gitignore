@@ -37,7 +37,7 @@ htmlcov/
 # Emerge runtime state
 .plugin-data/
 .worktrees/
-session/
+/session/
 *.runner.log
 *.watchdog.log
 .watchdog-restart

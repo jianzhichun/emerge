@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import logging
 import os
 import threading
 import time
@@ -15,6 +16,7 @@ from typing import Any
 from scripts.policy_config import events_root
 
 _KEEPALIVE_INTERVAL_S = 20.0
+_RUNNER_DISCONNECT_GRACE_MS = 45_000
 
 
 def _parse_multipart(content_type: str, body: bytes) -> dict:
@@ -100,10 +102,10 @@ class DaemonHTTPServer:
         self._port = port
         self._pid_path = pid_path or (Path.home() / ".emerge" / "daemon.pid")
         self._event_root = event_root or (Path.home() / ".emerge" / "operator-events")
-        self._state_root = state_root or (Path.home() / ".emerge" / "repl")
+        self._state_root = state_root or (Path.home() / ".emerge" / "state")
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
-        # Connected runners: runner_profile → {connected_at_ms, last_event_ts_ms, machine_id, last_alert}
+        # Runner monitor state: runner_profile → metadata including current SSE status.
         self._connected_runners: dict[str, dict] = {}
         self._runners_lock = threading.Lock()
         # runner_profile → {"wfile": ..., "lock": Lock()} for SSE command push.
@@ -214,12 +216,18 @@ class DaemonHTTPServer:
             raise ValueError(f"invalid runner_profile: {runner_profile!r}")
         now_ms = int(time.time() * 1000)
         with self._runners_lock:
+            prev = self._connected_runners.get(runner_profile, {})
             self._connected_runners[runner_profile] = {
                 "connected_at_ms": now_ms,
-                "last_event_ts_ms": 0,
+                "last_event_ts_ms": int(prev.get("last_event_ts_ms", 0)),
                 "machine_id": machine_id,
-                "last_alert": None,
+                "last_alert": prev.get("last_alert"),
+                "last_online_ts_ms": now_ms,
+                "last_sse_connected_ts_ms": int(prev.get("last_sse_connected_ts_ms", 0)),
+                "last_sse_disconnected_ts_ms": int(prev.get("last_sse_disconnected_ts_ms", 0)),
+                "sse_connected": bool(prev.get("sse_connected", False)),
             }
+        logging.warning("runner online: profile=%s machine_id=%s", runner_profile, machine_id)
         self._append_event(events_root(self._state_root) / "events.jsonl", {
             "type": "runner_discovered",
             "ts_ms": now_ms,
@@ -321,6 +329,8 @@ class DaemonHTTPServer:
         if not popup_id:
             return
         with self._popup_lock:
+            if popup_id not in self._popup_futures:
+                return  # already timed out — discard stale result to prevent leak
             self._popup_results[popup_id] = payload
             ev = self._popup_futures.get(popup_id)
         if ev:
@@ -343,6 +353,13 @@ class DaemonHTTPServer:
                 cur = self._runner_sse_clients.get(runner_profile)
                 if cur is not None and cur["wfile"] is entry["wfile"]:
                     self._runner_sse_clients.pop(runner_profile)
+                    info = self._connected_runners.get(runner_profile)
+                    if info is not None:
+                        info["sse_connected"] = False
+                        info["last_sse_disconnected_ts_ms"] = int(time.time() * 1000)
+            self._write_monitor_state()
+            self._notify_cockpit_broadcast({"monitors_updated": True})
+            logging.warning("runner sse write failed; marked disconnected: profile=%s", runner_profile)
             return "runner_disconnected"
 
     def request_popup(self, runner_profile: str, ui_spec: dict, timeout_s: float = 30.0) -> dict:
@@ -388,15 +405,19 @@ class DaemonHTTPServer:
             runners = [
                 {
                     "runner_profile": profile,
-                    "connected": True,
+                    "connected": bool(info.get("sse_connected", True)),
                     "connected_at_ms": info.get("connected_at_ms", 0),
                     "last_event_ts_ms": info.get("last_event_ts_ms", 0),
                     "machine_id": info.get("machine_id", ""),
                     "last_alert": info.get("last_alert"),
+                    "last_online_ts_ms": info.get("last_online_ts_ms", 0),
+                    "last_sse_connected_ts_ms": info.get("last_sse_connected_ts_ms", 0),
+                    "last_sse_disconnected_ts_ms": info.get("last_sse_disconnected_ts_ms", 0),
                 }
                 for profile, info in self._connected_runners.items()
             ]
-        state = {"runners": runners, "team_active": len(runners) > 0,
+        connected_count = sum(1 for r in runners if r.get("connected"))
+        state = {"runners": runners, "team_active": connected_count > 0,
                  "updated_ts_ms": int(time.time() * 1000)}
         path = events_root(self._state_root) / "runner-monitor-state.json"
         try:
@@ -637,10 +658,17 @@ def _make_handler(srv: "DaemonHTTPServer"):
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             my_wfile = self.wfile
-            my_entry: dict = {"wfile": my_wfile, "lock": threading.Lock()}
+            connection_id = uuid.uuid4().hex[:8]
+            my_entry: dict = {
+                "wfile": my_wfile,
+                "lock": threading.Lock(),
+                "connection_id": connection_id,
+                "connected_at_ms": int(time.time() * 1000),
+            }
             if runner_profile:
                 now_ms = int(time.time() * 1000)
                 with srv._runners_lock:
+                    prev_entry = srv._runner_sse_clients.get(runner_profile)
                     srv._runner_sse_clients[runner_profile] = my_entry
                     if runner_profile not in srv._connected_runners:
                         srv._connected_runners[runner_profile] = {
@@ -648,11 +676,34 @@ def _make_handler(srv: "DaemonHTTPServer"):
                             "last_event_ts_ms": 0,
                             "machine_id": machine_id or runner_profile,
                             "last_alert": None,
+                            "last_online_ts_ms": now_ms,
+                            "last_sse_connected_ts_ms": now_ms,
+                            "last_sse_disconnected_ts_ms": 0,
+                            "sse_connected": True,
                         }
-                    elif machine_id:
-                        srv._connected_runners[runner_profile]["machine_id"] = machine_id
+                    else:
+                        info = srv._connected_runners[runner_profile]
+                        if machine_id:
+                            info["machine_id"] = machine_id
+                        info["sse_connected"] = True
+                        info["last_sse_connected_ts_ms"] = now_ms
                 srv._write_monitor_state()
                 srv._notify_cockpit_broadcast({"monitors_updated": True})
+                if prev_entry is not None:
+                    logging.warning(
+                        "runner sse replace: profile=%s old_conn=%s new_conn=%s machine_id=%s",
+                        runner_profile,
+                        prev_entry.get("connection_id", "unknown"),
+                        connection_id,
+                        machine_id or runner_profile,
+                    )
+                else:
+                    logging.warning(
+                        "runner sse connect: profile=%s conn=%s machine_id=%s",
+                        runner_profile,
+                        connection_id,
+                        machine_id or runner_profile,
+                    )
             try:
                 while True:
                     time.sleep(15)
@@ -669,7 +720,31 @@ def _make_handler(srv: "DaemonHTTPServer"):
                         cur = srv._runner_sse_clients.get(runner_profile)
                         if cur is my_entry:
                             srv._runner_sse_clients.pop(runner_profile)
-                            srv._connected_runners.pop(runner_profile, None)
+                            now_ms = int(time.time() * 1000)
+                            info = srv._connected_runners.get(runner_profile)
+                            if info is not None:
+                                info["sse_connected"] = False
+                                info["last_sse_disconnected_ts_ms"] = now_ms
+                                last_seen_ms = max(
+                                    int(info.get("last_event_ts_ms", 0)),
+                                    int(info.get("last_online_ts_ms", 0)),
+                                    int(info.get("last_sse_connected_ts_ms", 0)),
+                                )
+                                if now_ms - last_seen_ms > _RUNNER_DISCONNECT_GRACE_MS:
+                                    srv._connected_runners.pop(runner_profile, None)
+                                    logging.warning(
+                                        "runner sse disconnect: profile=%s conn=%s removed=true last_seen_age_ms=%d",
+                                        runner_profile,
+                                        connection_id,
+                                        now_ms - last_seen_ms,
+                                    )
+                                else:
+                                    logging.warning(
+                                        "runner sse disconnect: profile=%s conn=%s removed=false last_seen_age_ms=%d",
+                                        runner_profile,
+                                        connection_id,
+                                        now_ms - last_seen_ms,
+                                    )
                             do_notify = True
                         else:
                             do_notify = False

@@ -33,7 +33,8 @@ The runner executes code in its **own process environment** — not in the SSH s
 
 | File | Role |
 |---|---|
-| `scripts/remote_runner.py` | HTTP server; executes `icc_exec` only (pipeline tools handled by daemon) |
+| `scripts/remote_runner.py` | HTTP server; executes `icc_exec` only. Also contains `RunnerSSEClient` (connects to daemon SSE, dispatches popup commands) |
+| `scripts/operator_popup.py` | Popup renderer. Persistent `tk-main` thread + `_tk_dispatch` queue; all popup types use tkinter `Toplevel` dialogs |
 | `scripts/runner_watchdog.py` | Keeps runner alive; restarts on crash or `.watchdog-restart` signal |
 | `scripts/repl_admin.py` | CLI: `runner-install-url`, `runner-deploy`, `runner-status` |
 | `scripts/runner_client.py` | Routes requests to runner by `target_profile` |
@@ -183,6 +184,33 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 ```
 
+## Popup Push Flow
+
+`runner_notify` delivers interactive popups daemon → runner without requiring the runner to be TCP-reachable (NAT-safe):
+
+```
+daemon.request_popup()
+  → SSE push: data: {"type":"notify","popup_id":"<id>","ui_spec":{…}}\n\n
+    → RunnerSSEClient._dispatch_command()  [runner-side thread]
+      → _tk_dispatch(_build)              [queues to tk-main thread, blocks]
+        → tk-main: Toplevel dialog shown, user interacts
+      → on user action: on_result({"value":"…"}) fires
+    → _post_result(): POST /runner/popup-result {"popup_id":…,"value":…}
+  → daemon._on_popup_result(): ev.set()
+daemon.request_popup() returns {"ok": true, "value": "…"}
+```
+
+**toast** (`type=toast`) is fire-and-forget: `popup_id=""`, no result POST, daemon returns immediately.
+
+**Timeout layering** (three levels, outer ≥ inner):
+| Layer | Where | Value |
+|---|---|---|
+| UI countdown | `ui_spec.timeout_s` | auto-selects first option for `choice` type |
+| daemon wait | `request_popup` `ev.wait` | `ui_spec.timeout_s + 30 s` |
+| dispatch wait | `_tk_dispatch` `ev.wait` | 120 s hard cap on runner side |
+
+**Windows Session requirement**: `operator_popup.py` uses tkinter, which requires an interactive desktop session (Session 1). SSH-started processes run in Session 0 (no visible desktop) — popups will silently fail. Runner must be started via Registry Run key (installer sets this up) or by the user double-clicking the VBS shortcut.
+
 ## Ops Endpoints
 
 ```bash
@@ -192,6 +220,16 @@ GET  /logs?n=100    # last N lines of .runner.log
 POST /run           # {"tool_name": "icc_exec", "arguments": {...}}
 POST /operator-event                                      # append one event to local EventBus
 GET  /operator-events?machine_id=&since_ms=&limit=        # read events since ts
+```
+
+**Daemon endpoints consumed by runner** (runner initiates, daemon receives):
+
+```bash
+GET  /runner/sse?runner_profile=<id>&machine_id=<id>   # SSE command stream (runner holds this open)
+POST /runner/online                                     # runner registration heartbeat
+POST /runner/event                                      # push operator events to daemon
+POST /runner/popup-result                               # {"popup_id":"…","value":"…","attachments":[]}
+POST /runner/upload                                     # file upload for rich-input popups
 ```
 
 The runner accepts **only `icc_exec`** requests on `/run`. Pipeline bridge execution is handled by the daemon (`icc_span_open` when stable): it loads pipeline `.py` + `.yaml` locally, builds self-contained inline code, and sends it as `icc_exec`. Connector files never need to exist on the runner machine.
@@ -242,3 +280,7 @@ These two endpoints are consumed by `OperatorMonitor` in the daemon when `EMERGE
 | `ModuleNotFoundError: scripts.pipeline_engine` | Missing `sys.path` self-insert in `remote_runner.py`. |
 | COM object works in call 1, fails in call 2 with "not connected to server" | COM apartments are thread-local. Re-dispatch COM object every call and follow connector NOTES guidance. |
 | Redundant `import json` / `import pathlib` in every call | ExecSession globals persist across calls for the same profile — only import once. Exception: COM. |
+| `runner_notify` returns `runner_not_connected` despite runner online | The runner's SSE connection is tracked separately from `/runner/online`. If the old SSE handler's finally-block evicted the entry (race on reconnect), the daemon has no live SSE socket. Fix: `runner-deploy` to push latest code; runner reconnects automatically. |
+| `runner_notify` returns `value: null` / empty string | `show_notify` received a bare `ui_spec` dict instead of `{"ui_spec": …}`. Symptom: `ui_type=""` → immediate skip, result `{"action":"skip","value":""}`. Already fixed in current code; check `_dispatch_command` if regressing. |
+| Popup command sent but nothing appears on screen | Runner is in Session 0 (SSH-started). Session 0 has no visible desktop. Only Session 1+ processes can show GUI. Fix: reboot so registry autostart fires, or user double-clicks VBS. Never kill-and-restart via SSH. |
+| `runner_notify` confirm/choice times out after 60 s | Default `total_timeout = ui_spec.timeout_s + 30`. The daemon-side `ev.wait` expired before the runner posted the result. Either the popup was closed without user action (dismissed) or the SSE connection dropped mid-flight. |

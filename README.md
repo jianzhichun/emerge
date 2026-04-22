@@ -40,6 +40,8 @@ flowchart TB
   CORE --> POLICY
   CORE -->|when routed| RUNNER
   RUNNER -->|GET /runner/sse — SSE connect| DAEMON
+  DAEMON -->|"SSE push — notify command (popup_id + ui_spec)"| RUNNER
+  RUNNER -->|POST /runner/popup-result — user response| DAEMON
   RUNNER -->|POST /runner/event — push events| DAEMON
   RUNNER -->|POST /operator-event from observers| EVENTBUS
   EVENTBUS -->|"events-{profile}.jsonl written by daemon"| DAEMON
@@ -322,7 +324,7 @@ Emerge follows MCP 2025-11-25 style metadata and hook control semantics:
 | Pipeline engine & policy | `scripts/pipeline_engine.py`, `scripts/policy_config.py`                                                                                       |
 | ExecSession & WAL        | `scripts/exec_session.py`                                                                                                                      |
 | State & metrics          | `scripts/state_tracker.py`, `scripts/metrics.py`                                                                                               |
-| Remote runner            | `scripts/remote_runner.py` (SSE client, event forwarding, popup dispatch, system tray icon via `_start_tray`), `scripts/runner_client.py`, `scripts/runner_watchdog.py`. `runner_notify` toast type is fire-and-forget (no popup-result). Operator tray → `POST /runner/event` → `events/events-{profile}.jsonl` with `type=operator_message`. Rich-input popups (`type=input`) include an `attachments` field (list of `{path, mime, name}` objects) in the popup result when files were uploaded via `POST /runner/upload`. |
+| Remote runner            | `scripts/remote_runner.py` (SSE client, popup dispatch via `RunnerSSEClient`), `scripts/operator_popup.py` (persistent tk-main thread + `_tk_dispatch` queue; all popup types rendered in tkinter), `scripts/runner_client.py`, `scripts/runner_watchdog.py`. **Popup push flow**: daemon pushes `{"type":"notify","popup_id":"<id>","ui_spec":{…}}` over SSE → runner dispatches to `operator_popup.show_notify` via `_tk_dispatch` queue → user interaction → runner `POST /runner/popup-result` → daemon `ev.set()`. `runner_notify` `toast` type is fire-and-forget (`popup_id=""`, no result POST). Rich-input popups include an `attachments` field in the result when files were uploaded via `POST /runner/upload`. **Windows**: runner must run in an interactive session (Session 1) for popups to be visible — Registry Run key autostart guarantees this on logon; SSH-exec always lands in Session 0. |
 | Event bus helper         | `scripts/event_bus.py`                                                                                                                          |
 | Pattern detector         | `scripts/pattern_detector.py`                                                                                                                  |
 | Distiller                | `scripts/distiller.py`                                                                                                                         |
