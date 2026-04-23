@@ -587,7 +587,7 @@ def _derive_transition(
     human_fix_rate: float,
     consecutive_failures: int,
     window: list[int],
-    operator_confirmations: int = 0,
+    operator_confirmations: int = 0,  # retained for call-site compat; no longer gates promotion
 ) -> tuple[str, bool, str]:
     """Return ``(new_stage, transitioned, reason)``.
 
@@ -599,7 +599,7 @@ def _derive_transition(
     - ``explore → canary`` when attempts ≥ promote_min, success_rate ≥ promote_min,
       verify_rate ≥ promote_min, human_fix_rate ≤ promote_max.
     - ``canary → stable`` when attempts ≥ stable_min, success_rate ≥ stable_min,
-      verify_rate ≥ stable_min.
+      verify_rate ≥ stable_min. No manual gate — humans veto by rolling back.
 
     Demotion path (``consecutive_failures ≥ threshold`` or a blown window):
     - ``explore → rollback``: we haven't earned trust yet and we're already failing;
@@ -637,8 +637,6 @@ def _derive_transition(
         return "explore", False, "no_change"
 
     if stage == "canary":
-        if operator_confirmations < 1:
-            return "canary", False, "awaiting_operator_confirmation"
         should_stabilize = (
             attempts >= STABLE_MIN_ATTEMPTS
             and success_rate >= STABLE_MIN_SUCCESS_RATE

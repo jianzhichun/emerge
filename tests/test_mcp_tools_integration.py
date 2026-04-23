@@ -2778,7 +2778,7 @@ def test_stable_transition_writes_to_sync_queue(tmp_path, monkeypatch):
                 "recent_outcomes": [1] * near,
                 "attempts_at_transition": 0,
                 "last_transition_reason": "init",
-                "operator_confirmations": 1,  # evidence anchor phase 2: gate satisfied
+                "operator_confirmations": 0,  # no manual gate — auto-promotes on thresholds
             }
         }
     }
