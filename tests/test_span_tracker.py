@@ -8,7 +8,7 @@ from scripts.span_tracker import SpanTracker, is_read_only_tool
 @pytest.fixture
 def tracker(tmp_path):
     hook_state = tmp_path / "hook-state"
-    hook_state.mkdir()
+    hook_state.mkdir(exist_ok=True)
     (hook_state / "state.json").write_text("{}", encoding="utf-8")
     return SpanTracker(state_root=tmp_path, hook_state_root=hook_state)
 

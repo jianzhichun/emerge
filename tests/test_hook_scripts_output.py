@@ -284,7 +284,7 @@ def test_session_start_clears_stale_active_span(tmp_path, monkeypatch):
     """SessionStart must clear active_span_id left by a crashed previous session."""
     import json, subprocess, sys
     hook_state = tmp_path / "hook-state"
-    hook_state.mkdir()
+    hook_state.mkdir(exist_ok=True)
     stale_state = {
         "active_span_id": "stale-uuid",
         "active_span_intent": "lark.read.get-doc",
@@ -321,7 +321,7 @@ def _run_post_hook(payload: dict, hook_state: Path) -> dict:
 def test_post_tool_use_records_action_when_span_active(tmp_path):
     import json
     hook_state = tmp_path / "hook-state"
-    hook_state.mkdir()
+    hook_state.mkdir(exist_ok=True)
     state = {"active_span_id": "span-123", "active_span_intent": "lark.read.get-doc",
              "deltas": []}
     (hook_state / "state.json").write_text(json.dumps(state), encoding="utf-8")
@@ -338,7 +338,7 @@ def test_post_tool_use_records_action_when_span_active(tmp_path):
 def test_post_tool_use_excludes_icc_exec_from_span(tmp_path):
     import json
     hook_state = tmp_path / "hook-state"
-    hook_state.mkdir()
+    hook_state.mkdir(exist_ok=True)
     state = {"active_span_id": "span-123", "active_span_intent": "lark.read.get-doc",
              "deltas": []}
     (hook_state / "state.json").write_text(json.dumps(state), encoding="utf-8")
@@ -352,7 +352,7 @@ def test_post_tool_use_excludes_icc_exec_from_span(tmp_path):
 
 def test_post_tool_use_no_recording_without_active_span(tmp_path):
     hook_state = tmp_path / "hook-state"
-    hook_state.mkdir()
+    hook_state.mkdir(exist_ok=True)
     (hook_state / "state.json").write_text("{}", encoding="utf-8")
     _run_post_hook({"tool_name": "mcp__lark_doc__get",
                     "tool_result": {"content": [{"type": "text", "text": "{}"}]}},
@@ -365,7 +365,7 @@ def test_post_tool_use_preserves_active_span_id_across_calls(tmp_path):
     """active_span_id must survive in state.json after post_tool_use (so next call still records)."""
     import json
     hook_state = tmp_path / "hook-state"
-    hook_state.mkdir()
+    hook_state.mkdir(exist_ok=True)
     state = {"active_span_id": "span-xyz", "active_span_intent": "lark.read.get-doc",
              "deltas": []}
     (hook_state / "state.json").write_text(json.dumps(state), encoding="utf-8")
@@ -707,7 +707,7 @@ def test_format_pattern_alert_includes_key_fields():
 def test_session_start_includes_span_protocol(tmp_path, monkeypatch):
     import json, subprocess, sys
     hook_state = tmp_path / "hook-state"
-    hook_state.mkdir()
+    hook_state.mkdir(exist_ok=True)
     (hook_state / "state.json").write_text("{}", encoding="utf-8")
     monkeypatch.setenv("EMERGE_HOOK_STATE_ROOT", str(hook_state))
     result = subprocess.run(
@@ -821,7 +821,7 @@ def _seed_span_reflection_data(exec_root: Path) -> None:
 
 def test_pre_compact_includes_muscle_memory(tmp_path):
     hook_state = tmp_path / "hook-state"
-    hook_state.mkdir()
+    hook_state.mkdir(exist_ok=True)
     (hook_state / "state.json").write_text("{}", encoding="utf-8")
     exec_root = tmp_path / "exec-state"
     _seed_span_reflection_data(exec_root)
@@ -846,7 +846,7 @@ def test_pre_compact_includes_muscle_memory(tmp_path):
 
 def test_pre_compact_prefers_cached_deep_reflection(tmp_path):
     hook_state = tmp_path / "hook-state"
-    hook_state.mkdir()
+    hook_state.mkdir(exist_ok=True)
     (hook_state / "state.json").write_text("{}", encoding="utf-8")
     exec_root = tmp_path / "exec-state"
     _seed_span_reflection_data(exec_root)
@@ -881,7 +881,7 @@ def test_pre_compact_prefers_cached_deep_reflection(tmp_path):
 
 def test_user_prompt_submit_reflection_at_turn_threshold(tmp_path):
     hook_state = tmp_path / "hook-state"
-    hook_state.mkdir()
+    hook_state.mkdir(exist_ok=True)
     (hook_state / "state.json").write_text(json.dumps({"turn_count": 0}), encoding="utf-8")
     exec_root = tmp_path / "exec-state"
     _seed_span_reflection_data(exec_root)
@@ -906,7 +906,7 @@ def test_user_prompt_submit_reflection_at_turn_threshold(tmp_path):
 def test_user_prompt_submit_span_reminder_at_interval(tmp_path):
     """Every SPAN_REMINDER_INTERVAL turns (turn > 1, no active span) a reminder is injected."""
     hook_state = tmp_path / "hook-state"
-    hook_state.mkdir()
+    hook_state.mkdir(exist_ok=True)
     # turn_count=4 → becomes 5 after increment → 5 % 5 == 0 → reminder fires
     (hook_state / "state.json").write_text(json.dumps({"turn_count": 4}), encoding="utf-8")
     exec_root = tmp_path / "exec-state"
@@ -929,7 +929,7 @@ def test_user_prompt_submit_span_reminder_at_interval(tmp_path):
 def test_user_prompt_submit_no_reminder_when_span_active(tmp_path):
     """Span reminder is suppressed when a span is already open."""
     hook_state = tmp_path / "hook-state"
-    hook_state.mkdir()
+    hook_state.mkdir(exist_ok=True)
     (hook_state / "state.json").write_text(
         json.dumps({"turn_count": 4, "active_span_id": "span-abc", "active_span_intent": "lark.read.foo"}),
         encoding="utf-8",
@@ -953,7 +953,7 @@ def test_user_prompt_submit_no_reminder_when_span_active(tmp_path):
 
 def test_build_reflection_cache_script_writes_cache(tmp_path):
     hook_state = tmp_path / "hook-state"
-    hook_state.mkdir()
+    hook_state.mkdir(exist_ok=True)
     exec_root = tmp_path / "exec-state"
     _seed_span_reflection_data(exec_root)
     env = os.environ.copy()

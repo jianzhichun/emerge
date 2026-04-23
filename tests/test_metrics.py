@@ -36,7 +36,8 @@ def test_null_sink_does_not_write(tmp_path):
     sink.emit("anything", {"x": 1})  # must not raise
 
 
-def test_get_sink_returns_local_jsonl_by_default(tmp_path):
+def test_get_sink_returns_local_jsonl_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("EMERGE_METRICS_SINK", raising=False)
     from scripts.metrics import get_sink, LocalJSONLSink
     sink = get_sink({"metrics_sink": "local_jsonl"}, default_path=tmp_path / "m.jsonl")
     assert isinstance(sink, LocalJSONLSink)
