@@ -9,7 +9,7 @@
       "name": "emerge",
       "source": "./",
       "description": "Emerge — policy-driven crystallization flywheel for Claude Code. Exec history promotes through explore → canary → stable; stable patterns short-circuit via flywheel bridge at zero LLM overhead. PreToolUse hook enforces exec conventions. Optional remote runner for GUI/hardware workloads.",
-      "version": "0.3.126",
+      "version": "0.3.127",
       "category": "development",
       "tags": [
         "flywheel",
@@ -22,7 +22,7 @@
     }
   ],
   "metadata": {
-    "version": "0.3.126",
+    "version": "0.3.127",
     "description": "Emerge plugin marketplace — self-hosted in the emerge repo"
   }
 }
