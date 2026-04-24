@@ -324,3 +324,61 @@ def test_parse_intent_signature_rejects_unknown_mode():
     from scripts.pipeline_engine import PipelineEngine
     with pytest.raises(ValueError, match="'read', 'write', or 'workflow'"):
         PipelineEngine._parse_intent_signature("conn.foobar.pipeline")
+
+
+import os
+
+
+def test_yaml_only_pipeline_routes_to_scenario_engine(tmp_path):
+    """A connector dir with only a .yaml (steps: key) — no .py — uses YAMLScenarioEngine."""
+    conn_dir = tmp_path / "myconn" / "pipelines" / "read"
+    conn_dir.mkdir(parents=True)
+    (conn_dir / "status.yaml").write_text("""
+intent_signature: myconn.read.status
+rollback_or_stop_policy: stop
+steps:
+  - name: set-status
+    type: derive
+    set:
+      status: ok
+verify:
+  - name: ok
+    type: derive
+    set:
+      checked: "true"
+""")
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path)
+    try:
+        engine = PipelineEngine(root=tmp_path)
+        result = engine.run_read({"connector": "myconn", "pipeline": "status"})
+        assert result["verification_state"] == "verified"
+        assert result["pipeline_id"] == "myconn.read.status"
+    finally:
+        os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
+
+
+def test_yaml_only_write_pipeline_returns_action_result(tmp_path):
+    conn_dir = tmp_path / "myconn" / "pipelines" / "write"
+    conn_dir.mkdir(parents=True)
+    (conn_dir / "reset.yaml").write_text("""
+intent_signature: myconn.write.reset
+rollback_or_stop_policy: stop
+steps:
+  - name: flag
+    type: derive
+    set:
+      ok: "true"
+      op: reset
+verify:
+  - name: verify
+    type: derive
+    set: {}
+""")
+    os.environ["EMERGE_CONNECTOR_ROOT"] = str(tmp_path)
+    try:
+        engine = PipelineEngine(root=tmp_path)
+        result = engine.run_write({"connector": "myconn", "pipeline": "reset"})
+        assert result["verification_state"] == "verified"
+        assert result["action_result"]["op"] == "reset"
+    finally:
+        os.environ.pop("EMERGE_CONNECTOR_ROOT", None)

@@ -67,6 +67,18 @@ class PipelineEngine:
         self._validate_path_segment(connector, "connector")
         self._validate_path_segment(pipeline, "pipeline")
         metadata, module = self._load_pipeline(connector, "read", pipeline)
+        if module is None:
+            # YAML scenario pipeline — delegate to YAMLScenarioEngine
+            from scripts.pipeline_yaml_engine import YAMLScenarioEngine
+            engine = YAMLScenarioEngine()
+            result = engine.execute(metadata, args, pipeline_engine=self, mode="read")
+            return self._build_read_result(
+                connector=connector,
+                pipeline=pipeline,
+                metadata=metadata,
+                rows=result.get("rows", []),
+                verify_result=result.get("verify_result", {"ok": True}),
+            )
         rows = module.run_read(metadata=metadata, args=args)
         verify_result = {"ok": True}
         verify_fn = getattr(module, "verify_read", None)
@@ -92,6 +104,34 @@ class PipelineEngine:
         self._validate_path_segment(connector, "connector")
         self._validate_path_segment(pipeline, "pipeline")
         metadata, module = self._load_pipeline(connector, "write", pipeline)
+        if module is None:
+            # YAML scenario pipeline — delegate to YAMLScenarioEngine
+            from scripts.pipeline_yaml_engine import YAMLScenarioEngine
+            _eng = YAMLScenarioEngine()
+            _res = _eng.execute(metadata, args, pipeline_engine=self, mode="write")
+            _action = _res.get("action_result", {"ok": True})
+            _vr = _res.get("verify_result", {"ok": True})
+            _vs = "verified" if _vr.get("ok") else "degraded"
+            _policy = str(metadata.get("rollback_or_stop_policy", "stop"))
+            _rb_executed = False
+            _rb_result: dict[str, Any] | None = None
+            _stop = False
+            if _vs == "degraded":
+                if _policy == "rollback":
+                    try:
+                        _rb = _eng.execute_rollback(metadata, args, pipeline_engine=self)
+                        _rb_executed = True
+                        _rb_result = _rb
+                    except Exception as _exc:
+                        _rb_result = {"ok": False, "error": str(_exc)}
+                        _rb_executed = True
+                else:
+                    _stop = True
+            return self._build_write_result(
+                connector=connector, pipeline=pipeline, metadata=metadata,
+                action_result=_action, verify_result=_vr,
+                stop_triggered=_stop, rollback_executed=_rb_executed, rollback_result=_rb_result,
+            )
         action_result = module.run_write(metadata=metadata, args=args)
         verify_fn = getattr(module, "verify_write", None)
         if not callable(verify_fn):
@@ -340,13 +380,22 @@ class PipelineEngine:
 
     def _resolve_pipeline_paths(
         self, connector: str, mode: str, pipeline: str
-    ) -> tuple[Path, Path]:
+    ) -> tuple[Path, Path | None]:
+        """Return (meta_path, code_path). code_path is None for YAML scenario pipelines."""
         for connector_root in self._connector_roots:
             base = connector_root / connector / "pipelines" / mode
             meta_path = base / f"{pipeline}.yaml"
             code_path = base / f"{pipeline}.py"
             if meta_path.exists() and code_path.exists():
                 return meta_path, code_path
+            if meta_path.exists() and not code_path.exists():
+                try:
+                    import yaml  # type: ignore
+                    data = yaml.safe_load(meta_path.read_text(encoding="utf-8"))
+                    if isinstance(data, dict) and isinstance(data.get("steps"), list):
+                        return meta_path, None
+                except Exception:
+                    pass
         searched = ", ".join(str(r / connector) for r in self._connector_roots)
         raise PipelineMissingError(
             connector=connector, mode=mode, pipeline=pipeline, searched=searched
@@ -362,6 +411,12 @@ class PipelineEngine:
         need_source: bool,
     ) -> tuple[dict[str, Any], Any | None, str]:
         meta_path, code_path = self._resolve_pipeline_paths(connector, mode, pipeline)
+
+        # YAML scenario: no Python module
+        if code_path is None:
+            metadata = self._load_metadata(meta_path)
+            return metadata, None, ""
+
         key = (connector, mode, pipeline)
         meta_mtime_ns = meta_path.stat().st_mtime_ns
         code_mtime_ns = code_path.stat().st_mtime_ns
@@ -445,13 +500,20 @@ class PipelineEngine:
         policy = str(data.get("rollback_or_stop_policy", ""))
         if policy not in ("stop", "rollback"):
             errors.append("rollback_or_stop_policy (must be 'stop' or 'rollback')")
+
+        has_steps = isinstance(data.get("steps"), list) and len(data["steps"]) > 0
         has_read = isinstance(data.get("read_steps"), list) and len(data["read_steps"]) > 0
         has_write = isinstance(data.get("write_steps"), list) and len(data["write_steps"]) > 0
-        if not (has_read ^ has_write):
+
+        if has_steps:
+            pass  # YAML scenario — verify is inline, no function refs needed
+        elif not (has_read ^ has_write):
             errors.append("read_steps or write_steps (exactly one required, non-empty list)")
-        has_verify = isinstance(data.get("verify_steps"), list) and len(data["verify_steps"]) > 0
-        if not has_verify:
-            errors.append("verify_steps (required, non-empty list)")
+        else:
+            has_verify = isinstance(data.get("verify_steps"), list) and len(data["verify_steps"]) > 0
+            if not has_verify:
+                errors.append("verify_steps (required, non-empty list)")
+
         if errors:
             raise ValueError(
                 f"pipeline metadata invalid at {path}: missing/invalid fields: {', '.join(errors)}"
