@@ -281,7 +281,12 @@ class PipelineCrystallizer:
         span: dict,
         connector_root: "Path | None" = None,
     ) -> "Path | None":
-        """Write a _pending/<name>.py stub from span actions. Returns path or None."""
+        """Write a _pending stub from span actions. Returns path or None.
+
+        Routing:
+        - Multi-tool spans (len(actions) > 1) → generate_yaml_span_skeleton → .yaml
+        - Single-tool spans                   → .py skeleton (existing path)
+        """
         from scripts.policy_config import resolve_connector_root
         try:
             parts = intent_signature.split(".", 2)
@@ -289,13 +294,24 @@ class PipelineCrystallizer:
                 return None
             connector, mode, pipeline_name = parts
             target_root = connector_root or resolve_connector_root()
+
+            actions = span.get("actions", [])
+
+            # Multi-tool spans get a YAML pipeline skeleton.
+            if len(actions) > 1:
+                return self.generate_yaml_span_skeleton(
+                    intent_signature=intent_signature,
+                    span=span,
+                    connector_root=target_root,
+                )
+
+            # Single-tool span: keep existing .py path.
             pending_dir = target_root / connector / "pipelines" / mode / "_pending"
             pending_dir.mkdir(parents=True, exist_ok=True)
             skeleton_path = pending_dir / f"{pipeline_name}.py"
             if skeleton_path.exists():
                 return skeleton_path
 
-            actions = span.get("actions", [])
             is_read = mode == "read"
             call_lines = []
             for a in actions:
@@ -338,6 +354,80 @@ class PipelineCrystallizer:
                 """)
 
             self._atomic_write_text(skeleton_path, skeleton, prefix=".skeleton-")
+            return skeleton_path
+        except Exception:
+            return None
+
+    def generate_yaml_span_skeleton(
+        self,
+        *,
+        intent_signature: str,
+        span: dict,
+        connector_root: "Path | None" = None,
+    ) -> "Path | None":
+        """Write a _pending/<name>.yaml pipeline skeleton from multi-tool span actions.
+
+        Each action becomes one placeholder ``connector_call`` step annotated with
+        hints from ``args_snapshot`` and ``result_summary``.  The file is never
+        overwritten if it already exists.  Returns the path or None on error.
+        """
+        from scripts.policy_config import resolve_connector_root
+        try:
+            import yaml  # type: ignore
+
+            parts = intent_signature.split(".", 2)
+            if len(parts) != 3:
+                return None
+            connector, mode, pipeline_name = parts
+            target_root = connector_root or resolve_connector_root()
+
+            pending_dir = target_root / connector / "pipelines" / mode / "_pending"
+            pending_dir.mkdir(parents=True, exist_ok=True)
+            skeleton_path = pending_dir / f"{pipeline_name}.yaml"
+            if skeleton_path.exists():
+                return skeleton_path
+
+            actions = span.get("actions", [])
+
+            # Build one step per action.
+            steps = []
+            for a in actions:
+                hint_sig = (a.get("args_snapshot") or {}).get("intent_signature", "")
+                result_hint = a.get("result_summary") or {}
+                step: dict[str, Any] = {
+                    "type": "connector_call",
+                    # Hint at which child intent this step should invoke; operator
+                    # should replace with the real intent_signature after reviewing.
+                    "intent_signature": hint_sig or f"TODO.{mode}.step{a.get('seq', '?')}",
+                    # Preserve seq / side-effect metadata as comments via a
+                    # human-readable annotation field (not executed by PipelineEngine).
+                    "_annotation": (
+                        f"seq={a.get('seq', '?')} tool={a.get('tool_name', '?')} "
+                        f"side_effects={a.get('has_side_effects', '?')} "
+                        + (f"result={result_hint}" if result_hint else "")
+                    ).strip(),
+                }
+                steps.append(step)
+
+            if not steps:
+                steps = [{"type": "connector_call", "intent_signature": f"TODO.{mode}.step0"}]
+
+            yaml_data: dict[str, Any] = {
+                "intent_signature": intent_signature,
+                "rollback_or_stop_policy": "stop",
+                "steps": steps,
+                "verify": [{"type": "derive", "from": "steps"}],
+                "rollback": [{"type": "derive", "from": "steps"}],
+            }
+
+            yaml_src = IndentedSafeDumper.dump_yaml(yaml_data)
+            # Prepend a comment header so the operator knows this is a skeleton.
+            header = (
+                f"# auto-generated YAML skeleton from span: {intent_signature}\n"
+                f"# Review each step's intent_signature and remove _annotation fields\n"
+                f"# before calling icc_span_approve.\n"
+            )
+            self._atomic_write_text(skeleton_path, header + yaml_src, prefix=".skeleton-")
             return skeleton_path
         except Exception:
             return None
