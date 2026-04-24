@@ -36,6 +36,7 @@ from scripts.policy_config import (
     STABLE_MIN_ATTEMPTS,
     STABLE_MIN_SUCCESS_RATE,
     STABLE_MIN_VERIFY_RATE,
+    STABLE_WINDOW_DEMOTE_RATE,
     TRANSITION_HISTORY_MAX,
     WINDOW_SIZE,
 )
@@ -647,7 +648,7 @@ def _derive_transition(
         return "canary", False, "no_change"
 
     if stage == "stable":
-        if len(window) >= WINDOW_SIZE and (sum(window) / len(window)) < 0.9:
+        if len(window) >= WINDOW_SIZE and (sum(window) / len(window)) < STABLE_WINDOW_DEMOTE_RATE:
             return "explore", True, "window_failure_rate"
         return "stable", False, "no_change"
 

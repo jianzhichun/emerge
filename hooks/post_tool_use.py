@@ -19,13 +19,23 @@ if str(ROOT) not in sys.path:
 from scripts.policy_config import default_hook_state_root  # noqa: E402
 from scripts.span_tracker import is_read_only_tool  # noqa: E402
 from scripts.state_tracker import (  # noqa: E402
+    LEVEL_CORE_CRITICAL,
+    LEVEL_CORE_SECONDARY,
     LEVEL_PERIPHERAL,
     load_tracker,
     save_tracker,
 )
 
+_CRITICAL_TOOLS = frozenset({"icc_exec", "icc_span_open", "icc_span_close"})
+_SECONDARY_TOOLS = frozenset({"icc_reconcile", "icc_crystallize", "icc_span_approve"})
+
 
 def _classify_level(tool_name: str) -> str:
+    short = _short_tool_name(tool_name)
+    if short in _CRITICAL_TOOLS:
+        return LEVEL_CORE_CRITICAL
+    if short in _SECONDARY_TOOLS:
+        return LEVEL_CORE_SECONDARY
     return LEVEL_PERIPHERAL
 
 

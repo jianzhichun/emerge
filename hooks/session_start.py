@@ -62,10 +62,6 @@ def _compact_connector_index(max_chars: int = 200) -> str:
 
 def main() -> None:
     payload_text = sys.stdin.read().strip()
-    try:
-        json.loads(payload_text) if payload_text else {}
-    except Exception:
-        pass
     state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
     tracker = load_tracker(state_path)
@@ -73,6 +69,8 @@ def main() -> None:
     tracker.state.pop("active_span_id", None)
     tracker.state.pop("active_span_intent", None)
     tracker.state.pop("turn_count", None)
+    # Reset span nudge marker so the new session gets its own nudges.
+    (state_root / "span-nudge-sent").unlink(missing_ok=True)
     save_tracker(state_path, tracker)
     context_text = tracker.format_additional_context()
 

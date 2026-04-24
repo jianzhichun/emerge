@@ -20,6 +20,9 @@ STABLE_MIN_VERIFY_RATE = 0.99
 
 ROLLBACK_CONSECUTIVE_FAILURES = 2
 WINDOW_SIZE = 20
+# When a stable intent's recent WINDOW_SIZE outcomes drop below this success
+# rate, it demotes back to explore (window_failure_rate transition).
+STABLE_WINDOW_DEMOTE_RATE = 0.9
 
 # A stable pipeline whose crystallized code fails this many times in a row
 # (with LLM fallback covering each failure) is auto-demoted from stable to
