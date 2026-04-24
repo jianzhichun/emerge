@@ -62,7 +62,7 @@ class YAMLScenarioEngine:
         verify_ok = True
         try:
             self._run_steps(scenario.get("verify", []), context, pipeline_engine)
-        except YAMLStepError:
+        except Exception:
             verify_ok = False
 
         verify_result = {"ok": verify_ok}
@@ -87,7 +87,10 @@ class YAMLScenarioEngine:
     ) -> dict:
         """Run the ``rollback`` section of *scenario* if present."""
         context: dict[str, Any] = dict(args)
-        self._run_steps(scenario.get("rollback", []), context, pipeline_engine)
+        try:
+            self._run_steps(scenario.get("rollback", []), context, pipeline_engine)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
         action_result = {k: v for k, v in context.items() if not k.startswith("__")}
         action_result.setdefault("ok", True)
         return {"action_result": action_result, "verify_result": {"ok": True}}
@@ -112,6 +115,10 @@ class YAMLScenarioEngine:
 
     _FILTER_RE = re.compile(r"^\s*([a-zA-Z_]\w*)\s*\|\s*(\w+)\s*$")
     _VAR_RE = re.compile(r"^\s*([a-zA-Z_]\w*)\s*$")
+
+    # ── condition evaluation ──────────────────────────────────────────────────
+
+    _IDENT_FILTER_RE = re.compile(r"\b([a-zA-Z_]\w*)\s*(?:\|\s*(\w+))?")
 
     def _resolve(self, template: Any, context: dict) -> str:
         if not isinstance(template, str):
@@ -175,10 +182,6 @@ class YAMLScenarioEngine:
         # Replace identifiers (with optional | filter) with their values.
         # Pattern: word boundary, identifier, optional | filter
         # We must NOT replace numeric literals.
-        _ident_filter_re = re.compile(
-            r"\b([a-zA-Z_]\w*)\s*(?:\|\s*(\w+))?"
-        )
-
         def _subst(m: re.Match) -> str:
             ident = m.group(1)
             filt = m.group(2)
@@ -215,7 +218,7 @@ class YAMLScenarioEngine:
                 pass
             return repr(str(val))
 
-        resolved = _ident_filter_re.sub(_subst, expr)
+        resolved = self._IDENT_FILTER_RE.sub(_subst, expr)
 
         try:
             tree = ast.parse(resolved, mode="eval")
@@ -227,7 +230,10 @@ class YAMLScenarioEngine:
         body = tree.body
         if not isinstance(body, ast.Compare):
             raise YAMLStepError(
-                f"Branch condition must be a comparison expression, got: {condition!r}"
+                f"Branch condition must be a comparison expression "
+                f"(e.g. '{{{{ count == 0 }}}}'); "
+                f"got type={type(body).__name__!r} from {condition!r} "
+                f"(resolved: {resolved!r})"
             )
         _allowed_ops = (ast.Gt, ast.Lt, ast.GtE, ast.LtE, ast.Eq, ast.NotEq)
         for op in body.ops:
@@ -382,6 +388,7 @@ class YAMLScenarioEngine:
         until_value = self._resolve(str(step.get("until_value", "")), context)
         timeout_s = float(step.get("timeout_s", 30))
         deadline = time.monotonic() + timeout_s
+        last_error: str | None = None
         while True:
             try:
                 status, body = self._http_request("GET", url)
@@ -398,11 +405,13 @@ class YAMLScenarioEngine:
                                     v = v.get(part) if isinstance(v, dict) else None
                                 context[dest] = v
                         return
-            except YAMLStepError:
-                pass
+                    last_error = f"key {until_key}={val!r} != {until_value!r}"
+            except YAMLStepError as exc:
+                last_error = str(exc)
             if time.monotonic() >= deadline:
+                detail = f"; last error: {last_error}" if last_error else ""
                 raise YAMLStepError(
                     f"http_poll timed out after {timeout_s}s waiting for "
-                    f"{until_key}={until_value!r} at {url}"
+                    f"{until_key}={until_value!r} at {url}{detail}"
                 )
             time.sleep(0.5)
