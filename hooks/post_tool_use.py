@@ -74,15 +74,69 @@ def _build_args_summary(tool_input: dict) -> str:
     return ", ".join(parts)
 
 
+_ICC_TOOL_SUFFIXES = frozenset({
+    "icc_exec", "icc_span_open", "icc_span_close", "icc_crystallize",
+    "icc_reconcile", "icc_span_approve", "icc_hub", "icc_compose",
+    "runner_notify",
+})
+
+
+def _is_icc_tool(tool_name: str) -> bool:
+    return _short_tool_name(tool_name) in _ICC_TOOL_SUFFIXES
+
+
+def _build_args_snapshot(tool_input: dict, tool_name: str) -> dict:
+    """Capture key intent/pipeline args for ICC tools. Capped at 2 KB."""
+    if not _is_icc_tool(tool_name):
+        return {}
+    snapshot: dict = {}
+    for key in ("intent_signature", "pipeline", "connector", "outcome", "span_id", "mode"):
+        val = tool_input.get(key)
+        if val is not None:
+            snapshot[key] = val
+    if len(json.dumps(snapshot, ensure_ascii=False)) > 2048:
+        snapshot = {
+            "intent_signature": snapshot.get("intent_signature", ""),
+            "_truncated": True,
+        }
+    return snapshot
+
+
+def _build_result_summary(raw_result: dict, tool_name: str) -> dict:
+    """Summarize top-level result keys for ICC tools (enough for LLM crystallization)."""
+    if not _is_icc_tool(tool_name):
+        return {}
+    inner: dict = {}
+    try:
+        content = raw_result.get("content", [])
+        if content and isinstance(content[0], dict):
+            inner = json.loads(content[0].get("text", "{}"))
+    except Exception:
+        pass
+    if not isinstance(inner, dict):
+        inner = {}
+    summary: dict = {}
+    for key, val in inner.items():
+        if isinstance(val, (str, int, float, bool)):
+            summary[key] = str(val)[:200]
+        elif key == "rows" and isinstance(val, list):
+            summary["rows_count"] = len(val)
+            if val and isinstance(val[0], dict):
+                summary["row_keys"] = list(val[0].keys())[:5]
+    return summary
+
+
 def _record_span_action(
     tool_name: str, payload: dict, state_root: Path, state_path: Path
 ) -> tuple[str, str]:
     """Record tool invocation to the active span WAL.
 
     Returns (active_span_id, active_span_intent) — both empty strings when no span is active.
-    Skips icc_exec: its code paths are captured in ExecSession WAL already.
+    ICC tools (icc_exec, icc_span_open/close, etc.) are enriched with args_snapshot and
+    result_summary so the crystallizer has structured intent context alongside the WAL code.
+    Non-ICC tools (Read, Bash, Grep, etc.) retain the hash-only format.
     """
-    if tool_name.endswith("__icc_exec") or not tool_name:
+    if not tool_name:
         return "", ""
     _active_span_id = ""
     _active_span_intent = ""
@@ -103,6 +157,15 @@ def _record_span_action(
         "has_side_effects": _has_se,
         "ts_ms": int(time.time() * 1000),
     }
+    if _is_icc_tool(tool_name):
+        _snap = _build_args_snapshot(payload.get("tool_input", {}), tool_name)
+        if _snap:
+            _action["args_snapshot"] = _snap
+        _raw_resp = payload.get("tool_response", payload.get("tool_result", {}))
+        _resp = _raw_resp if isinstance(_raw_resp, dict) else {}
+        _rsum = _build_result_summary(_resp, tool_name)
+        if _rsum:
+            _action["result_summary"] = _rsum
     _buf = state_root / "active-span-actions.jsonl"
     try:
         with _buf.open("a", encoding="utf-8") as _f:
@@ -194,17 +257,6 @@ def main() -> None:
     _active_span_id, _active_span_intent = _record_span_action(
         tool_name, payload, state_root, state_path
     )
-
-    # _record_span_action skips icc_exec (WAL is handled by ExecSession).
-    # For span context injection we still need the active span fields — read
-    # them directly from state when the tool is icc_exec.
-    if not _active_span_id and tool_name.endswith("__icc_exec"):
-        try:
-            _raw = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
-            _active_span_id = str(_raw.get("active_span_id", "") or "")
-            _active_span_intent = str(_raw.get("active_span_intent", "") or "")
-        except Exception:
-            pass
 
     save_tracker(state_path, tracker)
 
