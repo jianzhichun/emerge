@@ -46,6 +46,51 @@ def test_enrich_notes_comment_includes_notes_context(tmp_path: Path, monkeypatch
     assert "notes_path" in result[0]
 
 
+def test_crystallize_to_yaml_action_is_registered():
+    from scripts.admin.actions.registry import ActionRegistry
+    from scripts.admin.actions.builtins import register_builtins
+    register_builtins(ActionRegistry)
+    spec = ActionRegistry.get("crystallize.to-yaml")
+    assert spec is not None
+    assert spec.hazard == "write"
+
+
+def test_crystallize_to_yaml_enrich_injects_instruction():
+    import json
+    from scripts.admin.actions.registry import ActionRegistry, ActionContext
+    from scripts.admin.actions.builtins import register_builtins
+    from pathlib import Path
+
+    register_builtins(ActionRegistry)
+    spec = ActionRegistry.get("crystallize.to-yaml")
+    ctx = ActionContext(connector_root=Path("/tmp"))
+
+    action = {
+        "type": "crystallize.to-yaml",
+        "payload": {
+            "intent_signature": "mock.write.multi-op",
+            "span_id": "span-abc",
+            "actions": [
+                {
+                    "tool_name": "mcp__plugin_emerge__icc_exec",
+                    "args_snapshot": {"intent_signature": "mock.read.layers"},
+                    "result_summary": {"rows_count": 3},
+                },
+                {
+                    "tool_name": "mcp__plugin_emerge__icc_exec",
+                    "args_snapshot": {"intent_signature": "mock.write.add-wall"},
+                    "result_summary": {"ok": "true"},
+                },
+            ],
+        },
+    }
+    payload_obj = spec.payload(**action["payload"])
+    enriched = spec.enrich(action, payload_obj, ctx)
+    assert "instruction" in enriched
+    assert "mock.write.multi-op" in enriched["instruction"]
+    assert "connector_call" in enriched["instruction"]
+
+
 def test_adapter_can_register_new_action_type() -> None:
     from scripts.admin.actions.registry import ActionRegistry, ActionSpec
 

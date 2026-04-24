@@ -111,63 +111,125 @@ def _enrich_tool_call(
     return a
 
 
+@dataclass(frozen=True)
+class CrystallizeToYamlPayload:
+    intent_signature: str
+    span_id: str
+    actions: list
+
+
+def _enrich_crystallize_to_yaml(
+    action: dict[str, Any], payload: CrystallizeToYamlPayload, _ctx: ActionContext
+) -> dict[str, Any]:
+    a = dict(action)
+    lines: list[str] = []
+    for i, step in enumerate(payload.actions or [], start=1):
+        tool = step.get("tool_name", "") if isinstance(step, dict) else ""
+        args = step.get("args_snapshot", {}) if isinstance(step, dict) else {}
+        result = step.get("result_summary", {}) if isinstance(step, dict) else {}
+        lines.append(
+            f"  {i}. tool={tool}  args={args}  result={result}"
+        )
+    actions_block = "\n".join(lines) if lines else "  (none)"
+    a["instruction"] = (
+        f"Crystallize the following span into a YAML pipeline scenario.\n\n"
+        f"Span: {payload.intent_signature}\n"
+        f"Actions recorded:\n{actions_block}\n\n"
+        f"Write a YAML scenario using these step types:\n"
+        f"- connector_call: call a connector pipeline (fields: intent, args, extract)\n"
+        f"- http_get/post/delete/poll: HTTP operations\n"
+        f"- cli/cli_poll: local commands\n"
+        f"- derive: compute variables\n"
+        f"- transform: map data between formats\n"
+        f"- branch: conditional execution (condition, when, otherwise)\n\n"
+        f"Include steps, verify, and rollback sections.\n"
+        f"Use {{{{ template }}}} syntax for variable substitution.\n"
+        f"Save the generated YAML as the pipeline file for {payload.intent_signature}.\n"
+        f"Replace the _pending skeleton, then call icc_span_approve to activate the bridge."
+    )
+    return a
+
+
+def _register_if_new(registry: type[ActionRegistry], spec: ActionSpec) -> None:
+    """Register a spec only if the type has not already been registered (idempotent)."""
+    if registry.get(spec.type) is None:
+        registry.register(spec)
+
+
 def register_builtins(registry: type[ActionRegistry]) -> None:
-    registry.register(
+    _register_if_new(
+        registry,
         ActionSpec(
             type="intent.set",
             payload=IntentSetPayload,
             hazard="write",
             description="Update intent policy fields.",
-        )
+        ),
     )
-    registry.register(
+    _register_if_new(
+        registry,
         ActionSpec(
             type="intent.delete",
             payload=IntentDeletePayload,
             hazard="danger",
             description="Delete an intent policy entry.",
-        )
+        ),
     )
-    registry.register(
+    _register_if_new(
+        registry,
         ActionSpec(
             type="notes.comment",
             payload=NotesCommentPayload,
             enrich=_enrich_notes_comment,
             hazard="write",
             description="Apply a natural-language NOTES edit instruction.",
-        )
+        ),
     )
-    registry.register(
+    _register_if_new(
+        registry,
         ActionSpec(
             type="notes.edit",
             payload=NotesEditPayload,
             hazard="write",
             description="Apply explicit NOTES content rewrite.",
-        )
+        ),
     )
-    registry.register(
+    _register_if_new(
+        registry,
         ActionSpec(
             type="core.tool-call",
             payload=ToolCallPayload,
             enrich=_enrich_tool_call,
             hazard="safe",
             description="Execute a deterministic MCP tool call from queue.",
-        )
+        ),
     )
-    registry.register(
+    _register_if_new(
+        registry,
         ActionSpec(
             type="core.crystallize",
             payload=CoreCrystallizePayload,
             hazard="write",
             description="Crystallize a component to disk.",
-        )
+        ),
     )
-    registry.register(
+    _register_if_new(
+        registry,
         ActionSpec(
             type="core.prompt",
             payload=CorePromptPayload,
             enrich=_enrich_core_prompt,
             hazard="write",
             description="Submit a free-form prompt to CC.",
-        )
+        ),
+    )
+    _register_if_new(
+        registry,
+        ActionSpec(
+            type="crystallize.to-yaml",
+            payload=CrystallizeToYamlPayload,
+            enrich=_enrich_crystallize_to_yaml,
+            hazard="write",
+            description="Ask operator-Claude to crystallize a multi-tool span into a YAML pipeline.",
+        ),
     )
