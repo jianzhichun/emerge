@@ -129,8 +129,9 @@ def test_pipeline_write_lifecycle_registry(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "pipeline-policy"
     try:
+        from scripts.policy_config import PROMOTE_MIN_ATTEMPTS
         daemon = EmergeDaemon(root=ROOT)
-        for _ in range(20):
+        for _ in range(PROMOTE_MIN_ATTEMPTS):
             out = daemon._run_connector_pipeline(
                 tool_name="icc_exec", mode="write",
                 arguments={"connector": "mock", "pipeline": "add-wall", "length": 1000},
@@ -1284,8 +1285,9 @@ def test_hypermesh_pipeline_write_lifecycle_registry(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "hm-policy-test"
     try:
+        from scripts.policy_config import PROMOTE_MIN_ATTEMPTS
         daemon = EmergeDaemon(root=ROOT)
-        for _ in range(20):
+        for _ in range(PROMOTE_MIN_ATTEMPTS):
             out = daemon._run_connector_pipeline(
                 tool_name="icc_exec", mode="write",
                 arguments={
@@ -2518,7 +2520,9 @@ def test_frozen_pipeline_skips_auto_promotion(tmp_path, monkeypatch):
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path))
     daemon = EmergeDaemon(root=ROOT)
     key = "mock.read.frozen-test"
-    for _ in range(19):
+    # Run one fewer than the promote threshold so intent stays in explore
+    from scripts.policy_config import PROMOTE_MIN_ATTEMPTS
+    for _ in range(PROMOTE_MIN_ATTEMPTS - 1):
         daemon._flywheel.record_exec_event(
             arguments={
                 "intent_signature": key,

@@ -122,7 +122,9 @@ def test_auto_promotes_candidate_to_canary_when_thresholds_met(tmp_path: Path):
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
         daemon = EmergeDaemon(root=ROOT)
-        for _ in range(20):
+        # Run exactly PROMOTE_MIN_ATTEMPTS times to hit canary but not stable
+        from scripts.policy_config import PROMOTE_MIN_ATTEMPTS
+        for _ in range(PROMOTE_MIN_ATTEMPTS):
             out = daemon.call_tool(
                 "icc_exec",
                 {
@@ -150,8 +152,9 @@ def test_auto_rolls_back_canary_on_two_consecutive_failures(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
+        from scripts.policy_config import PROMOTE_MIN_ATTEMPTS
         daemon = EmergeDaemon(root=ROOT)
-        for _ in range(20):
+        for _ in range(PROMOTE_MIN_ATTEMPTS):
             daemon.call_tool(
                 "icc_exec",
                 {
@@ -199,8 +202,9 @@ def test_canary_sampling_progresses_to_stable(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
+        from scripts.policy_config import PROMOTE_MIN_ATTEMPTS, STABLE_MIN_ATTEMPTS
         daemon = EmergeDaemon(root=ROOT)
-        for _ in range(20):
+        for _ in range(PROMOTE_MIN_ATTEMPTS):
             daemon.call_tool(
                 "icc_exec",
                 {
@@ -212,11 +216,9 @@ def test_canary_sampling_progresses_to_stable(tmp_path: Path):
                     "verify_passed": True,
                 },
             )
-        # Operator confirmation required to unblock canary → stable gate.
-        daemon._policy_engine.apply_evidence(
-            "zwcad.write.add-wall", success=True, anchor_type="operator_action",
-        )
-        for _ in range(140):
+        # Run enough more to cross the stable threshold
+        remaining = STABLE_MIN_ATTEMPTS - PROMOTE_MIN_ATTEMPTS + 1
+        for _ in range(remaining):
             daemon.call_tool(
                 "icc_exec",
                 {
@@ -242,6 +244,7 @@ def test_stable_rolls_back_on_window_failure_rate(tmp_path: Path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "flywheel"
     try:
+        from scripts.policy_config import PROMOTE_MIN_ATTEMPTS, STABLE_MIN_ATTEMPTS
         daemon = EmergeDaemon(root=ROOT)
         # Stable icc_exec normally bridges to a crystallized pipeline; this test
         # needs raw exec() outcomes (including raises) to drive window_failure_rate.
@@ -253,12 +256,10 @@ def test_stable_rolls_back_on_window_failure_rate(tmp_path: Path):
             "script_ref": "connectors/cade/actions/zwcad_window_rate_test.py",
         }
 
-        for _ in range(20):
+        for _ in range(PROMOTE_MIN_ATTEMPTS):
             daemon.call_tool("icc_exec", {**common, "code": "x = 1", "verify_passed": True})
-        daemon._policy_engine.apply_evidence(
-            "zwcad.write.window-rate-test", success=True, anchor_type="operator_action",
-        )
-        for _ in range(140):
+        remaining = STABLE_MIN_ATTEMPTS - PROMOTE_MIN_ATTEMPTS + 1
+        for _ in range(remaining):
             daemon.call_tool("icc_exec", {**common, "code": "x = 1", "verify_passed": True})
 
         for i in range(20):

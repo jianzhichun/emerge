@@ -7,13 +7,15 @@ from hashlib import sha1
 from pathlib import Path
 from typing import Any
 
-PROMOTE_MIN_ATTEMPTS = 20
-PROMOTE_MIN_SUCCESS_RATE = 0.95
+INTENTS_SCHEMA_VERSION = 1
+
+PROMOTE_MIN_ATTEMPTS = 5
+PROMOTE_MIN_SUCCESS_RATE = 0.90
 PROMOTE_MIN_VERIFY_RATE = 0.98
 PROMOTE_MAX_HUMAN_FIX_RATE = 0.05
 
-STABLE_MIN_ATTEMPTS = 40
-STABLE_MIN_SUCCESS_RATE = 0.97
+STABLE_MIN_ATTEMPTS = 15
+STABLE_MIN_SUCCESS_RATE = 0.95
 STABLE_MIN_VERIFY_RATE = 0.99
 
 ROLLBACK_CONSECUTIVE_FAILURES = 2
@@ -160,6 +162,7 @@ _DEFAULTS: dict = {
         "stable_min_success_rate": STABLE_MIN_SUCCESS_RATE,
         "stable_min_verify_rate": STABLE_MIN_VERIFY_RATE,
         "window_size": WINDOW_SIZE,
+        "bridge_broken_threshold": BRIDGE_BROKEN_THRESHOLD,
     },
     "connector_root": "~/.emerge/connectors",
     "runner": {
@@ -173,7 +176,7 @@ _DEFAULTS: dict = {
 
 _POLICY_INT_KEYS = {
     "promote_min_attempts", "rollback_consecutive_failures",
-    "stable_min_attempts", "window_size",
+    "stable_min_attempts", "window_size", "bridge_broken_threshold",
 }
 _POLICY_FLOAT_KEYS = {
     "promote_min_success_rate", "promote_min_verify_rate",

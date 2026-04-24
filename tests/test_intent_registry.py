@@ -9,7 +9,7 @@ from scripts.intent_registry import IntentRegistry, registry_path
 
 def test_load_returns_empty_shape_when_missing(tmp_path: Path):
     data = IntentRegistry.load(tmp_path)
-    assert data == {"intents": {}}
+    assert data == {"intents": {}, "schema_version": 1}
 
 
 def test_update_persists_entry(tmp_path: Path):

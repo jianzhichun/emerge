@@ -347,6 +347,11 @@ class SpanTracker:
         demotions: list[tuple[int, str, str, str, str]] = []  # (ts_ms, sig, to_stage, reason, fingerprint)
         synthesis_skipped: list[tuple[str, str]] = []  # (sig, reason)
         for sig, entry in candidates.items():
+            # emerge.* intents are internal development spans — never bridgeable,
+            # never repeatable by operator-Claude. Excluding them from reflection
+            # prevents the flywheel from filling its own context with noise.
+            if sig.startswith("emerge."):
+                continue
             status = self.get_policy_status(sig)
             if status == "stable":
                 stable.append(sig)
@@ -382,7 +387,7 @@ class SpanTracker:
                 except Exception:
                     continue
                 sig = str(rec.get("intent_signature", "")).strip()
-                if not sig:
+                if not sig or sig.startswith("emerge."):
                     continue
                 entry = recent.setdefault(sig, {"ok": 0, "fail": 0})
                 if rec.get("outcome") == "success":

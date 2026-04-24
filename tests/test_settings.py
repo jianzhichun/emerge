@@ -25,10 +25,10 @@ def _write_settings(path: Path, data: dict) -> None:
 
 def test_load_settings_returns_defaults_when_no_file(tmp_path, monkeypatch):
     monkeypatch.setenv("EMERGE_SETTINGS_PATH", str(tmp_path / "nonexistent.json"))
-    from scripts.policy_config import load_settings, _reset_settings_cache
+    from scripts.policy_config import load_settings, _reset_settings_cache, PROMOTE_MIN_ATTEMPTS
     _reset_settings_cache()
     s = load_settings()
-    assert s["policy"]["promote_min_attempts"] == 20
+    assert s["policy"]["promote_min_attempts"] == PROMOTE_MIN_ATTEMPTS
     assert s["runner"]["timeout_s"] == 30
     assert s["metrics_sink"] == "local_jsonl"
 
@@ -37,16 +37,17 @@ def test_load_settings_file_overrides_defaults(tmp_path, monkeypatch):
     cfg = tmp_path / "settings.json"
     _write_settings(cfg, {"policy": {"promote_min_attempts": 50}})
     monkeypatch.setenv("EMERGE_SETTINGS_PATH", str(cfg))
-    from scripts.policy_config import load_settings, _reset_settings_cache
+    from scripts.policy_config import load_settings, _reset_settings_cache, PROMOTE_MIN_SUCCESS_RATE
     _reset_settings_cache()
     s = load_settings()
     assert s["policy"]["promote_min_attempts"] == 50
     # non-overridden key keeps default
-    assert s["policy"]["promote_min_success_rate"] == 0.95
+    assert s["policy"]["promote_min_success_rate"] == PROMOTE_MIN_SUCCESS_RATE
 
 
 def test_load_settings_env_path_overrides_default_home_path(tmp_path, monkeypatch):
     # env-path file wins over any default home path
+    from scripts.policy_config import PROMOTE_MIN_ATTEMPTS
     env_cfg = tmp_path / "custom.json"
     _write_settings(env_cfg, {"metrics_sink": "null"})
     # point default home somewhere else so it can't interfere
@@ -55,7 +56,7 @@ def test_load_settings_env_path_overrides_default_home_path(tmp_path, monkeypatc
     s = load_settings()
     assert s["metrics_sink"] == "null"
     # sanity: non-overridden keys still come from defaults
-    assert s["policy"]["promote_min_attempts"] == 20
+    assert s["policy"]["promote_min_attempts"] == PROMOTE_MIN_ATTEMPTS
 
 
 def test_load_settings_rejects_invalid_policy_value(tmp_path, monkeypatch):

@@ -198,8 +198,8 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/repl_admin.py" control-plane intents --pr
 
 Thresholds (from `scripts/policy_config.py` + `scripts/policy_engine.py`):
 
-- `explore → canary`: `attempts >= 20`, `success_rate >= 0.95`, `verify_rate >= 0.98`, `human_fix_rate <= 0.05`
-- `canary → stable`: `attempts >= 40`, `success_rate >= 0.97`, `verify_rate >= 0.99`, and at least one operator confirmation
+- `explore → canary`: `attempts >= 5`, `success_rate >= 0.90`, `verify_rate >= 0.98`, `human_fix_rate <= 0.05`
+- `canary → stable`: `attempts >= 15`, `success_rate >= 0.95`, `verify_rate >= 0.99`
 - `stable → bridge`: immediate next call bypasses LLM via `_try_flywheel_bridge`
 
 ## Vertical-Specific Distillation Profiles

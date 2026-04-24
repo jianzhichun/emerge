@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import shutil
 import time
 from pathlib import Path
 from typing import Any
 
-from scripts.policy_config import atomic_write_json, load_json_object, registry_root
+from scripts.policy_config import INTENTS_SCHEMA_VERSION, atomic_write_json, load_json_object, registry_root
 
 
 def registry_path(state_root: Path) -> Path:
     return registry_root(state_root) / "intents.json"
+
+
+def _backup_path(state_root: Path) -> Path:
+    return registry_root(state_root) / "intents.json.bak"
 
 
 def default_intent_entry() -> dict[str, Any]:
@@ -57,11 +62,22 @@ class IntentRegistry:
         data = load_json_object(registry_path(state_root), root_key="intents")
         if "intents" not in data or not isinstance(data["intents"], dict):
             data["intents"] = {}
+        # Schema migration: add version stamp if missing
+        if "schema_version" not in data:
+            data["schema_version"] = INTENTS_SCHEMA_VERSION
         return data
 
     @staticmethod
     def save(state_root: Path, data: dict[str, Any]) -> None:
-        atomic_write_json(registry_path(state_root), data)
+        path = registry_path(state_root)
+        # Backup previous version before overwrite (one-generation retention)
+        if path.exists():
+            try:
+                shutil.copy2(path, _backup_path(state_root))
+            except Exception:
+                pass
+        data["schema_version"] = INTENTS_SCHEMA_VERSION
+        atomic_write_json(path, data)
 
     @classmethod
     def get(cls, state_root: Path, intent_signature: str) -> dict[str, Any]:

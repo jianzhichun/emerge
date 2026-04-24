@@ -17,6 +17,7 @@ from scripts.emerge_daemon import EmergeDaemon
 from scripts import repl_admin
 from scripts.admin.api import _enrich_actions
 from scripts.remote_runner import RunnerExecutor, RunnerHTTPHandler, ThreadingHTTPServer
+from scripts.policy_config import PROMOTE_MIN_ATTEMPTS
 
 # Connector package archive entry contract (transport format, not local path).
 CONNECTOR_PACKAGE_INTENTS_FILENAME = "intents.json"
@@ -130,7 +131,7 @@ def test_repl_admin_policy_status_reports_pipeline_registry(tmp_path: Path):
         policy = _run_admin(["policy-status"], env)
         assert policy["session_id"] == "admin-session"
         assert policy["intent_count"] >= 1
-        assert policy["thresholds"]["promote_min_attempts"] == 20
+        assert policy["thresholds"]["promote_min_attempts"] == PROMOTE_MIN_ATTEMPTS
         keys = [item["key"] for item in policy["intents"]]
         assert "zwcad.write.add-wall" in keys
     finally:
