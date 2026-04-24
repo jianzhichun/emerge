@@ -306,12 +306,13 @@ class YAMLScenarioEngine:
                     # Handle list indexing (e.g., "rows.0.field")
                     try:
                         idx = int(part)
-                        val = val[idx] if idx < len(val) else None
+                        val = val[idx] if 0 <= idx < len(val) else None
                     except (ValueError, IndexError):
                         val = None
                 else:
                     val = None
                     break
+            # None propagates to context; downstream {{ var }} renders as empty string
             context[dest_key] = val
 
     # ── http steps ────────────────────────────────────────────────────────────

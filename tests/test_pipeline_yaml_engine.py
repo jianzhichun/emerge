@@ -189,7 +189,7 @@ def test_connector_call_reads_from_mock_pipeline():
     """YAMLScenarioEngine.connector_call delegates to PipelineEngine for actual pipeline."""
     from scripts.pipeline_engine import PipelineEngine
     engine = YAMLScenarioEngine()
-    pe = PipelineEngine(root=ROOT)
+    pe = PipelineEngine()
     scenario = {
         "steps": [
             {
@@ -221,7 +221,7 @@ def test_branch_connector_call_routes_correctly():
     """Branch condition selects connector_call based on context value."""
     from scripts.pipeline_engine import PipelineEngine
     engine = YAMLScenarioEngine()
-    pe = PipelineEngine(root=ROOT)
+    pe = PipelineEngine()
     scenario = {
         "steps": [
             {
@@ -232,6 +232,7 @@ def test_branch_connector_call_routes_correctly():
                     {
                         "name": "read-mock",
                         "type": "connector_call",
+                        "intent": "mock.read.layers",
                         "args": {"connector": "mock", "pipeline": "layers", "document_id": "branch-test"},
                         "extract": {"chosen": "rows.0.document_id"},
                     }
