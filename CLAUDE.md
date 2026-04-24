@@ -24,7 +24,9 @@
 ## Commands
 
 ```bash
-python -m pytest tests -q                                                # full suite
+python -m pytest tests/ -q --ignore=tests/test_runner_sse_benchmark.py --ignore=tests/test_metrics.py -k "not concurrent_tool_calls"  # fast suite (~766 tests, ~60s)
+python -m pytest tests/test_metrics.py -q                                # daemon metrics (isolation-sensitive; run alone)
+python -m pytest tests/test_runner_sse_benchmark.py -q                   # slow SSE benchmark (skip unless SSE-specific)
 python -m pytest tests/test_mcp_tools_integration.py::<name> -q          # single test
 python3 scripts/emerge_daemon.py                                         # run daemon
 python3 scripts/repl_admin.py runner-install-url --target-profile key    # runner bootstrap URL
