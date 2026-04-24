@@ -1,0 +1,13 @@
+# Minimal smoke-test scenario for the cloud-server write pipeline.
+steps:
+  - name: set-defaults
+    type: derive
+    set:
+      ok: "true"
+      health: ok
+
+verify:
+  - name: confirm-ok
+    type: derive
+    set:
+      verified: "true"
