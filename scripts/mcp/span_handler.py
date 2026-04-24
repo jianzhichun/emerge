@@ -82,7 +82,12 @@ class SpanHandlers:
                         pass
                     if self._record_bridge_outcome is not None:
                         try:
-                            self._record_bridge_outcome(intent_signature, success=True)
+                            _non_empty = self._classify_non_empty(bridge_result, mode)
+                            _keys = self._extract_row_keys(bridge_result, mode)
+                            self._record_bridge_outcome(
+                                intent_signature, success=True,
+                                non_empty=_non_empty, row_keys_sample=_keys,
+                            )
                         except Exception:
                             pass
                     return self._tool_ok_json({
@@ -350,3 +355,27 @@ class SpanHandlers:
                 "Future icc_span_open calls will bridge directly to this pipeline."
             ),
         })
+
+    # ------------------------------------------------------------------
+    # Bridge diagnostics helpers (mirrors FlywheelBridge in bridge.py)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _classify_non_empty(result: Any, mode: str) -> bool | None:
+        if mode != "read" or not isinstance(result, dict):
+            return None
+        rows = result.get("rows")
+        if rows is not None and not (
+            isinstance(rows, (list, tuple, dict, str)) and len(rows) == 0
+        ):
+            return True
+        return None
+
+    @staticmethod
+    def _extract_row_keys(result: Any, mode: str) -> "frozenset[str] | None":
+        if mode != "read" or not isinstance(result, dict):
+            return None
+        rows = result.get("rows")
+        if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+            return frozenset(rows[0].keys())
+        return None

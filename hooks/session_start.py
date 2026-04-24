@@ -71,6 +71,9 @@ def main() -> None:
     tracker.state.pop("turn_count", None)
     # Reset span nudge marker so the new session gets its own nudges.
     (state_root / "span-nudge-sent").unlink(missing_ok=True)
+    # Stale the deep reflection cache so changes to filters/thresholds take
+    # effect on turn 1 rather than waiting for the 15-minute TTL to expire.
+    (state_root / "reflection-cache" / "global.json").unlink(missing_ok=True)
     save_tracker(state_path, tracker)
     context_text = tracker.format_additional_context()
 
