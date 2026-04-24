@@ -349,3 +349,55 @@ def test_atomic_write_content_correct(tmp_path):
     st._atomic_write(target, data)
     result = json.loads(target.read_text(encoding="utf-8"))
     assert result == data
+
+
+# ── args_snapshot and result_summary ───────────────────────────────────────────
+
+def test_action_record_serializes_snapshot_and_summary():
+    from scripts.span_tracker import ActionRecord
+    a = ActionRecord(
+        seq=0,
+        tool_name="mcp__plugin_emerge__icc_exec",
+        args_hash="abc123",
+        has_side_effects=True,
+        ts_ms=1000,
+        args_snapshot={"intent_signature": "mock.read.layers"},
+        result_summary={"rows_count": 5},
+    )
+    d = a.to_dict()
+    assert d["args_snapshot"] == {"intent_signature": "mock.read.layers"}
+    assert d["result_summary"] == {"rows_count": 5}
+
+
+def test_action_record_omits_empty_snapshot():
+    from scripts.span_tracker import ActionRecord
+    a = ActionRecord(seq=0, tool_name="Read", args_hash="x", has_side_effects=False, ts_ms=1)
+    d = a.to_dict()
+    assert "args_snapshot" not in d
+    assert "result_summary" not in d
+
+
+def test_close_span_reads_args_snapshot_from_buffer(tmp_path):
+    """close_span populates ActionRecord.args_snapshot from the buffer JSONL."""
+    hook_state = tmp_path / "hook-state"
+    hook_state.mkdir(exist_ok=True)
+    (hook_state / "state.json").write_text("{}", encoding="utf-8")
+
+    from scripts.span_tracker import SpanTracker
+    tracker = SpanTracker(state_root=tmp_path, hook_state_root=hook_state)
+
+    span = tracker.open_span("mock.read.layers", description="")
+    buf = hook_state / "active-span-actions.jsonl"
+    buf.write_text(json.dumps({
+        "tool_name": "mcp__plugin_emerge__icc_exec",
+        "args_hash": "abc",
+        "has_side_effects": True,
+        "ts_ms": 1000,
+        "args_snapshot": {"intent_signature": "mock.read.layers"},
+        "result_summary": {"rows_count": 3},
+    }) + "\n")
+
+    closed = tracker.close_span(span, outcome="success")
+    assert len(closed.actions) == 1
+    assert closed.actions[0].args_snapshot == {"intent_signature": "mock.read.layers"}
+    assert closed.actions[0].result_summary == {"rows_count": 3}
