@@ -297,11 +297,18 @@ class YAMLScenarioEngine:
         else:
             result = pipeline_engine.run_write(call_args)
         for dest_key, src_path in step.get("extract", {}).items():
-            # src_path may be a dotted path into result
+            # src_path may be a dotted path into result (supports dict keys and list indices)
             val = result
             for part in src_path.split("."):
                 if isinstance(val, dict):
                     val = val.get(part)
+                elif isinstance(val, list):
+                    # Handle list indexing (e.g., "rows.0.field")
+                    try:
+                        idx = int(part)
+                        val = val[idx] if idx < len(val) else None
+                    except (ValueError, IndexError):
+                        val = None
                 else:
                     val = None
                     break

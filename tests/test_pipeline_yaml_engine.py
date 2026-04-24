@@ -181,3 +181,66 @@ def test_cli_step_extracts_stdout():
     }
     result = engine.execute(scenario, {}, mode="write")
     assert result["action_result"]["output"] == "hello"
+
+
+# ── connector_call ──────────────────────────────────────────────────────
+
+def test_connector_call_reads_from_mock_pipeline():
+    """YAMLScenarioEngine.connector_call delegates to PipelineEngine for actual pipeline."""
+    from scripts.pipeline_engine import PipelineEngine
+    engine = YAMLScenarioEngine()
+    pe = PipelineEngine(root=ROOT)
+    scenario = {
+        "steps": [
+            {
+                "name": "read-layers",
+                "type": "connector_call",
+                "intent": "mock.read.layers",
+                "args": {"connector": "mock", "pipeline": "layers", "document_id": "test-doc"},
+                "extract": {"layer_doc_id": "rows.0.document_id"},
+            }
+        ]
+    }
+    result = engine.execute(scenario, {}, pipeline_engine=pe, mode="write")
+    # Should have extracted document_id from first row of mock.read.layers
+    assert result["action_result"].get("layer_doc_id") == "test-doc"
+
+
+def test_connector_call_raises_without_engine():
+    engine = YAMLScenarioEngine()
+    scenario = {
+        "steps": [
+            {"name": "call", "type": "connector_call", "intent": "mock.read.layers", "args": {}}
+        ]
+    }
+    with pytest.raises(YAMLStepError, match="pipeline_engine"):
+        engine.execute(scenario, {}, mode="write")
+
+
+def test_branch_connector_call_routes_correctly():
+    """Branch condition selects connector_call based on context value."""
+    from scripts.pipeline_engine import PipelineEngine
+    engine = YAMLScenarioEngine()
+    pe = PipelineEngine(root=ROOT)
+    scenario = {
+        "steps": [
+            {
+                "name": "decide-read",
+                "type": "branch",
+                "condition": "{{ use_mock | int == 1 }}",
+                "when": [
+                    {
+                        "name": "read-mock",
+                        "type": "connector_call",
+                        "args": {"connector": "mock", "pipeline": "layers", "document_id": "branch-test"},
+                        "extract": {"chosen": "rows.0.document_id"},
+                    }
+                ],
+                "otherwise": [
+                    {"name": "fallback", "type": "derive", "set": {"chosen": "skipped"}}
+                ],
+            }
+        ]
+    }
+    result = engine.execute(scenario, {"use_mock": "1"}, pipeline_engine=pe, mode="write")
+    assert result["action_result"]["chosen"] == "branch-test"
