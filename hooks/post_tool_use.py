@@ -77,7 +77,7 @@ def _build_args_summary(tool_input: dict) -> str:
 _ICC_TOOL_SUFFIXES = frozenset({
     "icc_exec", "icc_span_open", "icc_span_close", "icc_crystallize",
     "icc_reconcile", "icc_span_approve", "icc_hub", "icc_compose",
-    "runner_notify",
+    "runner_notify",  # hook matcher excludes this today; included for forward-compat
 })
 
 
@@ -123,6 +123,8 @@ def _build_result_summary(raw_result: dict, tool_name: str) -> dict:
             summary["rows_count"] = len(val)
             if val and isinstance(val[0], dict):
                 summary["row_keys"] = list(val[0].keys())[:5]
+    if len(json.dumps(summary, ensure_ascii=False)) > 2048:
+        summary = {"_truncated": True, "keys_seen": len(inner)}
     return summary
 
 
