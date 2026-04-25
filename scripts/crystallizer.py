@@ -14,6 +14,7 @@ IndentedSafeDumper is also exported for callers that need YAML generation
 from __future__ import annotations
 
 import ast
+import json
 import os
 import tempfile
 import textwrap
@@ -397,20 +398,20 @@ class PipelineCrystallizer:
                 step: dict[str, Any] = {
                     "type": "connector_call",
                     # Hint at which child intent this step should invoke; operator
-                    # should replace with the real intent_signature after reviewing.
-                    "intent_signature": hint_sig or f"TODO.{mode}.step{a.get('seq', '?')}",
+                    # should replace with the real intent after reviewing.
+                    "intent": hint_sig or f"TODO.{mode}.step{a.get('seq', '?')}",
                     # Preserve seq / side-effect metadata as comments via a
                     # human-readable annotation field (not executed by PipelineEngine).
                     "_annotation": (
                         f"seq={a.get('seq', '?')} tool={a.get('tool_name', '?')} "
                         f"side_effects={a.get('has_side_effects', '?')} "
-                        + (f"result={result_hint}" if result_hint else "")
+                        + (f"result={json.dumps(result_hint, ensure_ascii=False)}" if result_hint else "")
                     ).strip(),
                 }
                 steps.append(step)
 
             if not steps:
-                steps = [{"type": "connector_call", "intent_signature": f"TODO.{mode}.step0"}]
+                steps = [{"type": "connector_call", "intent": f"TODO.{mode}.step0"}]
 
             yaml_data: dict[str, Any] = {
                 "intent_signature": intent_signature,

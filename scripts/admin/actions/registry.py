@@ -36,7 +36,7 @@ class ActionRegistry:
     @classmethod
     def get(cls, action_type: str) -> ActionSpec | None:
         """Alias for get_spec — returns None if the type is not registered."""
-        return cls._specs.get(action_type)
+        return cls.get_spec(action_type)
 
     @classmethod
     def known_types(cls) -> list[str]:
