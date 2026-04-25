@@ -40,3 +40,11 @@ def test_truncate_jsonl_below_threshold_no_change(tmp_path):
     mtime_after = path.stat().st_mtime_ns
 
     assert mtime_before == mtime_after, "File must not be touched when below threshold"
+
+
+def test_exec_default_timeout_is_cae_friendly(monkeypatch):
+    from scripts.policy_config import exec_limits
+
+    monkeypatch.delenv("EMERGE_EXEC_TIMEOUT_S", raising=False)
+
+    assert exec_limits()["timeout_s"] == 600

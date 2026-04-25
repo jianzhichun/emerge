@@ -282,6 +282,57 @@ def test_runner_push_pattern_alert_written_to_events_jsonl(tmp_path):
     srv.stop()
 
 
+def test_runner_push_pattern_enqueues_synthesis(tmp_path):
+    """Pattern detection should emit pending synthesis and call the synthesis agent."""
+    srv = _make_server_with_daemon(tmp_path)
+
+    calls = []
+
+    class _Agent:
+        def process_pattern(self, *, summary, runner_profile, events, event_path):
+            calls.append(
+                {
+                    "intent_signature": summary.intent_signature,
+                    "runner_profile": runner_profile,
+                    "events": list(events),
+                    "event_path": event_path,
+                }
+            )
+            return {"status": "queued", "job_id": "job-test"}
+
+    srv._synthesis_agent = _Agent()
+
+    body = json.dumps({"runner_profile": "p1", "machine_id": "m1"}).encode()
+    r = urllib.request.Request(f"http://localhost:{srv.port}/runner/online",
+                               data=body, headers={"Content-Type": "application/json"})
+    urllib.request.urlopen(r, timeout=5)
+
+    now_ms = int(time.time() * 1000)
+    for i in range(3):
+        event = {
+            "runner_profile": "p1",
+            "machine_id": "m1",
+            "session_role": "operator",
+            "event_type": "entity_added",
+            "app": "zwcad",
+            "payload": {"layer": "rooms", "content": f"room_{i}"},
+            "ts_ms": now_ms - i * 60_000,
+        }
+        body2 = json.dumps(event).encode()
+        r2 = urllib.request.Request(f"http://localhost:{srv.port}/runner/event",
+                                    data=body2, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(r2, timeout=5)
+
+    events_file = tmp_path / "repl" / "events" / "events-p1.jsonl"
+    lines = [json.loads(l) for l in events_file.read_text().splitlines() if l.strip()]
+    assert any(e.get("type") == "pattern_pending_synthesis" for e in lines)
+    assert calls, "synthesis agent should receive the detected pattern"
+    assert calls[0]["runner_profile"] == "p1"
+    assert len(calls[0]["events"]) >= 3
+    assert calls[0]["event_path"] == events_file
+    srv.stop()
+
+
 def test_runner_event_rejects_invalid_machine_id(tmp_path):
     """Path-traversal-like machine_id should be rejected with 400."""
     srv = _make_server_with_daemon(tmp_path)

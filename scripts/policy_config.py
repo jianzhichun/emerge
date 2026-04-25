@@ -43,7 +43,7 @@ USER_CONNECTOR_ROOT = Path("~/.emerge/connectors").expanduser()
 # icc_exec kernel resource limits. These bound wall-clock time and the volume of
 # captured stdout/stderr per exec call. Truncation produces a structured warning
 # in the response rather than an error — execution itself still succeeds.
-EXEC_DEFAULT_TIMEOUT_S = 120
+EXEC_DEFAULT_TIMEOUT_S = 600
 EXEC_DEFAULT_STDOUT_BYTES = 256 * 1024
 EXEC_DEFAULT_STDERR_BYTES = 64 * 1024
 

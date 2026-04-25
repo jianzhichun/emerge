@@ -302,10 +302,12 @@ class SpanTracker:
 
     def mark_skeleton_generated(self, intent_signature: str) -> None:
         """Record that a skeleton has been generated for this intent."""
-        candidates = self._load_candidates()
-        if intent_signature in candidates["intents"]:
-            candidates["intents"][intent_signature]["skeleton_generated"] = True
-            self._save_candidates(candidates)
+        policy_lock = getattr(self._get_policy_engine(), "_lock", self._own_lock)
+        with policy_lock:
+            candidates = self._load_candidates()
+            if intent_signature in candidates["intents"]:
+                candidates["intents"][intent_signature]["skeleton_generated"] = True
+                self._save_candidates(candidates)
 
     def skeleton_already_generated(self, intent_signature: str) -> bool:
         return bool(

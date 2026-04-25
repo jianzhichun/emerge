@@ -161,6 +161,7 @@ class PolicyEngine:
 
         state_root = self._get_state_root()
         ts_ms = int(ts_ms if ts_ms is not None else time.time() * 1000)
+        auto_crystallize_args: dict[str, Any] | None = None
 
         with self._lock:
             registry = IntentRegistry.load(state_root)
@@ -321,7 +322,9 @@ class PolicyEngine:
                     "ts_ms": ts_ms,
                 })
                 if new_stage == "canary":
-                    self._maybe_fire_auto_crystallize(entry, intent_signature, target_profile)
+                    auto_crystallize_args = self._maybe_prepare_auto_crystallize(
+                        entry, intent_signature, target_profile
+                    )
                 if new_stage == "stable":
                     _append_hub_stable_event(intent_signature)
 
@@ -336,6 +339,8 @@ class PolicyEngine:
 
             IntentRegistry.save(state_root, registry)
 
+        if auto_crystallize_args:
+            self._fire_auto_crystallize(auto_crystallize_args)
         self._notify_resources_changed()
         return dict(entry)
 
@@ -542,16 +547,16 @@ class PolicyEngine:
         except Exception:
             pass
 
-    def _maybe_fire_auto_crystallize(
+    def _maybe_prepare_auto_crystallize(
         self, entry: dict, intent_signature: str, target_profile: str
-    ) -> None:
+    ) -> dict[str, Any] | None:
         if not self._has_synthesizable_wal or not self._auto_crystallize:
-            return
+            return None
         try:
             if not self._has_synthesizable_wal(intent_signature, target_profile):
-                return
+                return None
         except Exception:
-            return
+            return None
         entry["synthesis_ready"] = True
         self._emit_sink("policy.synthesis_ready", {
             "candidate_key": intent_signature,
@@ -560,18 +565,22 @@ class PolicyEngine:
         })
         parts = intent_signature.split(".", 2)
         if len(parts) != 3:
-            return
+            return None
         connector, mode, name = parts
+        return {
+            "intent_signature": intent_signature,
+            "connector": connector,
+            "pipeline_name": name,
+            "mode": mode,
+            "target_profile": target_profile,
+        }
+
+    def _fire_auto_crystallize(self, kwargs: dict[str, Any]) -> None:
         try:
-            self._auto_crystallize(
-                intent_signature=intent_signature,
-                connector=connector,
-                pipeline_name=name,
-                mode=mode,
-                target_profile=target_profile,
-            )
+            if self._auto_crystallize:
+                self._auto_crystallize(**kwargs)
         except Exception:
-            _log.exception("auto-crystallize failed for %s", intent_signature)
+            _log.exception("auto-crystallize failed for %s", kwargs.get("intent_signature"))
 
 
 # ──────────────────────────────────────────────────────────────────────────────

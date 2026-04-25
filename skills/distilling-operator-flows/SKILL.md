@@ -22,9 +22,13 @@ events/events-{profile}.jsonl   (per-runner, via daemon _on_runner_event)
    ↓
 PatternDetector.ingest(events)  → PatternSummary when thresholds met
    ↓
-Distiller.distill(summary, confirmed=True)  → normalized intent_signature
+pattern_alert + pattern_pending_synthesis
    ↓
-icc_exec with that intent_signature (WAL records code)
+SynthesisAgent builds SynthesisJob (events + NOTES.md + synthesis_hints.yaml)
+   ↓
+configured provider returns replayable Python
+   ↓
+icc_exec with source=reverse_flywheel_synthesis (WAL records code)
    ↓
 icc_crystallize → `.py` + `.yaml` under ~/.emerge/connectors/<v>/pipelines/
    ↓
@@ -152,30 +156,43 @@ If empty:
 - Confirm `session_role == "operator"` (not `monitor_sub`) — `_on_runner_event` sets this correctly for tray events; pipeline hooks must set it explicitly.
 - Confirm `(app, event_type, layer)` tuple is **stable** across occurrences — varying `layer` splits the group and keeps each bucket below threshold.
 
-### 5. Distill a canonical intent_signature
+### 5. Confirm pending synthesis is queued
 
 ```python
-from scripts.distiller import Distiller
-d = Distiller()
-sig = d.distill(summaries[0], confirmed=True)
-print(sig)  # e.g. "zwcad.entity_added.label_room"
+from pathlib import Path
+import json
+
+events_path = Path.home() / ".emerge/state/events/events-<profile>.jsonl"
+events = [json.loads(l) for l in events_path.read_text().splitlines() if l.strip()]
+for e in events:
+    if e.get("type") in {"pattern_alert", "pattern_pending_synthesis", "synthesis_unconfigured", "synthesis_exec_succeeded"}:
+        print(e)
 ```
 
-The normalizer enforces the `<connector>.(read|write).<name>` convention via post-hoc edits — review and rename segments if needed (PolicyEngine rejects 2-part sigs via `pre_tool_use.py`).
+`pattern_pending_synthesis` is written by the daemon/local monitor. `SynthesisAgent` normalizes the detector signature, loads connector context, and calls the configured provider. If no provider is configured, the event stream records `synthesis_unconfigured` so the next session knows why the loop did not close.
 
-### 6. Record exec WAL with that intent_signature
+### 6. Configure or inspect the synthesis provider
 
-CC runs exploratory code with the signature:
+Production automation uses a command provider:
 
-```
-icc_exec(
-  intent_signature="zwcad.write.label_room",
-  code="<COM driver code>",
-  target_profile="<runner>"
-)
+```bash
+export EMERGE_SYNTHESIS_COMMAND="/path/to/provider-command"
+export EMERGE_SYNTHESIS_TIMEOUT_S=120
 ```
 
-`FlywheelRecorder.record_exec_event` updates session `candidates.json` **and** hands evidence to `PolicyEngine.apply_evidence` in one atomic step.
+The provider receives a `SynthesisJob` JSON object on stdin and returns:
+
+```json
+{
+  "connector": "zwcad",
+  "mode": "write",
+  "pipeline_name": "label_room",
+  "code": "__action = {'ok': True}",
+  "confidence": 0.82
+}
+```
+
+The code must assign `__result` for read pipelines or `__action` for write pipelines. Successful synthesis runs through normal `icc_exec`, so `FlywheelRecorder.record_exec_event` updates session `candidates.json` and hands evidence to `PolicyEngine.apply_evidence`.
 
 ### 7. Crystallize after 3+ successes
 

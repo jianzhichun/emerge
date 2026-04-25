@@ -91,15 +91,20 @@ class ToolHandlers:
             else:
                 code = self._resolve_exec_code(mode=mode, arguments=arguments)
                 repl = self._get_session(target_profile)
+                metadata = {
+                    "mode": mode,
+                    "target_profile": target_profile,
+                    "intent_signature": arguments.get("intent_signature", ""),
+                    "script_ref": arguments.get("script_ref", ""),
+                    "no_replay": bool(arguments.get("no_replay", False)),
+                }
+                for key in ("source", "synthesis_job_id", "source_intent_signature"):
+                    value = arguments.get(key)
+                    if value:
+                        metadata[key] = str(value)
                 result = repl.exec_code(
                     code,
-                    metadata={
-                        "mode": mode,
-                        "target_profile": target_profile,
-                        "intent_signature": arguments.get("intent_signature", ""),
-                        "script_ref": arguments.get("script_ref", ""),
-                        "no_replay": bool(arguments.get("no_replay", False)),
-                    },
+                    metadata=metadata,
                     inject_vars={"__args": arguments.get("script_args", {})},
                     result_var=str(arguments.get("result_var", "")).strip() or None,
                 )

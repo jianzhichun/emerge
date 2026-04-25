@@ -124,6 +124,39 @@ def test_crystallizer_refuses_wal_missing_return_var(tmp_path):
         os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
 
 
+def test_auto_crystallize_clears_synthesis_ready_after_policy_save(tmp_path, monkeypatch):
+    """Auto-crystallize must run after PolicyEngine saves the canary row.
+
+    Otherwise the crystallizer reads stale registry state and the outer policy
+    save can re-persist synthesis_ready even after files were written.
+    """
+    from scripts.emerge_daemon import EmergeDaemon
+    from scripts.intent_registry import IntentRegistry
+    from scripts.policy_config import PROMOTE_MIN_ATTEMPTS
+
+    monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("EMERGE_SESSION_ID", "auto-clear")
+    connector_root = tmp_path / "connectors"
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
+
+    daemon = EmergeDaemon(root=ROOT)
+    for i in range(PROMOTE_MIN_ATTEMPTS):
+        daemon.call_tool(
+            "icc_exec",
+            {
+                "code": f"__result = [{{'i': {i}}}]",
+                "intent_signature": "mock.read.auto-clear",
+                "result_var": "__result",
+            },
+        )
+
+    py_path = connector_root / "mock" / "pipelines" / "read" / "auto-clear.py"
+    assert py_path.exists()
+    entry = IntentRegistry.get(tmp_path / "state", "mock.read.auto-clear")
+    assert entry.get("stage") == "canary"
+    assert "synthesis_ready" not in entry
+
+
 def test_icc_crystallize_write_pipeline(tmp_path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "cryst-write-test"

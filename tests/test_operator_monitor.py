@@ -56,6 +56,41 @@ def test_process_local_file_writes_events_local_jsonl(tmp_path):
     assert alert["meta"]["occurrences"] >= 3
 
 
+def test_process_local_file_enqueues_synthesis(tmp_path):
+    state_root = tmp_path / "repl"
+    state_root.mkdir()
+    events_file = _make_events(3, tmp_path)
+    calls = []
+
+    class _Agent:
+        def process_pattern(self, *, summary, runner_profile, events, event_path):
+            calls.append(
+                {
+                    "intent_signature": summary.intent_signature,
+                    "runner_profile": runner_profile,
+                    "events": list(events),
+                    "event_path": event_path,
+                }
+            )
+            return {"status": "queued", "job_id": "job-local"}
+
+    monitor = OperatorMonitor(
+        machines={},
+        poll_interval_s=0.05,
+        event_root=tmp_path / "operator-events",
+        state_root=state_root,
+        synthesis_agent=_Agent(),
+    )
+    monitor.process_local_file(events_file)
+
+    events_local = state_root / "events" / "events-local.jsonl"
+    lines = [json.loads(l) for l in events_local.read_text().splitlines() if l.strip()]
+    assert any(e.get("type") == "pattern_pending_synthesis" for e in lines)
+    assert calls
+    assert calls[0]["runner_profile"] == "local"
+    assert calls[0]["event_path"] == events_local
+
+
 def test_process_local_file_no_events_does_not_write(tmp_path):
     """No events → events-local.jsonl not created."""
     state_root = tmp_path / "repl"

@@ -288,6 +288,12 @@ class StateTracker:
                     else:
                         break
                 token["deltas"] = kept
+                encoded = json.dumps(token, ensure_ascii=True, separators=(",", ":"))
+                if len(encoded) > budget_chars:
+                    token["open_risks"] = []
+                    encoded = json.dumps(token, ensure_ascii=True, separators=(",", ":"))
+                if len(encoded) > budget_chars:
+                    token["deltas"] = []
         return token
 
     def format_additional_context(
@@ -308,11 +314,38 @@ class StateTracker:
         if is_idle:
             return f"FLYWHEEL_TOKEN\n{token_json}"
 
-        return (
+        rendered = (
             f"Delta\n{delta_text}\n\n"
             f"Open Risks\n{risks_text}\n\n"
             f"FLYWHEEL_TOKEN\n{token_json}"
         )
+        if not budget_chars or len(rendered) <= budget_chars:
+            return rendered
+
+        token_block = f"FLYWHEEL_TOKEN\n{token_json}"
+        if len(token_block) > budget_chars:
+            minimal_token = {
+                "schema_version": token.get("schema_version", "flywheel.v1"),
+                "verification_state": token.get("verification_state", "verified"),
+                "consistency_window_ms": token.get("consistency_window_ms", 0),
+                "open_risks": [],
+                "deltas": [],
+                "active_span_id": token.get("active_span_id"),
+                "active_span_intent": token.get("active_span_intent"),
+            }
+            token_json = json.dumps(minimal_token, ensure_ascii=True, separators=(",", ":"))
+            token_block = f"FLYWHEEL_TOKEN\n{token_json}"
+            if len(token_block) > budget_chars:
+                return token_block[:budget_chars]
+
+        remaining = budget_chars - len(token_block)
+        if remaining <= 2:
+            return token_block
+        prefix_budget = remaining - 2  # separator before token
+        prefix = _fit_context_sections(delta_text, risks_text, prefix_budget)
+        if not prefix:
+            return token_block
+        return f"{prefix}\n\n{token_block}"
 
     def _partition_deltas(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         deltas = list(self.state["deltas"])
@@ -323,6 +356,38 @@ class StateTracker:
 
     def to_dict(self) -> dict[str, Any]:
         return self.state
+
+
+def _fit_context_sections(delta_text: str, risks_text: str, budget_chars: int) -> str:
+    if budget_chars <= 0:
+        return ""
+
+    def _fit_block(title: str, body: str, limit: int) -> str:
+        if limit <= len(title) + 1:
+            return ""
+        lines = body.splitlines() or ["- None."]
+        kept: list[str] = []
+        current = len(title) + 1
+        for line in lines:
+            extra = len(line) + (1 if kept else 0)
+            if current + extra > limit:
+                if not kept and limit > len(title) + 6:
+                    kept.append(line[: max(0, limit - len(title) - 6)] + "...")
+                break
+            kept.append(line)
+            current += extra
+        return f"{title}\n" + ("\n".join(kept) if kept else "- ...")
+
+    delta_budget = max(len("Delta\n- ..."), int(budget_chars * 0.65))
+    delta_block = _fit_block("Delta", delta_text, min(delta_budget, budget_chars))
+    remaining = budget_chars - len(delta_block)
+    if remaining <= 2:
+        return delta_block[:budget_chars]
+    risk_block = _fit_block("Open Risks", risks_text, remaining - 2)
+    if not risk_block:
+        return delta_block
+    combined = f"{delta_block}\n\n{risk_block}"
+    return combined[:budget_chars]
 
 
 def _normalize_state(raw: Any) -> dict[str, Any]:

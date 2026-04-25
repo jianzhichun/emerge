@@ -17,6 +17,7 @@ from scripts.policy_config import events_root
 from scripts.event_appender import EventAppender
 from scripts.runner_state_service import RunnerStateService
 from scripts.sse_hub import SSEHub
+from scripts.distiller import Distiller
 
 _KEEPALIVE_INTERVAL_S = 20.0
 _RUNNER_DISCONNECT_GRACE_MS = 45_000
@@ -128,6 +129,7 @@ class DaemonHTTPServer:
         self._detector = _PatternDetector()
         self._runner_event_buffers: dict[str, deque] = {}
         self._runner_buffers_lock = threading.Lock()
+        self._synthesis_agent = self._make_synthesis_agent()
         # Cockpit UI + /api/* when served on the same port as MCP (see InProcessCockpitBridge)
         self._cockpit_sse_clients: list[Any] = []
         self._cockpit_sse_lock = threading.Lock()
@@ -138,6 +140,18 @@ class DaemonHTTPServer:
         self._runner_sse_hub = SSEHub(queue_size=64)
         self._request_count = 0
         self._request_error_count = 0
+
+    def _make_synthesis_agent(self):
+        if not hasattr(self._daemon, "call_tool"):
+            return None
+        try:
+            from scripts.synthesis_agent import SynthesisAgent
+            return SynthesisAgent(
+                state_root=self._state_root,
+                exec_tool=lambda args: self._daemon.call_tool("icc_exec", args),
+            )
+        except Exception:
+            return None
 
     def cockpit_broadcast(self, event: dict) -> None:
         """Push SSE event to cockpit browsers connected to /api/sse/status."""
@@ -312,6 +326,32 @@ class DaemonHTTPServer:
                 self._append_event(
                     events_root(self._state_root) / f"events-{runner_profile}.jsonl", alert
                 )
+                event_path = events_root(self._state_root) / f"events-{runner_profile}.jsonl"
+                pending = {
+                    "type": "pattern_pending_synthesis",
+                    "ts_ms": ts_ms,
+                    "runner_profile": runner_profile,
+                    "intent_signature": Distiller._normalise(summary.intent_signature),
+                    "source_intent_signature": summary.intent_signature,
+                    "meta": {
+                        "occurrences": summary.occurrences,
+                        "window_minutes": round(summary.window_minutes, 1),
+                        "machine_ids": summary.machine_ids,
+                        "detector_signals": summary.detector_signals,
+                    },
+                }
+                self._append_event(event_path, pending)
+                agent = getattr(self, "_synthesis_agent", None)
+                if agent is not None:
+                    try:
+                        agent.process_pattern(
+                            summary=summary,
+                            runner_profile=runner_profile,
+                            events=snapshot,
+                            event_path=event_path,
+                        )
+                    except Exception:
+                        pass
                 self._runner_state.set_alert(
                     runner_profile,
                     {

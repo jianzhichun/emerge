@@ -81,6 +81,7 @@ For vertical `<vertical>` (for example `zwcad`), create in **user-space**:
 - `~/.emerge/connectors/<vertical>/pipelines/read/state.py`
 - `~/.emerge/connectors/<vertical>/pipelines/write/apply-change.yaml`
 - `~/.emerge/connectors/<vertical>/pipelines/write/apply-change.py`
+- `~/.emerge/connectors/<vertical>/synthesis_hints.yaml` when reverse-flywheel synthesis should learn from operator events
 - tests (in plugin project, prefer existing suites unless there is a strong reason to split files):
   - `tests/test_pipeline_engine.py`
   - `tests/test_mcp_tools_integration.py`
@@ -173,6 +174,21 @@ Any red flag means stop and return to RED.
 
 ## Reverse Flywheel Integration
 
+When reverse-flywheel synthesis is in scope, write `synthesis_hints.yaml`
+beside `NOTES.md`. Keep it operational and compact:
+
+```yaml
+api_imports:
+  - "from vendor_api import app"
+event_examples:
+  entity_added:
+    python: "__action = {'ok': True}"
+verify_guidance:
+  read: "Return non-empty rows with stable keys."
+  write: "Set __action['ok'] only after the application confirms the mutation."
+default_exec_timeout: 600
+```
+
 When any `intent_signature` for this vertical reaches `stable` status in
 `policy://current`, prompt the operator:
 
@@ -184,5 +200,6 @@ When any `intent_signature` for this vertical reaches `stable` status in
 This connects the forward flywheel (AI learns to DO tasks) to the reverse
 flywheel (AI learns to RECOGNIZE when humans are doing those tasks repeatedly).
 The vertical adapter shares the same `intent_signature` namespace and feeds the
-same policy registry — a confirmed operator intent goes through Distiller and
-enters the flywheel as a new candidate at the explore stage.
+same policy registry — a repeated operator pattern becomes
+`pattern_pending_synthesis`, `SynthesisAgent` calls the configured provider, and
+successful code enters the flywheel via `icc_exec` WAL at explore stage.

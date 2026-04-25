@@ -27,6 +27,7 @@ Execution rules:
   - next recommended action
 7. Connector notes handling (must match current architecture):
   - keep `~/.emerge/connectors/<connector>/NOTES.md` concise and operational (no long dumps)
+  - when reverse flywheel synthesis is desired, also create `~/.emerge/connectors/<connector>/synthesis_hints.yaml` with scripting imports, event-to-API examples, verify guidance, and timeout notes
   - SessionStart only exposes a compact connector index
   - full NOTES are injected on-demand by `PreToolUse` on the first approved `icc_exec` / `icc_span_open` / `icc_crystallize` call per connector
 
