@@ -319,70 +319,110 @@ class SpanHandlers:
             )
         connector, mode, pipeline_name = parts
         target_root = resolve_connector_root()
-        pending_py = target_root / connector / "pipelines" / mode / "_pending" / f"{pipeline_name}.py"
+        pending_dir = target_root / connector / "pipelines" / mode / "_pending"
+        pending_py = pending_dir / f"{pipeline_name}.py"
+        pending_yaml = pending_dir / f"{pipeline_name}.yaml"
 
-        if not pending_py.exists():
+        if pending_py.exists():
+            real_dir = target_root / connector / "pipelines" / mode
+            real_dir.mkdir(parents=True, exist_ok=True)
+            real_py = real_dir / f"{pipeline_name}.py"
+            real_yaml = real_dir / f"{pipeline_name}.yaml"
+
+            fd, tmp_py = tempfile.mkstemp(prefix=".approve-", dir=str(real_dir))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(pending_py.read_text(encoding="utf-8"))
+                os.replace(tmp_py, real_py)
+            except Exception as exc:
+                if os.path.exists(tmp_py):
+                    os.unlink(tmp_py)
+                return self._tool_error(f"icc_span_approve: failed to move skeleton: {exc}")
+
+            pending_py.unlink(missing_ok=True)
+
+            mode_step_key = "read_steps" if mode == "read" else "write_steps"
+            yaml_data: dict[str, Any] = {
+                "intent_signature": intent_signature,
+                "rollback_or_stop_policy": "stop",
+                mode_step_key: ["run_read" if mode == "read" else "run_write"],
+                "verify_steps": ["verify_read" if mode == "read" else "verify_write"],
+                "span_approved": True,
+            }
+            try:
+                yaml_src = IndentedSafeDumper.dump_yaml(yaml_data)
+                fd2, tmp_yaml = tempfile.mkstemp(prefix=".approve-yaml-", dir=str(real_dir))
+                try:
+                    with os.fdopen(fd2, "w", encoding="utf-8") as f:
+                        f.write(yaml_src)
+                    os.replace(tmp_yaml, real_yaml)
+                except Exception:
+                    if os.path.exists(tmp_yaml):
+                        os.unlink(tmp_yaml)
+                    raise
+            except Exception as exc:
+                return self._tool_error(f"icc_span_approve: failed to generate YAML: {exc}")
+
+            try:
+                self._get_sink().emit("span.approved", {"intent_signature": intent_signature})
+            except Exception:
+                pass
+
+            return self._tool_ok_json({
+                "approved": True,
+                "intent_signature": intent_signature,
+                "pipeline_path": str(real_py),
+                "yaml_path": str(real_yaml),
+                "bridge_active": True,
+                "message": (
+                    f"Pipeline activated at {real_py}. "
+                    "Future icc_span_open calls will bridge directly to this pipeline."
+                ),
+            })
+
+        elif pending_yaml.exists():
+            # YAML scenario pipeline: the .yaml IS both metadata and pipeline.
+            # Move it to the real dir; no companion .py or separate metadata file needed.
+            import shutil
+            real_dir = target_root / connector / "pipelines" / mode
+            real_dir.mkdir(parents=True, exist_ok=True)
+            real_yaml = real_dir / f"{pipeline_name}.yaml"
+
+            fd3, tmp_yaml2 = tempfile.mkstemp(prefix=".approve-yaml-", dir=str(real_dir))
+            try:
+                with os.fdopen(fd3, "w", encoding="utf-8") as f:
+                    f.write(pending_yaml.read_text(encoding="utf-8"))
+                os.replace(tmp_yaml2, real_yaml)
+            except Exception as exc:
+                if os.path.exists(tmp_yaml2):
+                    os.unlink(tmp_yaml2)
+                return self._tool_error(f"icc_span_approve: failed to move YAML skeleton: {exc}")
+
+            pending_yaml.unlink(missing_ok=True)
+
+            try:
+                self._get_sink().emit("span.approved", {"intent_signature": intent_signature})
+            except Exception:
+                pass
+
+            return self._tool_ok_json({
+                "ok": True,
+                "approved": True,
+                "intent_signature": intent_signature,
+                "pipeline_path": str(real_yaml),
+                "bridge_active": True,
+                "message": (
+                    f"YAML pipeline activated at {real_yaml}. "
+                    "Future icc_span_open calls will bridge directly to this pipeline."
+                ),
+            })
+
+        else:
             return self._tool_error(
-                f"icc_span_approve: skeleton not found at {pending_py}. "
+                f"icc_span_approve: skeleton not found at {pending_py} or {pending_yaml}. "
                 "Run icc_span_close to generate the skeleton first, then implement it before "
                 "approving. Check _pending/ directory."
             )
-
-        real_dir = target_root / connector / "pipelines" / mode
-        real_dir.mkdir(parents=True, exist_ok=True)
-        real_py = real_dir / f"{pipeline_name}.py"
-        real_yaml = real_dir / f"{pipeline_name}.yaml"
-
-        fd, tmp_py = tempfile.mkstemp(prefix=".approve-", dir=str(real_dir))
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(pending_py.read_text(encoding="utf-8"))
-            os.replace(tmp_py, real_py)
-        except Exception as exc:
-            if os.path.exists(tmp_py):
-                os.unlink(tmp_py)
-            return self._tool_error(f"icc_span_approve: failed to move skeleton: {exc}")
-
-        pending_py.unlink(missing_ok=True)
-
-        mode_step_key = "read_steps" if mode == "read" else "write_steps"
-        yaml_data: dict[str, Any] = {
-            "intent_signature": intent_signature,
-            "rollback_or_stop_policy": "stop",
-            mode_step_key: ["run_read" if mode == "read" else "run_write"],
-            "verify_steps": ["verify_read" if mode == "read" else "verify_write"],
-            "span_approved": True,
-        }
-        try:
-            yaml_src = IndentedSafeDumper.dump_yaml(yaml_data)
-            fd2, tmp_yaml = tempfile.mkstemp(prefix=".approve-yaml-", dir=str(real_dir))
-            try:
-                with os.fdopen(fd2, "w", encoding="utf-8") as f:
-                    f.write(yaml_src)
-                os.replace(tmp_yaml, real_yaml)
-            except Exception:
-                if os.path.exists(tmp_yaml):
-                    os.unlink(tmp_yaml)
-                raise
-        except Exception as exc:
-            return self._tool_error(f"icc_span_approve: failed to generate YAML: {exc}")
-
-        try:
-            self._get_sink().emit("span.approved", {"intent_signature": intent_signature})
-        except Exception:
-            pass
-
-        return self._tool_ok_json({
-            "approved": True,
-            "intent_signature": intent_signature,
-            "pipeline_path": str(real_py),
-            "yaml_path": str(real_yaml),
-            "bridge_active": True,
-            "message": (
-                f"Pipeline activated at {real_py}. "
-                "Future icc_span_open calls will bridge directly to this pipeline."
-            ),
-        })
 
     # ------------------------------------------------------------------
     # Bridge diagnostics helpers (mirrors FlywheelBridge in bridge.py)

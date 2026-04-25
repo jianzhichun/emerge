@@ -2456,6 +2456,62 @@ def test_span_close_auto_activate_respects_opt_out_env(tmp_path, monkeypatch):
     assert "icc_span_approve" in body.get("next_step", "")
 
 
+def test_span_approve_promotes_yaml_skeleton_from_pending(tmp_path, monkeypatch):
+    """icc_span_approve must promote a .yaml skeleton (YAML scenario pipeline) from
+    _pending/ to the real pipeline dir — not just .py skeletons.
+    CLAUDE.md North Star: a pipeline stuck in _pending/ is a violation."""
+    import json
+    import yaml as _yaml
+    daemon, hook_state = _make_span_daemon(tmp_path, monkeypatch)
+    connector_root = tmp_path / "connectors"
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
+    # Pre-create a YAML skeleton in _pending/ (multi-tool span scenario)
+    pending_dir = connector_root / "lark" / "pipelines" / "write" / "_pending"
+    pending_dir.mkdir(parents=True)
+    pending_yaml = pending_dir / "create-doc.yaml"
+    pending_yaml.write_text(
+        "intent_signature: lark.write.create-doc\n"
+        "rollback_or_stop_policy: stop\n"
+        "steps:\n"
+        "  - tool: lark.doc.create\n"
+        "    args: {title: '{{title}}'}\n",
+        encoding="utf-8",
+    )
+    # Drive to stable so approve is allowed
+    import scripts.policy_engine as pe
+    monkeypatch.setattr(pe, "PROMOTE_MIN_ATTEMPTS", 2)
+    monkeypatch.setattr(pe, "PROMOTE_MIN_SUCCESS_RATE", 0.5)
+    monkeypatch.setattr(pe, "PROMOTE_MAX_HUMAN_FIX_RATE", 1.0)
+    monkeypatch.setattr(pe, "STABLE_MIN_ATTEMPTS", 4)
+    monkeypatch.setattr(pe, "STABLE_MIN_SUCCESS_RATE", 0.5)
+    for _ in range(5):
+        s = daemon._span_tracker.open_span("lark.write.create-doc")
+        daemon._open_spans[s.span_id] = s
+        daemon._span_tracker.close_span(s, outcome="success")
+    _confirm_operator(daemon, "lark.write.create-doc")
+    s = daemon._span_tracker.open_span("lark.write.create-doc")
+    daemon._open_spans[s.span_id] = s
+    daemon._span_tracker.close_span(s, outcome="success")
+
+    result = daemon.call_tool("icc_span_approve", {"intent_signature": "lark.write.create-doc"})
+    assert result.get("isError") is not True, result
+    body = json.loads(result["content"][0]["text"])
+    assert body.get("ok") is True or body.get("approved") is True
+    # YAML moved to real dir
+    real_yaml = connector_root / "lark" / "pipelines" / "write" / "create-doc.yaml"
+    assert real_yaml.exists(), "YAML skeleton must be promoted to real pipeline dir"
+    assert not pending_yaml.exists(), "YAML skeleton must be removed from _pending"
+    # No stray .py created for a YAML-only pipeline
+    real_py = connector_root / "lark" / "pipelines" / "write" / "create-doc.py"
+    assert not real_py.exists(), "must not create a .py for a YAML scenario pipeline"
+    # pipeline_path in response must point to the .yaml
+    assert str(body.get("pipeline_path", "")).endswith(".yaml"), \
+        f"pipeline_path must end with .yaml, got: {body.get('pipeline_path')}"
+    # YAML content preserved intact
+    meta = _yaml.safe_load(real_yaml.read_text())
+    assert meta["intent_signature"] == "lark.write.create-doc"
+
+
 def test_span_approve_errors_when_not_stable(tmp_path, monkeypatch):
     daemon, _ = _make_span_daemon(tmp_path, monkeypatch)
     result = daemon.call_tool("icc_span_approve", {"intent_signature": "lark.write.never-run"})
