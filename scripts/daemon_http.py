@@ -9,18 +9,20 @@ import threading
 import time
 import uuid
 from collections import OrderedDict, deque
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 
 from scripts.policy_config import events_root
 from scripts.event_appender import EventAppender
+from scripts.http_limits import BoundedThreadingHTTPServer, RequestTooLarge, read_limited_body
 from scripts.runner_state_service import RunnerStateService
 from scripts.sse_hub import SSEHub
-from scripts.distiller import Distiller
 
 _KEEPALIVE_INTERVAL_S = 20.0
 _RUNNER_DISCONNECT_GRACE_MS = 45_000
+_DEFAULT_RUNNER_EVENT_BUFFER_MAX = 200
+_MESSAGE_ID_FILE_MAX = 100_000
 
 
 class _LRUSet:
@@ -140,7 +142,7 @@ class DaemonHTTPServer:
             materialize_active_profiles(self._state_root)
         except Exception:
             pass
-        self._server: ThreadingHTTPServer | None = None
+        self._server: BoundedThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         # Runner monitor metadata is managed by an extracted service.
         self._runner_state = RunnerStateService()
@@ -161,6 +163,13 @@ class DaemonHTTPServer:
         from scripts.pattern_detector import PatternDetector as _PatternDetector
         from scripts.orchestrator.suggestion_aggregator import SuggestionAggregator
         self._detector = _PatternDetector()
+        try:
+            self._runner_event_buffer_max = max(
+                1,
+                int(os.environ.get("EMERGE_RUNNER_EVENT_BUFFER_MAX", str(_DEFAULT_RUNNER_EVENT_BUFFER_MAX))),
+            )
+        except ValueError:
+            self._runner_event_buffer_max = _DEFAULT_RUNNER_EVENT_BUFFER_MAX
         self._runner_event_buffers: dict[str, deque] = {}
         self._runner_buffers_lock = threading.Lock()
         self._runner_seen_message_ids = _LRUSet(self._load_seen_message_ids())
@@ -217,6 +226,16 @@ class DaemonHTTPServer:
             return []
         return seen[-10000:]
 
+    def _compact_seen_message_ids_file(self) -> None:
+        path = self._seen_message_ids_path()
+        try:
+            lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            if len(lines) <= _MESSAGE_ID_FILE_MAX:
+                return
+            path.write_text("\n".join(lines[-_MESSAGE_ID_FILE_MAX:]) + "\n", encoding="utf-8")
+        except OSError:
+            pass
+
     def _remember_message_id(self, message_id: str) -> None:
         if not message_id:
             return
@@ -225,6 +244,7 @@ class DaemonHTTPServer:
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as f:
                 f.write(message_id + "\n")
+            self._compact_seen_message_ids_file()
         except OSError:
             pass
 
@@ -262,7 +282,7 @@ class DaemonHTTPServer:
 
     def start(self) -> None:
         handler = _make_handler(self)
-        self._server = ThreadingHTTPServer((self._bind_host, self._port), handler)
+        self._server = BoundedThreadingHTTPServer((self._bind_host, self._port), handler)
         self._port = self._server.server_address[1]
         self._write_pid()
         self._thread = threading.Thread(
@@ -396,7 +416,10 @@ class DaemonHTTPServer:
         if runner_profile and orig_type not in skip_detector:
             window_ms = self._detector.FREQ_WINDOW_MS
             with self._runner_buffers_lock:
-                buf = self._runner_event_buffers.setdefault(runner_profile, deque())
+                buf = self._runner_event_buffers.setdefault(
+                    runner_profile,
+                    deque(maxlen=self._runner_event_buffer_max),
+                )
                 buf.append({
                     **{k: v for k, v in payload.items()
                        if k not in ("runner_profile", "ts_ms", "machine_id")},
@@ -433,20 +456,6 @@ class DaemonHTTPServer:
                     events_root(self._state_root) / f"events-{runner_profile}.jsonl", alert
                 )
                 event_path = events_root(self._state_root) / f"events-{runner_profile}.jsonl"
-                pending = {
-                    "type": "pattern_pending_synthesis",
-                    "ts_ms": ts_ms,
-                    "runner_profile": runner_profile,
-                    "intent_signature": Distiller._normalise(summary.intent_signature),
-                    "source_intent_signature": summary.intent_signature,
-                    "meta": {
-                        "occurrences": summary.occurrences,
-                        "window_minutes": round(summary.window_minutes, 1),
-                        "machine_ids": summary.machine_ids,
-                        "detector_signals": summary.detector_signals,
-                    },
-                }
-                self._append_event(event_path, pending)
                 agent = getattr(self, "_synthesis_agent", None)
                 if agent is not None:
                     try:
@@ -934,8 +943,14 @@ def _make_handler(srv: "DaemonHTTPServer"):
                 self._cockpit = _bridge
                 return _CockpitHandler.do_POST(self)
             self._cockpit = None
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length) if length else b""
+            try:
+                body = read_limited_body(self)
+            except RequestTooLarge as exc:
+                self._send_json(413, {"ok": False, "error": str(exc)})
+                return
+            except ValueError as exc:
+                self._send_json(400, {"ok": False, "error": str(exc)})
+                return
             if path == "/mcp":
                 srv._last_mcp_ts = time.time()
                 session_id = qs.get("session_id", [None])[0]

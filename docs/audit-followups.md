@@ -7,6 +7,8 @@ Audit source: `memory/feedback_claude_md_bias.md` — frame-external 5-blind-spo
 ## Open
 
 - **factory test invariant**: every `_make_*`, `_build_*`, `_create_*` method on a class must have at least one test that exercises the factory **without** monkeypatching its return value. Refactors, especially "pre-release cleanup" style edits, frequently split factory bodies; this test class catches that early.
+- **HTTP body limit invariant**: every POST handler that calls `rfile.read(Content-Length)` must clamp the length via `scripts/http_limits.py` before reading. Route-level validation after reading is too late for daemon/runner stability.
+- **locked state RMW invariant**: any shared `state.json` read-modify-write must use `state_tracker.with_locked_tracker()` or an equivalent file lock. Atomic replace alone prevents torn writes, not lost updates.
 
 ## Closed
 

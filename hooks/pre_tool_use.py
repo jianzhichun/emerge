@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.policy_config import default_hook_state_root  # noqa: E402
-from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
+from scripts.state_tracker import with_locked_tracker  # noqa: E402
 
 # Compiled once at module load — shared across all validator functions.
 _SIG_RE = re.compile(r'^[a-z][a-z0-9_-]*\.(read|write|workflow)\.[a-z][a-z0-9_./-]*$')
@@ -142,14 +142,23 @@ def _connector_notes_context(sig: str, max_chars: int = 1200) -> str:
     state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
 
+    should_inject = False
+
+    def _mark_injected(tracker) -> None:
+        nonlocal should_inject
+        raw = tracker.state.get("notes_injected", [])
+        seen = {str(item).strip() for item in raw if str(item).strip()} if isinstance(raw, list) else set()
+        if connector in seen:
+            return
+        seen.add(connector)
+        tracker.state["notes_injected"] = sorted(seen)
+        should_inject = True
+
     try:
-        tracker = load_tracker(state_path)
+        with_locked_tracker(state_path, _mark_injected)
     except Exception:
         return ""
-
-    raw = tracker.state.get("notes_injected", [])
-    seen = {str(item).strip() for item in raw if str(item).strip()} if isinstance(raw, list) else set()
-    if connector in seen:
+    if not should_inject:
         return ""
 
     notes_path = Path.home() / ".emerge" / "connectors" / connector / "NOTES.md"
@@ -159,13 +168,6 @@ def _connector_notes_context(sig: str, max_chars: int = 1200) -> str:
             notes_text = notes_path.read_text(encoding="utf-8").strip()
     except OSError:
         notes_text = ""
-
-    seen.add(connector)
-    tracker.state["notes_injected"] = sorted(seen)
-    try:
-        save_tracker(state_path, tracker)
-    except Exception:
-        pass
 
     if not notes_text:
         return ""

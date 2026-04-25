@@ -628,16 +628,28 @@ def test_self_report_sessions_persisted(tmp_path: Path) -> None:
 
 
 def test_self_report_sessions_dedup_by_evidence_unit_id(tmp_path: Path) -> None:
-    """Different evidence_unit_ids track independently; same unit_id deduped."""
+    """Different evidence_unit_ids track independently; same unit_id counts once."""
     engine = _fresh_engine(tmp_path, session_id="sess-A")
     key = "conn.read.pipe"
-    engine.apply_evidence(key, success=True, evidence_unit_id="span-1")
-    engine.apply_evidence(key, success=True, evidence_unit_id="span-1")  # duplicate
-    engine.apply_evidence(key, success=True, evidence_unit_id="span-2")
+    engine.apply_evidence(key, success=True, evidence_unit_id="span-1", execution_path="runner")
+    engine.apply_evidence(key, success=True, evidence_unit_id="span-1", execution_path="runner")  # duplicate
+    engine.apply_evidence(key, success=True, evidence_unit_id="span-2", execution_path="runner")
     entry = IntentRegistry.get(tmp_path, key)
-    # successes = 3 (not capped), but self_report_sessions only has 2 unique IDs
-    assert entry["successes"] == 3
+    assert entry["attempts"] == 2
+    assert entry["successes"] == 2
     assert set(entry.get("self_report_sessions") or []) == {"span-1", "span-2"}
+
+
+def test_self_report_failure_dedup_by_evidence_unit_id(tmp_path: Path) -> None:
+    """Duplicate failed evidence should not inflate attempts or failure counters."""
+    engine = _fresh_engine(tmp_path, session_id="sess-A")
+    key = "conn.read.pipe"
+    engine.apply_evidence(key, success=False, evidence_unit_id="span-1", execution_path="runner")
+    engine.apply_evidence(key, success=False, evidence_unit_id="span-1", execution_path="runner")
+    entry = IntentRegistry.get(tmp_path, key)
+    assert entry["attempts"] == 1
+    assert entry["successes"] == 0
+    assert entry["consecutive_failures"] == 1
 
 
 def test_failure_never_adds_to_self_report_sessions(tmp_path: Path) -> None:

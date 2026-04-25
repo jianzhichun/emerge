@@ -9,7 +9,7 @@ import queue
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,9 @@ from scripts.policy_config import (
     session_idle_ttl_s,
 )
 from scripts.exec_session import ExecSession
+from scripts.http_limits import BoundedThreadingHTTPServer, RequestTooLarge, read_limited_body
+
+ThreadingHTTPServer = BoundedThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[1]
 _START_TIME = time.time()
@@ -390,25 +393,27 @@ class RunnerHTTPHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         if self.path == "/notify":
             try:
-                content_length = int(self.headers.get("Content-Length", "0"))
-                raw = self.rfile.read(content_length).decode("utf-8")
+                raw = read_limited_body(self).decode("utf-8")
                 body = json.loads(raw) if raw else {}
                 if not isinstance(body, dict):
                     raise ValueError("notify body must be an object")
                 result = self.executor.show_notify(body)
                 self._send_json(200, {"ok": True, "result": result})
+            except RequestTooLarge as exc:
+                self._send_json(413, {"ok": False, "error": str(exc)})
             except Exception as exc:
                 self._send_json(400, {"ok": False, "error": str(exc)})
             return
         if self.path == "/operator-event":
             try:
-                content_length = int(self.headers.get("Content-Length", "0"))
-                raw = self.rfile.read(content_length).decode("utf-8")
+                raw = read_limited_body(self).decode("utf-8")
                 event = json.loads(raw) if raw else {}
                 if not isinstance(event, dict):
                     raise ValueError("event must be an object")
                 self.executor.write_operator_event(event)
                 self._send_json(200, {"ok": True})
+            except RequestTooLarge as exc:
+                self._send_json(413, {"ok": False, "error": str(exc)})
             except Exception as exc:
                 self._send_json(400, {"ok": False, "error": str(exc)})
             return
@@ -417,8 +422,7 @@ class RunnerHTTPHandler(BaseHTTPRequestHandler):
             return
         t0 = time.time()
         try:
-            content_length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(content_length).decode("utf-8")
+            raw = read_limited_body(self).decode("utf-8")
             req = json.loads(raw) if raw else {}
             if not isinstance(req, dict):
                 raise ValueError("request must be an object")
@@ -430,6 +434,10 @@ class RunnerHTTPHandler(BaseHTTPRequestHandler):
             elapsed = round(time.time() - t0, 3)
             logging.info("POST /run tool=%s elapsed=%.3fs ok=True", tool_name, elapsed)
             self._send_json(200, {"ok": True, "result": result})
+        except RequestTooLarge as exc:
+            elapsed = round(time.time() - t0, 3)
+            logging.warning("POST /run elapsed=%.3fs error=%s", elapsed, exc)
+            self._send_json(413, {"ok": False, "error": str(exc)})
         except Exception as exc:
             elapsed = round(time.time() - t0, 3)
             logging.warning("POST /run elapsed=%.3fs error=%s", elapsed, exc)
@@ -727,7 +735,7 @@ def run_server(host: str, port: int, *, root: Path | None = None, state_root: Pa
         (RunnerHTTPHandler,),
         {"executor": executor},
     )
-    server = ThreadingHTTPServer((host, port), handler_cls)
+    server = BoundedThreadingHTTPServer((host, port), handler_cls)
     try:
         server.serve_forever()
     finally:

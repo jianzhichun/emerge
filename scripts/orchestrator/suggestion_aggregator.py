@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -26,33 +27,35 @@ class SuggestionAggregator:
         self._seen: set[tuple[str, str, str]] = set()
         self._by_intent: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._last_trigger_count: dict[tuple[str, str], int] = {}
+        self._lock = threading.Lock()
         self._replay_persisted()
 
     def on_suggestion(self, suggestion: dict[str, Any]) -> dict[str, Any]:
-        intent = str(
-            suggestion.get("intent_signature_hint")
-            or suggestion.get("intent_signature")
-            or suggestion.get("normalized_intent")
-            or ""
-        ).strip()
-        if not intent:
-            return {"status": "ignored", "reason": "missing_intent_signature_hint"}
-        runner = str(suggestion.get("runner_profile", "") or "").strip() or "unknown"
-        raw_hash = _raw_actions_hash(suggestion.get("raw_actions", []))
-        dedupe_key = (intent, raw_hash, runner)
-        if dedupe_key in self._seen:
-            return {"status": "duplicate", "intent_signature_hint": intent}
-        self._seen.add(dedupe_key)
+        with self._lock:
+            intent = str(
+                suggestion.get("intent_signature_hint")
+                or suggestion.get("intent_signature")
+                or suggestion.get("normalized_intent")
+                or ""
+            ).strip()
+            if not intent:
+                return {"status": "ignored", "reason": "missing_intent_signature_hint"}
+            runner = str(suggestion.get("runner_profile", "") or "").strip() or "unknown"
+            raw_hash = _raw_actions_hash(suggestion.get("raw_actions", []))
+            dedupe_key = (intent, raw_hash, runner)
+            if dedupe_key in self._seen:
+                return {"status": "duplicate", "intent_signature_hint": intent}
+            self._seen.add(dedupe_key)
 
-        normalized = dict(suggestion)
-        normalized["intent_signature_hint"] = intent
-        normalized["runner_profile"] = runner
-        normalized["raw_actions_hash"] = raw_hash
-        normalized.setdefault("ts_ms", int(time.time() * 1000))
-        self._by_intent[intent].append(normalized)
-        self._persist(normalized)
+            normalized = dict(suggestion)
+            normalized["intent_signature_hint"] = intent
+            normalized["runner_profile"] = runner
+            normalized["raw_actions_hash"] = raw_hash
+            normalized.setdefault("ts_ms", int(time.time() * 1000))
+            self._by_intent[intent].append(normalized)
+            self._persist(normalized)
 
-        decision = self._maybe_trigger(intent)
+            decision = self._maybe_trigger(intent)
         if decision:
             self._emit_cockpit_action(decision)
             return {"status": "triggered", "intent_signature_hint": intent}

@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.policy_config import default_hook_state_root  # noqa: E402
-from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
+from scripts.state_tracker import with_locked_tracker  # noqa: E402
 
 
 def main() -> None:
@@ -25,10 +25,12 @@ def main() -> None:
     state_path = Path(default_hook_state_root()) / "state.json"
 
     try:
-        tracker = load_tracker(state_path)
-        if not is_interrupt:
+        def _mutate(tracker):
+            if is_interrupt:
+                return
             tracker.mark_degraded(f"Tool failure: {tool_name} — {error_text[:120]}")
-        save_tracker(state_path, tracker)
+
+        with_locked_tracker(state_path, _mutate)
     except Exception as exc:
         print(f"post_tool_use_failure: tracker update failed: {exc}", file=sys.stderr)
 

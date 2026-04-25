@@ -57,6 +57,7 @@ _log = logging.getLogger(__name__)
 
 # Hard cap to protect state/registry/intents.json from unbounded growth.
 _MAX_INTENTS = 1000
+_APPLIED_EVIDENCE_UNIT_IDS_MAX = 1024
 
 
 class PolicyEngine:
@@ -122,14 +123,12 @@ class PolicyEngine:
             Source of this evidence. ``"self_report"`` (default) means the
             operator-Claude evaluated itself; ``"operator_action"`` means a
             human explicitly confirmed (e.g. ``icc_reconcile(outcome=confirm)``
-            or cockpit click). ``self_report`` successes are capped at one per
-            unique ``evidence_unit_id`` so a single logical unit cannot inflate
-            the success counter with repeated calls. ``operator_action``
-            successes always count.
+            or cockpit click). Runner-forwarded ``self_report`` evidence with a
+            stable ``evidence_unit_id`` is counted once per unique id so outbox
+            retries cannot inflate policy counters. ``operator_action`` evidence
+            always counts.
         evidence_unit_id
-            Dedup key for ``self_report`` success capping. Defaults to the
-            current CC session ID when omitted. Pass ``span_id`` from span-close
-            evidence so each span is treated as an independent work unit.
+            Dedup key for runner-forwarded ``self_report`` counter idempotency.
         verify_observed / verify_passed
             ``verify_observed=True`` means this evidence carries a verification
             signal (e.g. `icc_exec` tracked ``verification_state``). Span evidence
@@ -181,6 +180,13 @@ class PolicyEngine:
             entry.setdefault("degraded_count", 0)
             entry.setdefault("transition_history", [])
             entry.setdefault("last_demotion", None)
+
+            if anchor_type != "operator_action" and execution_path == "runner" and evidence_unit_id:
+                applied_ids: list[str] = list(entry.get("applied_evidence_unit_ids") or [])
+                if evidence_unit_id in applied_ids:
+                    return dict(entry)
+                applied_ids.append(evidence_unit_id)
+                entry["applied_evidence_unit_ids"] = applied_ids[-_APPLIED_EVIDENCE_UNIT_IDS_MAX:]
 
             # ── counters ───────────────────────────────────────────────
             entry["attempts"] = int(entry.get("attempts", 0)) + 1

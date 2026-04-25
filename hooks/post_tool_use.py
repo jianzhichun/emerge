@@ -22,8 +22,7 @@ from scripts.state_tracker import (  # noqa: E402
     LEVEL_CORE_CRITICAL,
     LEVEL_CORE_SECONDARY,
     LEVEL_PERIPHERAL,
-    load_tracker,
-    save_tracker,
+    with_locked_tracker,
 )
 
 _CRITICAL_TOOLS = frozenset({"icc_exec", "icc_span_open", "icc_span_close"})
@@ -193,7 +192,6 @@ def main() -> None:
     result = raw_result if isinstance(raw_result, dict) else {}
     state_root = Path(default_hook_state_root())
     state_path = state_root / "state.json"
-    tracker = load_tracker(state_path)
 
     tool_input = payload.get("tool_input", {}) or {}
     if not isinstance(tool_input, dict):
@@ -216,27 +214,6 @@ def main() -> None:
     except Exception:
         pass
 
-    tracker.add_delta(
-        message=message,
-        level=level,
-        verification_state=verification_state,
-        provisional=provisional,
-        intent_signature=intent_signature,
-        tool_name=tool_name,
-        args_summary=_build_args_summary(tool_input),
-    )
-
-    # Propagate degraded pipeline verification as an open risk
-    if verification_state == "degraded" and not payload.get("mismatch_reason"):
-        tracker.mark_degraded(f"pipeline verification failed: {tool_name}")
-
-    if payload.get("mismatch_reason"):
-        tracker.mark_degraded(str(payload["mismatch_reason"]))
-
-    reconcile = payload.get("reconcile")
-    if isinstance(reconcile, dict) and "delta_id" in reconcile and "outcome" in reconcile:
-        tracker.reconcile_delta(str(reconcile["delta_id"]), str(reconcile["outcome"]))
-
     raw_budget = payload.get("budget_chars", 0)
     try:
         budget_chars = int(raw_budget)
@@ -244,7 +221,32 @@ def main() -> None:
             budget_chars = None
     except Exception:
         budget_chars = None
-    context_text = tracker.format_additional_context(budget_chars=budget_chars)
+
+    def _mutate(tracker):
+        tracker.add_delta(
+            message=message,
+            level=level,
+            verification_state=verification_state,
+            provisional=provisional,
+            intent_signature=intent_signature,
+            tool_name=tool_name,
+            args_summary=_build_args_summary(tool_input),
+        )
+
+        # Propagate degraded pipeline verification as an open risk
+        if verification_state == "degraded" and not payload.get("mismatch_reason"):
+            tracker.mark_degraded(f"pipeline verification failed: {tool_name}")
+
+        if payload.get("mismatch_reason"):
+            tracker.mark_degraded(str(payload["mismatch_reason"]))
+
+        reconcile = payload.get("reconcile")
+        if isinstance(reconcile, dict) and "delta_id" in reconcile and "outcome" in reconcile:
+            tracker.reconcile_delta(str(reconcile["delta_id"]), str(reconcile["outcome"]))
+
+        return tracker.format_additional_context(budget_chars=budget_chars)
+
+    context_text = with_locked_tracker(state_path, _mutate)
 
     # Detect span skeleton ready — inject reminder so CC reviews it
     _short = _short_tool_name(tool_name)
@@ -259,8 +261,6 @@ def main() -> None:
     _active_span_id, _active_span_intent = _record_span_action(
         tool_name, payload, state_root, state_path
     )
-
-    save_tracker(state_path, tracker)
 
     hook_specific: dict = {
         "hookEventName": "PostToolUse",

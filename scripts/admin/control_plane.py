@@ -27,7 +27,7 @@ from scripts.policy_config import (  # noqa: E402
     sessions_root,
     events_root,
 )
-from scripts.state_tracker import StateTracker, load_tracker, save_tracker  # noqa: E402
+from scripts.state_tracker import StateTracker, load_tracker, with_locked_tracker  # noqa: E402
 from scripts.intent_registry import IntentRegistry  # noqa: E402
 from scripts.policy_engine import derive_stage  # noqa: E402
 
@@ -578,9 +578,7 @@ def cmd_control_plane_runner_events(profile: str, limit: int = 20) -> dict:
 
 def cmd_control_plane_delta_reconcile(delta_id: str, outcome: str, intent_signature: str = "") -> dict:
     state_path = Path(default_hook_state_root()) / "state.json"
-    tracker = load_tracker(state_path)
-    tracker.reconcile_delta(delta_id, outcome)
-    save_tracker(state_path, tracker)
+    with_locked_tracker(state_path, lambda tracker: tracker.reconcile_delta(delta_id, outcome))
     return {"ok": True, "delta_id": delta_id, "outcome": outcome}
 
 
@@ -588,17 +586,20 @@ def cmd_control_plane_risk_update(
     risk_id: str, action: str, reason: str = "", snooze_duration_ms: int = 3600000,
 ) -> dict:
     state_path = Path(default_hook_state_root()) / "state.json"
-    tracker = load_tracker(state_path)
-    tracker.update_risk(risk_id, action=action, reason=reason or None, snooze_duration_ms=snooze_duration_ms)
-    save_tracker(state_path, tracker)
+
+    def _mutate(tracker):
+        tracker.update_risk(risk_id, action=action, reason=reason or None, snooze_duration_ms=snooze_duration_ms)
+
+    with_locked_tracker(state_path, _mutate)
     return {"ok": True, "risk_id": risk_id, "action": action}
 
 
 def cmd_control_plane_risk_add(text: str, intent_signature: str = "") -> dict:
     state_path = Path(default_hook_state_root()) / "state.json"
-    tracker = load_tracker(state_path)
-    tracker.add_risk(text, intent_signature=intent_signature or None)
-    save_tracker(state_path, tracker)
+    with_locked_tracker(
+        state_path,
+        lambda tracker: tracker.add_risk(text, intent_signature=intent_signature or None),
+    )
     return {"ok": True, "text": text}
 
 
@@ -642,22 +643,27 @@ def cmd_control_plane_session_reset(confirm: str, full: bool = False, session_id
     if confirm != "RESET":
         return {"ok": False, "error": "must pass confirm='RESET'"}
     state_path = Path(default_hook_state_root()) / "state.json"
-    try:
-        existing = load_tracker(state_path)
-        if existing.state.get("active_span_id"):
+    export = cmd_control_plane_session_export(session_id=session_id)
+
+    def _reset(tracker):
+        if tracker.state.get("active_span_id"):
             return {
                 "ok": False,
                 "error": "active_span_open",
                 "message": (
                     f"Cannot reset while span is active "
-                    f"(intent={existing.state.get('active_span_intent', '?')}). "
+                    f"(intent={tracker.state.get('active_span_intent', '?')}). "
                     "Close or abort the span first via icc_span_close(outcome='aborted')."
                 ),
             }
-    except Exception:
-        pass
-    export = cmd_control_plane_session_export(session_id=session_id)
-    save_tracker(state_path, StateTracker())
+        fresh = StateTracker()
+        tracker.state.clear()
+        tracker.state.update(fresh.state)
+        return {"ok": True}
+
+    reset_result = with_locked_tracker(state_path, _reset)
+    if not reset_result.get("ok"):
+        return reset_result
     removed: list[str] = []
     if full:
         session_dir, wal_path, checkpoint_path = _session_paths(session_id=session_id)

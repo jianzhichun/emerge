@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from pathlib import Path
 
 
@@ -130,3 +131,35 @@ def test_suggestion_aggregator_retriggers_after_new_evidence_threshold(tmp_path)
         {"runner_profile": "a", "intent_signature_hint": "foo.write.bar", "raw_actions": ["4"]}
     )["status"] == "triggered"
     assert len(emitted) == 2
+
+
+def test_suggestion_aggregator_concurrent_duplicate_is_stored_once(tmp_path):
+    from scripts.orchestrator.suggestion_aggregator import SuggestionAggregator
+
+    aggregator = SuggestionAggregator(
+        state_root=tmp_path / "state",
+        emit_cockpit_action=lambda _action: None,
+        min_runners=2,
+    )
+    suggestion = {
+        "runner_profile": "runner-a",
+        "intent_signature_hint": "foo.write.bar",
+        "raw_actions": ["same"],
+    }
+    barrier = threading.Barrier(2)
+    statuses: list[str] = []
+
+    def _submit() -> None:
+        barrier.wait(timeout=5)
+        statuses.append(aggregator.on_suggestion(dict(suggestion))["status"])
+
+    threads = [threading.Thread(target=_submit), threading.Thread(target=_submit)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert sorted(statuses) == ["duplicate", "stored"]
+    suggestions_path = tmp_path / "state" / "suggestions" / "suggestions.jsonl"
+    assert len(suggestions_path.read_text().splitlines()) == 1

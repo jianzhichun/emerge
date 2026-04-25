@@ -72,6 +72,8 @@ def test_process_local_file_enqueues_synthesis(tmp_path):
                     "event_path": event_path,
                 }
             )
+            with event_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps({"type": "pattern_pending_synthesis", "job_id": "job-local"}) + "\n")
             return {"status": "queued", "job_id": "job-local"}
 
     monitor = OperatorMonitor(

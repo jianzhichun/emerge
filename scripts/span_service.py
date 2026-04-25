@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.policy_config import default_hook_state_root
-from scripts.state_tracker import StateTracker, load_tracker, save_tracker
+from scripts.state_tracker import StateTracker, load_tracker, with_locked_tracker
 
 
 class SpanService:
@@ -29,27 +29,31 @@ class SpanService:
 
     def clear_active(self) -> bool:
         try:
-            tracker = load_tracker(self._state_path)
-            had = bool(tracker.state.get("active_span_id"))
-            tracker.state.pop("active_span_id", None)
-            tracker.state.pop("active_span_intent", None)
-            save_tracker(self._state_path, tracker)
-            return had
+            def _mutate(tracker):
+                had = bool(tracker.state.get("active_span_id"))
+                tracker.state.pop("active_span_id", None)
+                tracker.state.pop("active_span_intent", None)
+                return had
+
+            return bool(with_locked_tracker(self._state_path, _mutate))
         except Exception:
             return False
 
     def preserve_for_compact(self) -> tuple[str, str]:
         """Reset tracker while preserving active span identity."""
-        tracker = load_tracker(self._state_path)
-        active_id = str(tracker.state.get("active_span_id") or "")
-        active_intent = str(tracker.state.get("active_span_intent") or "")
-        fresh = StateTracker()
-        if active_id:
-            fresh.state["active_span_id"] = active_id
-        if active_intent:
-            fresh.state["active_span_intent"] = active_intent
-        save_tracker(self._state_path, fresh)
-        return active_id, active_intent
+        def _mutate(tracker):
+            active_id = str(tracker.state.get("active_span_id") or "")
+            active_intent = str(tracker.state.get("active_span_intent") or "")
+            fresh = StateTracker()
+            if active_id:
+                fresh.state["active_span_id"] = active_id
+            if active_intent:
+                fresh.state["active_span_intent"] = active_intent
+            tracker.state.clear()
+            tracker.state.update(fresh.state)
+            return active_id, active_intent
+
+        return with_locked_tracker(self._state_path, _mutate)
 
     def append_task_created_action(self, task_id: str, task_subject: str) -> bool:
         active_span_id, active_span_intent = self.get_active()

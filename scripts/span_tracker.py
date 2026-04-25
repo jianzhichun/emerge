@@ -122,7 +122,7 @@ class SpanTracker:
         self._state_root = state_root
         self._hook_state_root = hook_state_root
         self._policy_engine = policy_engine
-        self._own_lock = threading.Lock()
+        self._own_lock = threading.RLock()
         # span-wal dir is created lazily on first write to avoid polluting state root
 
     # ── paths ──────────────────────────────────────────────────────────────
@@ -182,27 +182,28 @@ class SpanTracker:
         source: str = "manual",
         skill_name: str | None = None,
     ) -> SpanRecord:
-        state = self._load_state()
-        if state.get("active_span_id"):
-            raise RuntimeError(
-                f"active span already open: {state['active_span_id']} "
-                f"({state.get('active_span_intent', '?')}). "
-                "Call icc_span_close before opening a new span."
+        with self._own_lock:
+            state = self._load_state()
+            if state.get("active_span_id"):
+                raise RuntimeError(
+                    f"active span already open: {state['active_span_id']} "
+                    f"({state.get('active_span_intent', '?')}). "
+                    "Call icc_span_close before opening a new span."
+                )
+            span = SpanRecord(
+                span_id=str(uuid.uuid4()),
+                intent_signature=intent_signature,
+                description=description,
+                source=source,
+                skill_name=skill_name,
+                opened_at_ms=int(time.time() * 1000),
+                args=args or {},
             )
-        span = SpanRecord(
-            span_id=str(uuid.uuid4()),
-            intent_signature=intent_signature,
-            description=description,
-            source=source,
-            skill_name=skill_name,
-            opened_at_ms=int(time.time() * 1000),
-            args=args or {},
-        )
-        state["active_span_id"] = span.span_id
-        state["active_span_intent"] = intent_signature
-        self._atomic_write(self._state_path(), state)
-        self._buffer_path().write_text("", encoding="utf-8")
-        return span
+            state["active_span_id"] = span.span_id
+            state["active_span_intent"] = intent_signature
+            self._atomic_write(self._state_path(), state)
+            self._buffer_path().write_text("", encoding="utf-8")
+            return span
 
     # ── close ──────────────────────────────────────────────────────────────
 
@@ -212,50 +213,51 @@ class SpanTracker:
         outcome: str,
         result_summary: dict | None = None,
     ) -> SpanRecord:
-        span.closed_at_ms = int(time.time() * 1000)
-        span.outcome = outcome
-        span.result_summary = result_summary or {}
+        with self._own_lock:
+            span.closed_at_ms = int(time.time() * 1000)
+            span.outcome = outcome
+            span.result_summary = result_summary or {}
 
-        # Collect actions from hook buffer
-        buf = self._buffer_path()
-        actions: list[ActionRecord] = []
-        if buf.exists():
-            for i, line in enumerate(buf.read_text(encoding="utf-8").splitlines()):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                    actions.append(ActionRecord(
-                        seq=i,
-                        tool_name=str(rec.get("tool_name", "")),
-                        args_hash=str(rec.get("args_hash", "")),
-                        has_side_effects=bool(rec.get("has_side_effects", True)),
-                        ts_ms=int(rec.get("ts_ms", 0)),
-                        args_snapshot=dict(rec.get("args_snapshot") or {}),
-                        result_summary=dict(rec.get("result_summary") or {}),
-                    ))
-                except Exception:
-                    pass
-        span.actions = actions
-        span.is_read_only = all(not a.has_side_effects for a in actions)
+            # Collect actions from hook buffer
+            buf = self._buffer_path()
+            actions: list[ActionRecord] = []
+            if buf.exists():
+                for i, line in enumerate(buf.read_text(encoding="utf-8").splitlines()):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        actions.append(ActionRecord(
+                            seq=i,
+                            tool_name=str(rec.get("tool_name", "")),
+                            args_hash=str(rec.get("args_hash", "")),
+                            has_side_effects=bool(rec.get("has_side_effects", True)),
+                            ts_ms=int(rec.get("ts_ms", 0)),
+                            args_snapshot=dict(rec.get("args_snapshot") or {}),
+                            result_summary=dict(rec.get("result_summary") or {}),
+                        ))
+                    except Exception:
+                        pass
+            span.actions = actions
+            span.is_read_only = all(not a.has_side_effects for a in actions)
 
-        # Persist to WAL
-        self._wal_path().parent.mkdir(parents=True, exist_ok=True)
-        with self._wal_path().open("a", encoding="utf-8") as f:
-            f.write(json.dumps(span.to_dict(), ensure_ascii=False) + "\n")
+            # Persist to WAL
+            self._wal_path().parent.mkdir(parents=True, exist_ok=True)
+            with self._wal_path().open("a", encoding="utf-8") as f:
+                f.write(json.dumps(span.to_dict(), ensure_ascii=False) + "\n")
 
-        # Update candidates
-        self._update_candidates(span)
+            # Update candidates
+            self._update_candidates(span)
 
-        # Clear hook state
-        state = self._load_state()
-        state.pop("active_span_id", None)
-        state.pop("active_span_intent", None)
-        self._atomic_write(self._state_path(), state)
-        buf.unlink(missing_ok=True)
+            # Clear hook state
+            state = self._load_state()
+            state.pop("active_span_id", None)
+            state.pop("active_span_intent", None)
+            self._atomic_write(self._state_path(), state)
+            buf.unlink(missing_ok=True)
 
-        return span
+            return span
 
     # ── candidates / policy ────────────────────────────────────────────────
 

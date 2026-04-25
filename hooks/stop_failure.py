@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.policy_config import default_hook_state_root  # noqa: E402
-from scripts.state_tracker import load_tracker, save_tracker  # noqa: E402
+from scripts.state_tracker import load_tracker, with_locked_tracker  # noqa: E402
 
 
 def main() -> None:
@@ -41,9 +41,11 @@ def main() -> None:
         return
 
     try:
-        tracker.state.pop("active_span_id", None)
-        tracker.state.pop("active_span_intent", None)
-        save_tracker(state_path, tracker)
+        def _mutate(tracker):
+            tracker.state.pop("active_span_id", None)
+            tracker.state.pop("active_span_intent", None)
+
+        with_locked_tracker(state_path, _mutate)
         cleared = True
     except Exception:
         cleared = False

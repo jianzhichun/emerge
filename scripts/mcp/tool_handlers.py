@@ -265,7 +265,7 @@ class ToolHandlers:
                 "icc_reconcile is orchestrator-only. Runner instances must forward operator feedback upstream."
             )
         from scripts.policy_config import default_hook_state_root
-        from scripts.state_tracker import load_tracker, save_tracker
+        from scripts.state_tracker import with_locked_tracker
 
         delta_id = str(arguments.get("delta_id", "")).strip()
         outcome = str(arguments.get("outcome", "")).strip()
@@ -277,10 +277,11 @@ class ToolHandlers:
                 f"icc_reconcile: 'outcome' must be confirm/correct/retract, got {outcome!r}"
             )
         state_path = Path(default_hook_state_root()) / "state.json"
-        tracker = load_tracker(state_path)
-        tracker.reconcile_delta(delta_id, outcome)
-        save_tracker(state_path, tracker)
-        td = tracker.to_dict()
+        def _mutate(tracker):
+            tracker.reconcile_delta(delta_id, outcome)
+            return tracker.to_dict()
+
+        td = with_locked_tracker(state_path, _mutate)
         if intent_signature:
             from scripts.policy_config import PIPELINE_KEY_RE
             if PIPELINE_KEY_RE.match(intent_signature):

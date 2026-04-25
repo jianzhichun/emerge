@@ -100,3 +100,16 @@ def format_runner_subagent_message(data: dict) -> str:
     if context:
         lines.append(str(context))
     return "\n".join(lines)
+
+
+def format_synthesis_job_ready(data: dict) -> str:
+    profile = data.get("runner_profile", data.get("profile", "?"))
+    job_id = data.get("job_id", "?")
+    job = data.get("job", {}) if isinstance(data.get("job"), dict) else {}
+    intent = (
+        data.get("intent_signature")
+        or job.get("intent_signature")
+        or job.get("intent_signature_hint")
+        or "?"
+    )
+    return f"[SynthesisJobReady] runner={profile} job={job_id} intent={intent}"

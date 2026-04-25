@@ -104,19 +104,6 @@ class OperatorMonitor:
             }
             with events_local.open("a", encoding="utf-8") as f:
                 f.write(_json.dumps(alert, ensure_ascii=False) + "\n")
-                pending = {
-                    "type": "pattern_pending_synthesis",
-                    "ts_ms": ts_ms,
-                    "runner_profile": "local",
-                    "intent_signature": summary.intent_signature,
-                    "meta": {
-                        "occurrences": summary.occurrences,
-                        "window_minutes": round(summary.window_minutes, 1),
-                        "machine_ids": summary.machine_ids,
-                        "detector_signals": summary.detector_signals,
-                    },
-                }
-                f.write(_json.dumps(pending, ensure_ascii=False) + "\n")
             if self._synthesis_agent is not None:
                 try:
                     self._synthesis_agent.process_pattern(

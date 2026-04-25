@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 from scripts.policy_config import atomic_write_json
 
@@ -13,6 +15,9 @@ LEVEL_CORE_CRITICAL = "core_critical"
 LEVEL_CORE_SECONDARY = "core_secondary"
 LEVEL_PERIPHERAL = "peripheral"
 MAX_DELTAS = 500  # hard cap per session; pre_compact resets on compaction
+
+_T = TypeVar("_T")
+_PROCESS_LOCK = threading.RLock()
 
 
 class StateTracker:
@@ -509,3 +514,34 @@ def load_tracker(path: Path) -> StateTracker:
 
 def save_tracker(path: Path, tracker: StateTracker) -> None:
     atomic_write_json(path, _normalize_state(tracker.to_dict()))
+
+
+@contextmanager
+def _exclusive_file_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _PROCESS_LOCK:
+        with path.with_suffix(path.suffix + ".lock").open("a", encoding="utf-8") as lock_file:
+            try:
+                import fcntl  # type: ignore
+
+                fcntl.flock(lock_file, fcntl.LOCK_EX)
+                locked = True
+            except Exception:
+                locked = False
+            try:
+                yield
+            finally:
+                if locked:
+                    try:
+                        fcntl.flock(lock_file, fcntl.LOCK_UN)  # type: ignore[name-defined]
+                    except Exception:
+                        pass
+
+
+def with_locked_tracker(path: Path, mutator: Callable[[StateTracker], _T]) -> _T:
+    """Serialize load-mutate-save for shared hook state."""
+    with _exclusive_file_lock(path):
+        tracker = load_tracker(path)
+        result = mutator(tracker)
+        save_tracker(path, tracker)
+        return result

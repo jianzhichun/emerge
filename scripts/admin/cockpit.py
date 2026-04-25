@@ -34,6 +34,7 @@ from scripts.admin.api import (
 from scripts.admin.actions import ActionRegistry
 from scripts.admin.shared import _resolve_state_root, _resolve_connector_root
 from scripts.policy_config import events_root
+from scripts.http_limits import RequestTooLarge, read_limited_body
 from scripts.admin.control_plane import (
     cmd_control_plane_state,
     cmd_control_plane_sessions,
@@ -415,8 +416,13 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         session_id_q = (qs_all.get("session_id", [""])[0] or "").strip() or None
         if session_id_q and not _SESSION_ID_PARAM_RE.fullmatch(session_id_q):
             return self._json({"ok": False, "error": "invalid session_id"}, status=400)
-        length = int(self.headers.get("Content-Length", 0))
-        body: dict = json.loads(self.rfile.read(length)) if length else {}
+        try:
+            raw_body = read_limited_body(self)
+            body: dict = json.loads(raw_body) if raw_body else {}
+        except RequestTooLarge as exc:
+            return self._json({"ok": False, "error": str(exc)}, status=413)
+        except Exception as exc:
+            return self._json({"ok": False, "error": str(exc)}, status=400)
         if path == "/api/submit":
             actions = body.get("actions", [])
             if not isinstance(actions, list) or not actions:

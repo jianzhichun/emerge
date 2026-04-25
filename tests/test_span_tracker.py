@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import threading
 from pathlib import Path
 import pytest
 from scripts.span_tracker import SpanTracker, is_read_only_tool
@@ -60,6 +61,31 @@ def test_open_errors_when_span_already_active(tracker):
     tracker.open_span("lark.read.get-doc")
     with pytest.raises(RuntimeError, match="active span"):
         tracker.open_span("lark.read.other")
+
+
+def test_concurrent_open_span_allows_only_one_success(tracker):
+    barrier = threading.Barrier(2)
+    results: list[str] = []
+
+    def _open(intent: str) -> None:
+        barrier.wait(timeout=5)
+        try:
+            span = tracker.open_span(intent)
+            results.append(f"ok:{span.intent_signature}")
+        except RuntimeError:
+            results.append("active")
+
+    threads = [
+        threading.Thread(target=_open, args=("lark.read.one",)),
+        threading.Thread(target=_open, args=("lark.read.two",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert sorted(result.split(":", 1)[0] for result in results) == ["active", "ok"]
 
 def test_close_writes_span_to_wal(tracker, tmp_path):
     span = tracker.open_span("lark.write.create-doc", args={"title": "T"})

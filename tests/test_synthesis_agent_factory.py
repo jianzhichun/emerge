@@ -76,5 +76,24 @@ def test_reverse_flywheel_factory_emits_synthesis_job_ready(tmp_path, monkeypatc
         events_file = state_root / "events" / "events-p1.jsonl"
         events = [json.loads(line) for line in events_file.read_text().splitlines() if line.strip()]
         assert any(event.get("type") == "synthesis_job_ready" for event in events)
+        pending = [event for event in events if event.get("type") == "pattern_pending_synthesis"]
+        assert len(pending) == 1
     finally:
         srv.stop()
+
+
+def test_synthesis_job_ready_formats_for_watch_emerge():
+    from scripts.watch_emerge import _format_event
+
+    rendered = _format_event(
+        {
+            "type": "synthesis_job_ready",
+            "runner_profile": "p1",
+            "job_id": "job-1",
+            "intent_signature": "foo.write.bar",
+        }
+    )
+
+    assert rendered is not None
+    assert "SynthesisJobReady" in rendered
+    assert "job-1" in rendered
