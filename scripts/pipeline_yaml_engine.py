@@ -339,6 +339,8 @@ class YAMLScenarioEngine:
         headers: dict | None = None,
         expected_status: int | None = None,
     ) -> tuple[int, bytes]:
+        if not url.startswith(("http://", "https://")):
+            raise YAMLStepError(f"http step URL must use http(s) scheme: {url}")
         req = urllib.request.Request(url, data=body, method=method)
         if headers:
             for k, v in headers.items():

@@ -4466,10 +4466,11 @@ def test_span_close_multi_tool_emits_crystallize_action(tmp_path):
         crystallize = [
             e for e in lines
             if e.get("type") == "cockpit_action"
-            and e.get("action", {}).get("type") == "crystallize.to-yaml"
+            and any(a.get("type") == "crystallize.to-yaml" for a in e.get("actions", []))
         ]
         assert crystallize, f"No crystallize.to-yaml event. Events: {[e.get('type') for e in lines]}"
-        payload = crystallize[-1]["action"]["payload"]
+        actions_list = crystallize[-1]["actions"]
+        payload = next(a["payload"] for a in actions_list if a["type"] == "crystallize.to-yaml")
         assert payload["intent_signature"] == "mock.write.multi-op"
         assert len(payload["actions"]) == 2
     finally:

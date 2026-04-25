@@ -294,7 +294,7 @@ class EmergeDaemon:
             event = {
                 "type": "cockpit_action",
                 "ts_ms": int(time.time() * 1000),
-                "action": action,
+                "actions": [action],
             }
             with events_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")

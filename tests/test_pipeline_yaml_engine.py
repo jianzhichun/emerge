@@ -266,3 +266,10 @@ def test_connector_call_routes_via_intent_field():
     }
     result = engine.execute(scenario, {}, pipeline_engine=pe, mode="write")
     assert result["action_result"].get("got_id") == "intent-test"
+
+
+def test_http_step_rejects_file_scheme():
+    engine = YAMLScenarioEngine()
+    scenario = {"steps": [{"type": "http_get", "url": "file:///etc/passwd"}]}
+    with pytest.raises(YAMLStepError, match="http\\(s\\) scheme"):
+        engine.execute(scenario, {})
