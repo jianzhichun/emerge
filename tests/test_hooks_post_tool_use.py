@@ -99,3 +99,55 @@ def test_verification_state_reads_tool_response_not_tool_result():
         assert result.returncode == 0, f"post_tool_use.py stderr: {result.stderr}"
         state = json.loads((Path(tmpdir) / "state.json").read_text(encoding="utf-8"))
         assert state.get("verification_state") == "degraded"
+
+
+def test_icc_exec_action_enriched_with_snapshot(tmp_path):
+    """_record_span_action adds args_snapshot and result_summary for icc_exec calls."""
+    from hooks.post_tool_use import _record_span_action
+
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({
+        "active_span_id": "span-abc",
+        "active_span_intent": "mock.read.layers",
+    }))
+
+    payload = {
+        "tool_name": "mcp__plugin_emerge__icc_exec",
+        "tool_input": {"intent_signature": "mock.read.layers", "connector": "mock"},
+        "tool_response": {
+            "content": [{"type": "text", "text": json.dumps({
+                "rows": [{"id": 1}, {"id": 2}],
+                "verification_state": "verified"
+            })}]
+        },
+    }
+    _record_span_action("mcp__plugin_emerge__icc_exec", payload, tmp_path, state_path)
+
+    buf = tmp_path / "active-span-actions.jsonl"
+    assert buf.exists(), "buffer file not written"
+    rec = json.loads(buf.read_text().strip())
+    assert rec["args_snapshot"].get("intent_signature") == "mock.read.layers"
+    assert "rows_count" in rec.get("result_summary", {})
+
+
+def test_non_icc_tool_has_no_snapshot(tmp_path):
+    """Non-ICC tools (Read, Grep) get no args_snapshot in the buffer."""
+    from hooks.post_tool_use import _record_span_action
+
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({
+        "active_span_id": "span-abc",
+        "active_span_intent": "mock.read.layers",
+    }))
+
+    payload = {
+        "tool_name": "Read",
+        "tool_input": {"file_path": "/tmp/test.py"},
+        "tool_response": {"content": []},
+    }
+    _record_span_action("Read", payload, tmp_path, state_path)
+
+    buf = tmp_path / "active-span-actions.jsonl"
+    rec = json.loads(buf.read_text().strip())
+    assert "args_snapshot" not in rec
+    assert "result_summary" not in rec

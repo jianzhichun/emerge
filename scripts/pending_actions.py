@@ -34,6 +34,13 @@ def format_pending_actions(actions: list) -> str:
                 f"{i}. Crystallize component {a.get('filename')} -> "
                 f"{a.get('connector')}/cockpit/"
             )
+        elif t == "crystallize.to-yaml":
+            sig = a.get("intent_signature", "?")
+            actions = a.get("actions", [])
+            lines.append(
+                f"{i}. Crystallize YAML pipeline for {sig} "
+                f"({len(actions)} actions captured) — write YAML scenario file"
+            )
         else:
             lines.append(f"{i}. {t}: {a}")
     return "\n".join(lines)

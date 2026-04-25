@@ -51,15 +51,22 @@ class ActionRecord:
     args_hash: str
     has_side_effects: bool
     ts_ms: int
+    args_snapshot: dict = field(default_factory=dict)
+    result_summary: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "seq": self.seq,
             "tool_name": self.tool_name,
             "args_hash": self.args_hash,
             "has_side_effects": self.has_side_effects,
             "ts_ms": self.ts_ms,
         }
+        if self.args_snapshot:
+            d["args_snapshot"] = self.args_snapshot
+        if self.result_summary:
+            d["result_summary"] = self.result_summary
+        return d
 
 
 @dataclass
@@ -225,6 +232,8 @@ class SpanTracker:
                         args_hash=str(rec.get("args_hash", "")),
                         has_side_effects=bool(rec.get("has_side_effects", True)),
                         ts_ms=int(rec.get("ts_ms", 0)),
+                        args_snapshot=dict(rec.get("args_snapshot") or {}),
+                        result_summary=dict(rec.get("result_summary") or {}),
                     ))
                 except Exception:
                     pass

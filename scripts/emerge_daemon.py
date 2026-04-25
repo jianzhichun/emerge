@@ -125,6 +125,7 @@ class EmergeDaemon:
             run_pipeline=self._span_run_pipeline,
             record_pipeline_event=self._flywheel.record_pipeline_event,
             record_bridge_outcome=self._policy_engine.record_bridge_outcome,
+            emit_cockpit_action=self._emit_crystallize_cockpit_action,
             tool_error=self._tool_error,
             tool_ok_json=self._tool_ok_json,
         )
@@ -284,6 +285,21 @@ class EmergeDaemon:
     @_last_bridge_failure.setter
     def _last_bridge_failure(self, value: "dict[str, Any] | None") -> None:
         self._bridge.last_failure = value
+
+    def _emit_crystallize_cockpit_action(self, action: dict) -> None:
+        """Append a crystallize.to-yaml cockpit_action event to events.jsonl."""
+        try:
+            events_path = self._state_root / "events" / "events.jsonl"
+            events_path.parent.mkdir(parents=True, exist_ok=True)
+            event = {
+                "type": "cockpit_action",
+                "ts_ms": int(time.time() * 1000),
+                "actions": [action],
+            }
+            with events_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(event, ensure_ascii=False) + "\n")
+        except Exception:
+            pass  # non-fatal — never break span_close
 
     def _crystallize(self, **kwargs: Any) -> dict[str, Any]:
         result = PipelineCrystallizer(self._state_root).crystallize(**kwargs)

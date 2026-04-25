@@ -2456,6 +2456,62 @@ def test_span_close_auto_activate_respects_opt_out_env(tmp_path, monkeypatch):
     assert "icc_span_approve" in body.get("next_step", "")
 
 
+def test_span_approve_promotes_yaml_skeleton_from_pending(tmp_path, monkeypatch):
+    """icc_span_approve must promote a .yaml skeleton (YAML scenario pipeline) from
+    _pending/ to the real pipeline dir — not just .py skeletons.
+    CLAUDE.md North Star: a pipeline stuck in _pending/ is a violation."""
+    import json
+    import yaml as _yaml
+    daemon, hook_state = _make_span_daemon(tmp_path, monkeypatch)
+    connector_root = tmp_path / "connectors"
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
+    # Pre-create a YAML skeleton in _pending/ (multi-tool span scenario)
+    pending_dir = connector_root / "lark" / "pipelines" / "write" / "_pending"
+    pending_dir.mkdir(parents=True)
+    pending_yaml = pending_dir / "create-doc.yaml"
+    pending_yaml.write_text(
+        "intent_signature: lark.write.create-doc\n"
+        "rollback_or_stop_policy: stop\n"
+        "steps:\n"
+        "  - tool: lark.doc.create\n"
+        "    args: {title: '{{title}}'}\n",
+        encoding="utf-8",
+    )
+    # Drive to stable so approve is allowed
+    import scripts.policy_engine as pe
+    monkeypatch.setattr(pe, "PROMOTE_MIN_ATTEMPTS", 2)
+    monkeypatch.setattr(pe, "PROMOTE_MIN_SUCCESS_RATE", 0.5)
+    monkeypatch.setattr(pe, "PROMOTE_MAX_HUMAN_FIX_RATE", 1.0)
+    monkeypatch.setattr(pe, "STABLE_MIN_ATTEMPTS", 4)
+    monkeypatch.setattr(pe, "STABLE_MIN_SUCCESS_RATE", 0.5)
+    for _ in range(5):
+        s = daemon._span_tracker.open_span("lark.write.create-doc")
+        daemon._open_spans[s.span_id] = s
+        daemon._span_tracker.close_span(s, outcome="success")
+    _confirm_operator(daemon, "lark.write.create-doc")
+    s = daemon._span_tracker.open_span("lark.write.create-doc")
+    daemon._open_spans[s.span_id] = s
+    daemon._span_tracker.close_span(s, outcome="success")
+
+    result = daemon.call_tool("icc_span_approve", {"intent_signature": "lark.write.create-doc"})
+    assert result.get("isError") is not True, result
+    body = json.loads(result["content"][0]["text"])
+    assert body.get("ok") is True or body.get("approved") is True
+    # YAML moved to real dir
+    real_yaml = connector_root / "lark" / "pipelines" / "write" / "create-doc.yaml"
+    assert real_yaml.exists(), "YAML skeleton must be promoted to real pipeline dir"
+    assert not pending_yaml.exists(), "YAML skeleton must be removed from _pending"
+    # No stray .py created for a YAML-only pipeline
+    real_py = connector_root / "lark" / "pipelines" / "write" / "create-doc.py"
+    assert not real_py.exists(), "must not create a .py for a YAML scenario pipeline"
+    # pipeline_path in response must point to the .yaml
+    assert str(body.get("pipeline_path", "")).endswith(".yaml"), \
+        f"pipeline_path must end with .yaml, got: {body.get('pipeline_path')}"
+    # YAML content preserved intact
+    meta = _yaml.safe_load(real_yaml.read_text())
+    assert meta["intent_signature"] == "lark.write.create-doc"
+
+
 def test_span_approve_errors_when_not_stable(tmp_path, monkeypatch):
     daemon, _ = _make_span_daemon(tmp_path, monkeypatch)
     result = daemon.call_tool("icc_span_approve", {"intent_signature": "lark.write.never-run"})
@@ -4364,4 +4420,58 @@ def test_icc_compose_stage_flows_through_policy_engine(tmp_path):
         assert res["structuredContent"]["stage"] == "stable"
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
+        os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_span_close_multi_tool_emits_crystallize_action(tmp_path):
+    """icc_span_close with >1 span action and synthesis_ready emits crystallize.to-yaml event."""
+    import json
+
+    # The autouse _mock_connector_root fixture already sets:
+    #   EMERGE_STATE_ROOT  → tmp_path/state
+    #   EMERGE_HOOK_STATE_ROOT → tmp_path/hook-state
+    # Use those paths directly.
+    state_root = tmp_path / "state"
+    hook_state = tmp_path / "hook-state"
+    os.environ["EMERGE_SESSION_ID"] = "test-crystallize-emit"
+    events_path = state_root / "events" / "events.jsonl"
+
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+
+        # Advance the intent to the canary→stable boundary (14 successes)
+        for _ in range(14):
+            r = daemon.call_tool("icc_span_open", {"intent_signature": "mock.write.multi-op"})
+            span_id = json.loads(r["content"][0]["text"]).get("span_id", "")
+            daemon.call_tool("icc_span_close", {"span_id": span_id, "outcome": "success"})
+
+        # Open the 15th span, then write 2 actions to the hook-state buffer
+        # (icc_span_open clears the buffer, so we write after open).
+        r = daemon.call_tool("icc_span_open", {"intent_signature": "mock.write.multi-op"})
+        span_id = json.loads(r["content"][0]["text"]).get("span_id", "")
+        buf = hook_state / "active-span-actions.jsonl"
+        buf.write_text(
+            json.dumps({"tool_name": "mcp__plugin_emerge__icc_exec", "args_hash": "a",
+                        "has_side_effects": False, "ts_ms": 1,
+                        "args_snapshot": {"intent_signature": "mock.read.layers"}}) + "\n" +
+            json.dumps({"tool_name": "mcp__plugin_emerge__icc_exec", "args_hash": "b",
+                        "has_side_effects": True, "ts_ms": 2,
+                        "args_snapshot": {"intent_signature": "mock.write.add-wall"}}) + "\n"
+        )
+        daemon.call_tool("icc_span_close", {"span_id": span_id, "outcome": "success"})
+
+        # events.jsonl must contain a crystallize.to-yaml cockpit_action event
+        assert events_path.exists(), "events file not created"
+        lines = [json.loads(l) for l in events_path.read_text().splitlines() if l.strip()]
+        crystallize = [
+            e for e in lines
+            if e.get("type") == "cockpit_action"
+            and any(a.get("type") == "crystallize.to-yaml" for a in e.get("actions", []))
+        ]
+        assert crystallize, f"No crystallize.to-yaml event. Events: {[e.get('type') for e in lines]}"
+        actions_list = crystallize[-1]["actions"]
+        payload = next(a["payload"] for a in actions_list if a["type"] == "crystallize.to-yaml")
+        assert payload["intent_signature"] == "mock.write.multi-op"
+        assert len(payload["actions"]) == 2
+    finally:
         os.environ.pop("EMERGE_SESSION_ID", None)

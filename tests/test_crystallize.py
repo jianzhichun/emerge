@@ -204,6 +204,73 @@ def test_icc_crystallize_always_writes_locally_even_with_runner(tmp_path):
         os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
 
 
+def test_generate_yaml_span_skeleton_creates_pending_yaml(tmp_path):
+    """Multi-tool spans get a YAML skeleton, not a .py skeleton."""
+    from scripts.crystallizer import PipelineCrystallizer
+
+    cryst = PipelineCrystallizer(tmp_path)
+    span = {
+        "actions": [
+            {
+                "seq": 0,
+                "tool_name": "mcp__plugin_emerge__icc_exec",
+                "args_hash": "abc",
+                "has_side_effects": False,
+                "ts_ms": 1000,
+                "args_snapshot": {"intent_signature": "mock.read.layers"},
+                "result_summary": {"rows_count": 3, "row_keys": ["id", "name"]},
+            },
+            {
+                "seq": 1,
+                "tool_name": "mcp__plugin_emerge__icc_exec",
+                "args_hash": "def",
+                "has_side_effects": True,
+                "ts_ms": 2000,
+                "args_snapshot": {"intent_signature": "mock.write.add-wall"},
+                "result_summary": {"ok": "true"},
+            },
+        ]
+    }
+    path = cryst.generate_span_skeleton(
+        intent_signature="mock.write.multi-op",
+        span=span,
+        connector_root=tmp_path,
+    )
+    assert path is not None
+    assert path.suffix == ".yaml", f"Expected .yaml, got {path.suffix}"
+    assert path.parent.name == "_pending"
+
+    import yaml as _yaml
+    data = _yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert data.get("intent_signature") == "mock.write.multi-op"
+    assert "steps" in data
+
+
+def test_generate_single_tool_span_skeleton_still_produces_py(tmp_path):
+    """Single-tool spans keep the existing .py skeleton path."""
+    from scripts.crystallizer import PipelineCrystallizer
+
+    cryst = PipelineCrystallizer(tmp_path)
+    span = {
+        "actions": [
+            {
+                "seq": 0,
+                "tool_name": "mcp__plugin_emerge__icc_exec",
+                "args_hash": "abc",
+                "has_side_effects": True,
+                "ts_ms": 1000,
+            }
+        ]
+    }
+    path = cryst.generate_span_skeleton(
+        intent_signature="mock.write.add-wall",
+        span=span,
+        connector_root=tmp_path,
+    )
+    assert path is not None
+    assert path.suffix == ".py", f"Expected .py, got {path.suffix}"
+
+
 def test_icc_crystallize_no_wal_entry_returns_error(tmp_path):
     os.environ["EMERGE_STATE_ROOT"] = str(tmp_path / "state")
     os.environ["EMERGE_SESSION_ID"] = "cryst-empty"

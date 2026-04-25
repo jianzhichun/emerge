@@ -335,7 +335,7 @@ def test_post_tool_use_records_action_when_span_active(tmp_path):
     assert rec["has_side_effects"] is False  # __get is read-only
 
 
-def test_post_tool_use_excludes_icc_exec_from_span(tmp_path):
+def test_post_tool_use_records_icc_exec_in_span(tmp_path):
     import json
     hook_state = tmp_path / "hook-state"
     hook_state.mkdir(exist_ok=True)
@@ -343,11 +343,14 @@ def test_post_tool_use_excludes_icc_exec_from_span(tmp_path):
              "deltas": []}
     (hook_state / "state.json").write_text(json.dumps(state), encoding="utf-8")
     _run_post_hook({"tool_name": "emerge__icc_exec",
+                    "tool_input": {"intent_signature": "lark.read.get-doc"},
                     "tool_result": {"content": [{"type": "text", "text": "{}"}]}},
                    hook_state)
     buf = hook_state / "active-span-actions.jsonl"
-    assert not buf.exists() or buf.read_text().strip() == "", \
-        "icc_exec must not be recorded as a span action"
+    assert buf.exists() and buf.read_text().strip() != "", \
+        "icc_exec with active span must be recorded as a span action (for crystallizer context)"
+    rec = json.loads(buf.read_text().strip())
+    assert rec.get("args_snapshot", {}).get("intent_signature") == "lark.read.get-doc"
 
 
 def test_post_tool_use_no_recording_without_active_span(tmp_path):
