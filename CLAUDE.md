@@ -12,14 +12,23 @@
 2. **Failed once → learn forever.** When an intent demotes, the root cause must reach the *next* session through reflection injection (`SpanTracker.format_reflection` → `SessionStart` / `UserPromptSubmit` / `PreCompact`). A signal that dies inside `transition_history` and never surfaces in reflection is a bug, no matter how well the cockpit shows it. **"Failed" includes silent wrongness** — a crystallized bridge that returns `None` / `[]` / malformed data without raising still violates its contract. When adding bridge-path code, default to treating "returned nothing useful" as a failure unless the intent is provably allowed to be empty.
 3. **Compose, don't re-derive.** `connector.mode.name` intents are building blocks. Stable pipelines should compose (`new = stable_A >> stable_B` inherits both parents' stable status + verify history) so learning cost stays sub-linear in intent count.
 
-**The binary test before every merge:** does this change let operator-Claude (a) skip LLM inference more often, or (b) carry a failure into the next session, or (c) compose existing intents into new ones?
+**Scoring test before every merge:** rate the change on each axis:
 
-- **Yes to any** → capability work. Ship it.
-- **No to all** → maintenance. OK to do, not OK to call progress, not OK to displace (a)/(b)/(c).
+| Axis | Score | Weight | Meaning |
+|------|-------|--------|---------|
+| (b) Failed → learn forever | +1 / 0 / −1 | ×2 | Safety net |
+| (a) Skip inference | +1 / 0 / −1 | ×1 | Efficiency |
+| (c) Compose | +1 / 0 / −1 | ×1 | Scalability |
+
+- **Weighted total ≥ 1** → capability work. Ship it.
+- **Total = 0** → maintenance. OK to do, not OK to call progress, not OK to displace scored work.
+- **Total < 0** → requires explicit justification in commit message. "Cleaner", "unified", "consistent" are not justification.
+
+Axis (b) is weighted ×2 because **a false positive (shipping a silently broken pipeline) costs more than a false negative (requiring one more successful run)**. Auto-promote is aggressive because the safety net is strong — never weaken the safety net to make auto-promote "safer."
 
 "It would be cleaner", "unified dispatch", "consistent naming" do not answer the test. They are maintainer aesthetics.
 
-**The binary test is frame-internal — it assumes the flywheel has a reason to spin.** Before shipping a "yes-to-any" change, also ask: *if emerge development stopped tomorrow, would this change still matter to someone?* When consecutive commits only improve emerge's own developer ergonomics without touching a real connector directory or cockpit user, the flywheel is spinning in its own oil — capability accretion without external pull. The three axes are necessary, not sufficient; a healthy audit flags at least one change as "correct by the axes but not by reality" before shipping.
+**The scoring test is frame-internal — it assumes the flywheel has a reason to spin.** Before shipping any positive-score change, run the external audit discipline (memory: `feedback_claude_md_bias.md`). Every audit must identify at least one change that scores positive but should be questioned — if everything looks obviously correct, the frame is too strong and the audit is not trustworthy.
 
 ## Commands
 
