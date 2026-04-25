@@ -245,3 +245,24 @@ def test_branch_connector_call_routes_correctly():
     }
     result = engine.execute(scenario, {"use_mock": "1"}, pipeline_engine=pe, mode="write")
     assert result["action_result"]["chosen"] == "branch-test"
+
+
+def test_connector_call_routes_via_intent_field():
+    """connector_call step parses 'intent: connector.mode.name' to route to the right pipeline."""
+    from scripts.pipeline_engine import PipelineEngine
+    engine = YAMLScenarioEngine()
+    pe = PipelineEngine()
+    # Use intent only — no explicit connector/pipeline in args
+    scenario = {
+        "steps": [
+            {
+                "name": "read-via-intent",
+                "type": "connector_call",
+                "intent": "mock.read.layers",
+                "args": {"document_id": "intent-test"},
+                "extract": {"got_id": "rows.0.document_id"},
+            }
+        ]
+    }
+    result = engine.execute(scenario, {}, pipeline_engine=pe, mode="write")
+    assert result["action_result"].get("got_id") == "intent-test"

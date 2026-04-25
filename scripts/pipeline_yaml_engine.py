@@ -291,7 +291,21 @@ class YAMLScenarioEngine:
                 "connector_call step requires pipeline_engine but none was provided"
             )
         call_args = {k: self._resolve(v, context) for k, v in step.get("args", {}).items()}
-        call_mode = step.get("mode", "read")
+        call_mode = step.get("mode", "read")  # default fallback
+
+        intent = self._resolve(str(step.get("intent", "")), context).strip()
+        if intent:
+            parts = intent.split(".", 2)
+            if len(parts) == 3:
+                intent_connector, intent_mode, intent_pipeline = parts
+                call_args.setdefault("connector", intent_connector)
+                call_args.setdefault("pipeline", intent_pipeline)
+                call_mode = intent_mode  # intent's mode takes precedence
+            else:
+                raise YAMLStepError(
+                    f"connector_call: 'intent' must be 'connector.mode.name', got {intent!r}"
+                )
+
         if call_mode == "read":
             result = pipeline_engine.run_read(call_args)
         else:
