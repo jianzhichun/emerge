@@ -8,7 +8,7 @@ import os
 import threading
 import time
 import uuid
-from collections import deque
+from collections import OrderedDict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -21,6 +21,33 @@ from scripts.distiller import Distiller
 
 _KEEPALIVE_INTERVAL_S = 20.0
 _RUNNER_DISCONNECT_GRACE_MS = 45_000
+
+
+class _LRUSet:
+    """Bounded-size message-id dedup set with LRU eviction."""
+
+    def __init__(self, values: list[str] | None = None, *, maxsize: int = 100_000) -> None:
+        self._d: OrderedDict[str, None] = OrderedDict()
+        self._maxsize = max(1, int(maxsize))
+        for value in values or []:
+            self.add(value)
+
+    def __contains__(self, key: str) -> bool:
+        if key in self._d:
+            self._d.move_to_end(key)
+            return True
+        return False
+
+    def __len__(self) -> int:
+        return len(self._d)
+
+    def add(self, key: str) -> None:
+        if key in self._d:
+            self._d.move_to_end(key)
+            return
+        self._d[key] = None
+        if len(self._d) > self._maxsize:
+            self._d.popitem(last=False)
 
 
 def _parse_multipart(content_type: str, body: bytes) -> dict:
@@ -107,6 +134,12 @@ class DaemonHTTPServer:
         self._pid_path = pid_path or (Path.home() / ".emerge" / "daemon.pid")
         self._event_root = event_root or (Path.home() / ".emerge" / "operator-events")
         self._state_root = state_root or (Path.home() / ".emerge" / "state")
+        try:
+            from scripts.watcher_profiles import materialize_active_profiles
+
+            materialize_active_profiles(self._state_root)
+        except Exception:
+            pass
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         # Runner monitor metadata is managed by an extracted service.
@@ -130,7 +163,7 @@ class DaemonHTTPServer:
         self._detector = _PatternDetector()
         self._runner_event_buffers: dict[str, deque] = {}
         self._runner_buffers_lock = threading.Lock()
-        self._runner_seen_message_ids: set[str] = self._load_seen_message_ids()
+        self._runner_seen_message_ids = _LRUSet(self._load_seen_message_ids())
         self._runner_seen_lock = threading.Lock()
         self._suggestion_aggregator = SuggestionAggregator(
             state_root=self._state_root,
@@ -151,6 +184,14 @@ class DaemonHTTPServer:
     def _make_synthesis_agent(self):
         if not hasattr(self._daemon, "call_tool"):
             return None
+        try:
+            from scripts.synthesis_agent import SynthesisAgent
+            return SynthesisAgent(
+                state_root=self._state_root,
+                exec_tool=lambda args: self._daemon.call_tool("icc_exec", args),
+            )
+        except Exception:
+            return None
 
     def _emit_cockpit_action(self, action: dict) -> None:
         try:
@@ -162,10 +203,10 @@ class DaemonHTTPServer:
     def _seen_message_ids_path(self) -> Path:
         return events_root(self._state_root) / "runner-message-ids.jsonl"
 
-    def _load_seen_message_ids(self) -> set[str]:
+    def _load_seen_message_ids(self) -> list[str]:
         path = self._seen_message_ids_path()
         if not path.exists():
-            return set()
+            return []
         seen: list[str] = []
         try:
             for line in path.read_text(encoding="utf-8").splitlines():
@@ -173,8 +214,8 @@ class DaemonHTTPServer:
                 if line:
                     seen.append(line)
         except OSError:
-            return set()
-        return set(seen[-10000:])
+            return []
+        return seen[-10000:]
 
     def _remember_message_id(self, message_id: str) -> None:
         if not message_id:
@@ -186,14 +227,6 @@ class DaemonHTTPServer:
                 f.write(message_id + "\n")
         except OSError:
             pass
-        try:
-            from scripts.synthesis_agent import SynthesisAgent
-            return SynthesisAgent(
-                state_root=self._state_root,
-                exec_tool=lambda args: self._daemon.call_tool("icc_exec", args),
-            )
-        except Exception:
-            return None
 
     def cockpit_broadcast(self, event: dict) -> None:
         """Push SSE event to cockpit browsers connected to /api/sse/status."""

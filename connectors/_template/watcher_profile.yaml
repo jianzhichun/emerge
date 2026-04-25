@@ -1,0 +1,36 @@
+# Template watcher profile. Copy this into your connector's directory
+# (connectors/<your-connector>/watcher_profile.yaml) and edit.
+#
+# The runner-side operator-watcher observes operator activity, detects
+# repeatable patterns, redacts sensitive fields, and emits structured
+# suggestions to the orchestrator. The orchestrator, never the watcher,
+# crystallizes pipelines from those suggestions.
+
+connector: _template
+
+sources:
+  - type: file
+    path: ~/.local/share/<your-tool>/activity.log
+
+parser:
+  type: regex
+  pattern: 'action=(?P<action>\w+) .*?param=(?P<param>\S+)'
+
+intent_hints:
+  - when:
+      action: open
+    intent: _template.read.open
+  - when:
+      action: save
+    intent: _template.write.save
+
+preference_hints:
+  - name: density
+    source: param
+    ttl_days: 30
+
+redaction:
+  drop_fields:
+    - license_key
+    - api_token
+    - user.email

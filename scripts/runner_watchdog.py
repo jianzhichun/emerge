@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -96,8 +97,17 @@ def _start_runner(host: str, port: int, python: str) -> subprocess.Popen:
     )
 
 
+def _outbox_flusher_loop() -> None:
+    from scripts.runner_emit import flush_outbox_once
+
+    while True:
+        time.sleep(30)
+        flush_outbox_once()
+
+
 def run(host: str, port: int, python: str) -> None:
     SIGNAL_FILE.unlink(missing_ok=True)
+    threading.Thread(target=_outbox_flusher_loop, daemon=True, name="RunnerOutboxFlusher").start()
     proc = _start_runner(host, port, python)
     log(f"runner started (pid={proc.pid})")
 

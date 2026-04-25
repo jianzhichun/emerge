@@ -76,3 +76,57 @@ def test_suggestion_aggregator_triggers_on_single_runner_occurrences(tmp_path):
     assert aggregator.on_suggestion(first)["status"] == "stored"
     assert aggregator.on_suggestion(second)["status"] == "triggered"
     assert emitted[0]["payload"]["trigger_reason"] == "single_runner_occurrences"
+
+
+def test_suggestion_aggregator_replays_persisted_suggestions(tmp_path):
+    from scripts.orchestrator.suggestion_aggregator import SuggestionAggregator
+
+    state_root = tmp_path / "state"
+    first = SuggestionAggregator(
+        state_root=state_root,
+        emit_cockpit_action=lambda _action: None,
+        min_runners=3,
+    )
+    first.on_suggestion({"runner_profile": "a", "intent_signature_hint": "foo.write.bar", "raw_actions": ["a"]})
+    first.on_suggestion({"runner_profile": "b", "intent_signature_hint": "foo.write.bar", "raw_actions": ["b"]})
+
+    emitted: list[dict] = []
+    second = SuggestionAggregator(
+        state_root=state_root,
+        emit_cockpit_action=emitted.append,
+        min_runners=3,
+    )
+    result = second.on_suggestion(
+        {"runner_profile": "c", "intent_signature_hint": "foo.write.bar", "raw_actions": ["c"]}
+    )
+
+    assert result["status"] == "triggered"
+    assert len(emitted) == 1
+    assert emitted[0]["payload"]["runner_profiles"] == ["a", "b", "c"]
+
+
+def test_suggestion_aggregator_retriggers_after_new_evidence_threshold(tmp_path):
+    from scripts.orchestrator.suggestion_aggregator import SuggestionAggregator
+
+    emitted: list[dict] = []
+    aggregator = SuggestionAggregator(
+        state_root=tmp_path / "state",
+        emit_cockpit_action=emitted.append,
+        min_runners=1,
+        min_occurrences_single_runner=1,
+        retrigger_min_new_evidence=3,
+    )
+
+    assert aggregator.on_suggestion(
+        {"runner_profile": "a", "intent_signature_hint": "foo.write.bar", "raw_actions": ["1"]}
+    )["status"] == "triggered"
+    assert aggregator.on_suggestion(
+        {"runner_profile": "a", "intent_signature_hint": "foo.write.bar", "raw_actions": ["2"]}
+    )["status"] == "stored"
+    assert aggregator.on_suggestion(
+        {"runner_profile": "a", "intent_signature_hint": "foo.write.bar", "raw_actions": ["3"]}
+    )["status"] == "stored"
+    assert aggregator.on_suggestion(
+        {"runner_profile": "a", "intent_signature_hint": "foo.write.bar", "raw_actions": ["4"]}
+    )["status"] == "triggered"
+    assert len(emitted) == 2

@@ -50,3 +50,71 @@ def test_watcher_profile_schema_rejects_bad_intent():
         assert False, "invalid profile should fail"
     except ValueError as exc:
         assert "connector.mode.name" in str(exc)
+
+
+def test_load_watcher_profile_fail_gracefully(tmp_path):
+    from scripts.watcher_profiles import load_watcher_profile
+
+    root = tmp_path / "connectors"
+    assert load_watcher_profile("missing", connector_root=root) is None
+
+    bad = root / "bad"
+    bad.mkdir(parents=True)
+    (bad / "watcher_profile.yaml").write_text("not: [valid", encoding="utf-8")
+    assert load_watcher_profile("bad", connector_root=root) is None
+
+    invalid = root / "invalid"
+    invalid.mkdir()
+    (invalid / "watcher_profile.yaml").write_text("connector: invalid\nsources: []\n", encoding="utf-8")
+    assert load_watcher_profile("invalid", connector_root=root) is None
+
+
+def test_materialize_active_profiles_writes_valid_profiles(tmp_path):
+    import json
+
+    from scripts.watcher_profiles import materialize_active_profiles
+
+    connector_root = tmp_path / "connectors"
+    foo = connector_root / "foo"
+    foo.mkdir(parents=True)
+    (foo / "watcher_profile.yaml").write_text(
+        """
+connector: foo
+sources:
+  - type: file
+    path: ~/foo/activity.log
+parser:
+  type: regex
+  pattern: 'action=(?P<action>\\w+)'
+intent_hints:
+  - when:
+      action: save
+    intent: foo.write.save
+redaction:
+  drop_fields:
+    - token
+""".strip(),
+        encoding="utf-8",
+    )
+    broken = connector_root / "broken"
+    broken.mkdir()
+    (broken / "watcher_profile.yaml").write_text("connector: nope\nsources: []\n", encoding="utf-8")
+
+    out = materialize_active_profiles(tmp_path / "state", connector_root=connector_root)
+    data = json.loads(out.read_text(encoding="utf-8"))
+
+    assert sorted(data["profiles"]) == ["foo"]
+    assert data["profiles"]["foo"]["intent_hints"][0]["intent"] == "foo.write.save"
+
+
+def test_template_watcher_profile_is_valid():
+    import yaml
+
+    from scripts.watcher_profiles import validate_watcher_profile
+
+    path = ROOT / "connectors" / "_template" / "watcher_profile.yaml"
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    profile = validate_watcher_profile(raw)
+
+    assert profile["connector"] == "_template"
+    assert profile["intent_hints"]

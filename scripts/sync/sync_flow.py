@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 
 
 def sync_mode() -> str:
+    from scripts.node_role import is_runner_role
+
+    if is_runner_role():
+        return "read-only"
     raw = os.environ.get("EMERGE_SYNC_MODE", "").strip().lower()
     if raw in {"read-only", "readonly", "pull-only", "runner"}:
         return "read-only"

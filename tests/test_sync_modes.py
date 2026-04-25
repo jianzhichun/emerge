@@ -50,3 +50,14 @@ def test_read_write_sync_preserves_existing_push_then_pull(monkeypatch, tmp_path
     assert result["mode"] == "read-write"
     assert result["push"]["ok"] is True
     assert calls == ["export", "push"]
+
+
+def test_runner_role_forces_read_only_sync(monkeypatch):
+    from scripts.sync import sync_flow
+
+    monkeypatch.setenv("EMERGE_NODE_ROLE", "runner")
+    monkeypatch.delenv("EMERGE_SYNC_MODE", raising=False)
+    assert sync_flow.sync_mode() == "read-only"
+
+    monkeypatch.setenv("EMERGE_SYNC_MODE", "read-write")
+    assert sync_flow.sync_mode() == "read-only"

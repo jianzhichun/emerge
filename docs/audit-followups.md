@@ -6,7 +6,7 @@ Audit source: `memory/feedback_claude_md_bias.md` — frame-external 5-blind-spo
 
 ## Open
 
-*(none)*
+- **factory test invariant**: every `_make_*`, `_build_*`, `_create_*` method on a class must have at least one test that exercises the factory **without** monkeypatching its return value. Refactors, especially "pre-release cleanup" style edits, frequently split factory bodies; this test class catches that early.
 
 ## Closed
 
