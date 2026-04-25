@@ -84,3 +84,19 @@ def format_runner_event(data: dict) -> str:
     etype = data.get("type", "?")
     ts = data.get("ts_ms", 0)
     return f"[RunnerEvent] runner={profile} type={etype} ts={ts}"
+
+
+def format_runner_subagent_message(data: dict) -> str:
+    profile = data.get("runner_profile", "?")
+    kind = data.get("kind", data.get("type", "?"))
+    payload = data.get("payload", {}) if isinstance(data.get("payload"), dict) else {}
+    intent = payload.get("intent_signature_hint") or payload.get("intent_signature") or data.get("intent_signature", "?")
+    context = payload.get("context_hint", "")
+    params = payload.get("preferred_params", {})
+    param_text = ""
+    if isinstance(params, dict) and params:
+        param_text = " params=" + ", ".join(f"{k}={v}" for k, v in sorted(params.items()))
+    lines = [f"[RunnerSubagent:{profile}] {kind} intent={intent}{param_text}".rstrip()]
+    if context:
+        lines.append(str(context))
+    return "\n".join(lines)

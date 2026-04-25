@@ -11,6 +11,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
+from scripts.node_role import is_runner_role
+
 
 class CompositeBridgeUnavailable(Exception):
     """Composite `_try_flywheel_bridge` returned None; bridge failure already recorded."""
@@ -195,7 +197,11 @@ class SpanHandlers:
         synthesis_ready = self._span_tracker.is_synthesis_ready(closed.intent_signature)
         skeleton_path: str | None = None
 
-        if synthesis_ready and not self._span_tracker.skeleton_already_generated(closed.intent_signature):
+        if (
+            synthesis_ready
+            and not is_runner_role()
+            and not self._span_tracker.skeleton_already_generated(closed.intent_signature)
+        ):
             latest = self._span_tracker.latest_successful_span(closed.intent_signature)
             if latest:
                 generated = self._generate_skeleton(
@@ -247,6 +253,7 @@ class SpanHandlers:
         # For multi-tool spans at synthesis_ready, emit crystallize.to-yaml cockpit action
         if (
             synthesis_ready
+            and not is_runner_role()
             and len(closed.actions) > 1
             and self._emit_cockpit_action is not None
         ):
@@ -300,6 +307,11 @@ class SpanHandlers:
     def handle_span_approve(self, arguments: dict[str, Any]) -> dict[str, Any]:
         from scripts.policy_config import resolve_connector_root
         from scripts.crystallizer import IndentedSafeDumper
+
+        if is_runner_role():
+            return self._tool_error(
+                "icc_span_approve is orchestrator-only. Runner instances must not activate pipelines."
+            )
 
         intent_signature = str(arguments.get("intent_signature", "")).strip()
         if not intent_signature:

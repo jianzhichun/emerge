@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from scripts.node_role import is_runner_role
+
 
 class ToolHandlers:
     def __init__(
@@ -138,6 +140,10 @@ class ToolHandlers:
             return self._tool_error(f"icc_exec failed: {exc}")
 
     def handle_icc_crystallize(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if is_runner_role():
+            return self._tool_error(
+                "icc_crystallize is orchestrator-only. Runner instances must send pattern_suggestion upstream."
+            )
         try:
             intent_signature = str(arguments.get("intent_signature", "")).strip()
             connector = str(arguments.get("connector", "")).strip()
@@ -169,6 +175,10 @@ class ToolHandlers:
             return self._tool_error(f"icc_crystallize failed: {exc}")
 
     def handle_icc_compose(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if is_runner_role():
+            return self._tool_error(
+                "icc_compose is orchestrator-only. Runner instances must send composition suggestions upstream."
+            )
         from scripts.policy_config import PIPELINE_KEY_RE
         from scripts.intent_registry import IntentRegistry
 
@@ -250,6 +260,10 @@ class ToolHandlers:
         }
 
     def handle_icc_reconcile(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if is_runner_role():
+            return self._tool_error(
+                "icc_reconcile is orchestrator-only. Runner instances must forward operator feedback upstream."
+            )
         from scripts.policy_config import default_hook_state_root
         from scripts.state_tracker import load_tracker, save_tracker
 

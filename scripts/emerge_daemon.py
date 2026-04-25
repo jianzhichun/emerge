@@ -25,6 +25,7 @@ from scripts.policy_config import (  # noqa: E402
 from scripts.crystallizer import PipelineCrystallizer  # noqa: E402
 from scripts.intent_registry import IntentRegistry  # noqa: E402
 from scripts.mcp.span_handler import CompositeBridgeUnavailable, SpanHandlers  # noqa: E402
+from scripts.node_role import current_node_role, NodeRole  # noqa: E402
 from scripts.runner_client import RunnerRouter  # noqa: E402
 from scripts.exec_session import ExecSession  # noqa: E402
 
@@ -46,6 +47,8 @@ class EmergeDaemon:
             _project_root,
         )
         self._state_root = state_root
+        self._node_role = current_node_role()
+        self._is_runner_role = self._node_role == NodeRole.RUNNER
         self._sessions_by_profile: dict[str, ExecSession] = {}
         self.pipeline = PipelineEngine(root=resolved_root)
         self._root = resolved_root
@@ -74,6 +77,7 @@ class EmergeDaemon:
         self._operator_monitor: Any | None = None
         self._event_router = None
         from scripts.policy_engine import PolicyEngine
+        from scripts.runner_policy import EvidenceForwardingPolicy
         from scripts.span_tracker import SpanTracker
         from scripts.mcp.flywheel_recorder import FlywheelRecorder
         _hook_state_root = Path(default_hook_state_root())
@@ -82,15 +86,18 @@ class EmergeDaemon:
         # fields — span close
         # (SpanTracker), icc_exec/pipeline events (FlywheelRecorder), and
         # icc_reconcile all flow through this one engine.
-        self._policy_engine = PolicyEngine(
-            state_root=lambda: self._state_root,
-            lock=self._registry_lock,
-            sink=lambda: self._sink,
-            auto_crystallize=lambda **kw: self._auto_crystallize(**kw),
-            has_synthesizable_wal=lambda sig, tp: self._flywheel.has_synthesizable_wal_entry(sig, tp),
-            write_mcp_push=lambda _p: None,
-            session_id=lambda: self._base_session_id,
-        )
+        if self._is_runner_role:
+            self._policy_engine = EvidenceForwardingPolicy()
+        else:
+            self._policy_engine = PolicyEngine(
+                state_root=lambda: self._state_root,
+                lock=self._registry_lock,
+                sink=lambda: self._sink,
+                auto_crystallize=lambda **kw: self._auto_crystallize(**kw),
+                has_synthesizable_wal=lambda sig, tp: self._flywheel.has_synthesizable_wal_entry(sig, tp),
+                write_mcp_push=lambda _p: None,
+                session_id=lambda: self._base_session_id,
+            )
         self._span_tracker = SpanTracker(
             state_root=self._state_root,
             hook_state_root=_hook_state_root,
@@ -120,12 +127,16 @@ class EmergeDaemon:
             open_spans=self._open_spans,
             intent_gate=self._intent_gate,
             save_intent_gate=self._save_intent_gate,
-            generate_skeleton=lambda **kw: self._generate_span_skeleton(**kw),
+            generate_skeleton=(
+                (lambda **_kw: None)
+                if self._is_runner_role
+                else (lambda **kw: self._generate_span_skeleton(**kw))
+            ),
             sink=lambda: self._sink,
             run_pipeline=self._span_run_pipeline,
             record_pipeline_event=self._flywheel.record_pipeline_event,
             record_bridge_outcome=self._policy_engine.record_bridge_outcome,
-            emit_cockpit_action=self._emit_crystallize_cockpit_action,
+            emit_cockpit_action=None if self._is_runner_role else self._emit_crystallize_cockpit_action,
             tool_error=self._tool_error,
             tool_ok_json=self._tool_ok_json,
         )
@@ -302,6 +313,8 @@ class EmergeDaemon:
             pass  # non-fatal — never break span_close
 
     def _crystallize(self, **kwargs: Any) -> dict[str, Any]:
+        if self._is_runner_role:
+            return self._tool_error("icc_crystallize is orchestrator-only; runner instances must send suggestions upstream.")
         result = PipelineCrystallizer(self._state_root).crystallize(**kwargs)
         self.pipeline.invalidate_cache(
             connector=str(kwargs.get("connector", "")).strip() or None,
@@ -311,6 +324,8 @@ class EmergeDaemon:
         return result
 
     def _auto_crystallize(self, **kwargs: Any) -> None:
+        if self._is_runner_role:
+            return
         PipelineCrystallizer(self._state_root).auto_crystallize(**kwargs)
         self.pipeline.invalidate_cache(
             connector=str(kwargs.get("connector", "")).strip() or None,
@@ -319,6 +334,8 @@ class EmergeDaemon:
         )
 
     def _generate_span_skeleton(self, **kwargs: Any) -> "Path | None":
+        if self._is_runner_role:
+            return None
         return PipelineCrystallizer(self._state_root).generate_span_skeleton(**kwargs)
 
     @staticmethod

@@ -146,6 +146,12 @@ class RunnerExecutor:
         except (_ue.URLError, OSError):
             return False  # best-effort, never block operator
 
+    def forward_event(self, event: dict) -> bool:
+        """Public runner-side helper for watcher processes/subagents."""
+        if not (self._team_lead_url and self._runner_profile):
+            return False
+        return self._forward_event_to_daemon(event)
+
     def _post_operator_message(self, text: str, attachments: list | None = None) -> None:
         """Forward operator tray message to daemon as an operator_message event."""
         import socket as _sock

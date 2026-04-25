@@ -81,6 +81,9 @@ def _load_team_lead_url() -> str:
 def _start_runner(host: str, port: int, python: str) -> subprocess.Popen:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT)
+    env["EMERGE_NODE_ROLE"] = "runner"
+    env["EMERGE_RUNNER_MODE"] = "1"
+    env["EMERGE_SYNC_MODE"] = "read-only"
     tl = _load_team_lead_url()
     if tl:
         env["EMERGE_TEAM_LEAD_URL"] = tl

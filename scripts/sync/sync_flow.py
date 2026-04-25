@@ -6,6 +6,7 @@ run_event_loop is the background agent entry point.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from pathlib import Path
@@ -27,6 +28,30 @@ from scripts.sync.git_ops import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def sync_mode() -> str:
+    raw = os.environ.get("EMERGE_SYNC_MODE", "").strip().lower()
+    if raw in {"read-only", "readonly", "pull-only", "runner"}:
+        return "read-only"
+    return "read-write"
+
+
+def sync_connector(
+    connector: str,
+    *,
+    connectors_root_path: Path | None = None,
+    hub_worktree: Path | None = None,
+) -> dict[str, Any]:
+    mode = sync_mode()
+    if mode == "read-only":
+        pull = pull_flow(connector, connectors_root_path=connectors_root_path, hub_worktree=hub_worktree)
+        return {"ok": bool(pull.get("ok")), "mode": mode, "pull": pull}
+    push = push_flow(connector, connectors_root_path=connectors_root_path, hub_worktree=hub_worktree)
+    result: dict[str, Any] = {"ok": bool(push.get("ok")), "mode": mode, "push": push}
+    if push.get("ok"):
+        result["pull"] = pull_flow(connector, connectors_root_path=connectors_root_path, hub_worktree=hub_worktree)
+    return result
 
 
 def push_flow(
@@ -96,6 +121,9 @@ def _run_stable_events() -> None:
     for event in events:
         connector = event["connector"]
         if event.get("event") == "pull_requested":
+            pull_requested.add(connector)
+            continue
+        if sync_mode() == "read-only":
             pull_requested.add(connector)
             continue
         if connector in push_processed:

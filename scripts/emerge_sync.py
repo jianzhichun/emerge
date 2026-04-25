@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.sync.asset_ops import connectors_root as _connectors_root  # noqa: E402
 from scripts.sync.git_ops import git_setup_worktree  # noqa: E402
-from scripts.sync.sync_flow import push_flow, pull_flow, run_event_loop  # noqa: E402
+from scripts.sync.sync_flow import pull_flow, run_event_loop, sync_connector  # noqa: E402
 from scripts.hub_config import (  # noqa: E402
     is_configured,
     load_hub_config,
@@ -71,15 +71,20 @@ def cmd_sync(connector: str | None = None) -> None:
     cfg = load_hub_config()
     verticals = [connector] if connector else cfg.get("selected_verticals", [])
     for c in verticals:
-        result = push_flow(c)
-        if result.get("ok"):
-            print(f"sync {c}: ok (push)")
-        elif result.get("conflict"):
+        result = sync_connector(c)
+        push_result = result.get("push", {})
+        if push_result.get("conflict"):
             print(f"sync {c}: conflict — resolve via icc_hub(action='status')")
             continue
-        else:
-            print(f"sync {c}: error — {result.get('error', 'unknown')}")
-        pull_result = pull_flow(c)
+        if not result.get("ok"):
+            err = push_result.get("error") or result.get("pull", {}).get("error") or "unknown"
+            print(f"sync {c}: error — {err}")
+            continue
+        if result.get("mode") == "read-only":
+            print(f"sync {c}: ok (pull-only)")
+            continue
+        print(f"sync {c}: ok (push)")
+        pull_result = result.get("pull", {})
         if pull_result.get("action") == "imported":
             print(f"sync {c}: ok (pull — imported updates)")
 

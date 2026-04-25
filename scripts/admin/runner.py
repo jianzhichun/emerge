@@ -423,7 +423,12 @@ if [ "$OS" = "Darwin" ]; then
     <string>--port</string><string>$RUNNER_PORT</string>
   </array>
   <key>EnvironmentVariables</key>
-  <dict><key>EMERGE_TEAM_LEAD_URL</key><string>$TEAM_LEAD_URL</string></dict>
+  <dict>
+    <key>EMERGE_TEAM_LEAD_URL</key><string>$TEAM_LEAD_URL</string>
+    <key>EMERGE_NODE_ROLE</key><string>runner</string>
+    <key>EMERGE_RUNNER_MODE</key><string>1</string>
+    <key>EMERGE_SYNC_MODE</key><string>read-only</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>WorkingDirectory</key><string>$RUNNER_ROOT</string>
@@ -457,6 +462,9 @@ ExecStart="$PYTHON_BIN" "$RUNNER_ROOT/scripts/runner_watchdog.py" --host 0.0.0.0
 WorkingDirectory=$RUNNER_ROOT
 Restart=always
 Environment="EMERGE_TEAM_LEAD_URL=$TEAM_LEAD_URL"
+Environment="EMERGE_NODE_ROLE=runner"
+Environment="EMERGE_RUNNER_MODE=1"
+Environment="EMERGE_SYNC_MODE=read-only"
 
 [Install]
 WantedBy=default.target

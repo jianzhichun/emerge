@@ -126,9 +126,16 @@ class DaemonHTTPServer:
         self._popup_lock = threading.Lock()
         # Pattern detection: per-runner sliding-window event buffers
         from scripts.pattern_detector import PatternDetector as _PatternDetector
+        from scripts.orchestrator.suggestion_aggregator import SuggestionAggregator
         self._detector = _PatternDetector()
         self._runner_event_buffers: dict[str, deque] = {}
         self._runner_buffers_lock = threading.Lock()
+        self._runner_seen_message_ids: set[str] = self._load_seen_message_ids()
+        self._runner_seen_lock = threading.Lock()
+        self._suggestion_aggregator = SuggestionAggregator(
+            state_root=self._state_root,
+            emit_cockpit_action=self._emit_cockpit_action,
+        )
         self._synthesis_agent = self._make_synthesis_agent()
         # Cockpit UI + /api/* when served on the same port as MCP (see InProcessCockpitBridge)
         self._cockpit_sse_clients: list[Any] = []
@@ -144,6 +151,41 @@ class DaemonHTTPServer:
     def _make_synthesis_agent(self):
         if not hasattr(self._daemon, "call_tool"):
             return None
+
+    def _emit_cockpit_action(self, action: dict) -> None:
+        try:
+            if hasattr(self._daemon, "_emit_crystallize_cockpit_action"):
+                self._daemon._emit_crystallize_cockpit_action(action)
+        except Exception:
+            pass
+
+    def _seen_message_ids_path(self) -> Path:
+        return events_root(self._state_root) / "runner-message-ids.jsonl"
+
+    def _load_seen_message_ids(self) -> set[str]:
+        path = self._seen_message_ids_path()
+        if not path.exists():
+            return set()
+        seen: list[str] = []
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line:
+                    seen.append(line)
+        except OSError:
+            return set()
+        return set(seen[-10000:])
+
+    def _remember_message_id(self, message_id: str) -> None:
+        if not message_id:
+            return
+        try:
+            path = self._seen_message_ids_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(message_id + "\n")
+        except OSError:
+            pass
         try:
             from scripts.synthesis_agent import SynthesisAgent
             return SynthesisAgent(
@@ -262,6 +304,16 @@ class DaemonHTTPServer:
         runner_profile = str(payload.get("runner_profile", "")).strip()
         machine_id = str(payload.get("machine_id", "")).strip()
         ts_ms = int(time.time() * 1000)
+        orig_type = str(payload.get("type", "")).strip()
+        message_id = str(payload.get("message_id", "")).strip()
+        first_seen = True
+        if message_id:
+            with self._runner_seen_lock:
+                if message_id in self._runner_seen_message_ids:
+                    first_seen = False
+                else:
+                    self._runner_seen_message_ids.add(message_id)
+                    self._remember_message_id(message_id)
         if machine_id:
             _validate_machine_id(machine_id)
             machine_dir = self._event_root / machine_id
@@ -276,8 +328,14 @@ class DaemonHTTPServer:
                 runner_profile = ""  # invalid profile, skip per-runner event file
         if runner_profile:
             self._runner_state.on_event(runner_profile, ts_ms)
-            _orig_type = payload.get("type", "")
-            _written_type = _orig_type if _orig_type == "operator_message" else "runner_event"
+            preserved_types = {
+                "operator_message",
+                "runner_subagent_message",
+                "pattern_suggestion",
+                "evidence_report",
+                "bridge_outcome_report",
+            }
+            _written_type = orig_type if orig_type in preserved_types else "runner_event"
             self._append_event(events_root(self._state_root) / f"events-{runner_profile}.jsonl", {
                 "type": _written_type,
                 "ts_ms": ts_ms,
@@ -286,8 +344,23 @@ class DaemonHTTPServer:
                    if k not in ("runner_profile", "type")},
             })
 
+        if first_seen:
+            if orig_type == "evidence_report":
+                self._apply_evidence_report(payload, runner_profile=runner_profile, ts_ms=ts_ms)
+            elif orig_type == "bridge_outcome_report":
+                self._apply_bridge_outcome_report(payload, ts_ms=ts_ms)
+            elif orig_type in ("runner_subagent_message", "pattern_suggestion"):
+                self._process_runner_suggestion(payload, runner_profile=runner_profile)
+
         # Pattern detection on runner push events (skip operator chat messages)
-        if runner_profile and payload.get("type") != "operator_message":
+        skip_detector = {
+            "operator_message",
+            "runner_subagent_message",
+            "pattern_suggestion",
+            "evidence_report",
+            "bridge_outcome_report",
+        }
+        if runner_profile and orig_type not in skip_detector:
             window_ms = self._detector.FREQ_WINDOW_MS
             with self._runner_buffers_lock:
                 buf = self._runner_event_buffers.setdefault(runner_profile, deque())
@@ -365,6 +438,63 @@ class DaemonHTTPServer:
             self._write_monitor_state()
             if summaries:
                 self._notify_cockpit_broadcast({"monitors_updated": True})
+
+    def _apply_evidence_report(self, payload: dict, *, runner_profile: str, ts_ms: int) -> None:
+        sig = str(payload.get("intent_signature", "")).strip()
+        if not sig:
+            return
+        try:
+            self._daemon._policy_engine.apply_evidence(
+                sig,
+                success=bool(payload.get("success", False)),
+                anchor_type=str(payload.get("anchor_type", "self_report") or "self_report"),
+                evidence_unit_id=str(payload.get("evidence_unit_id") or payload.get("message_id") or ""),
+                verify_observed=bool(payload.get("verify_observed", False)),
+                verify_passed=bool(payload.get("verify_passed", False)),
+                human_fix=bool(payload.get("human_fix", False)),
+                is_degraded=bool(payload.get("is_degraded", False)),
+                description=str(payload.get("description", "") or ""),
+                is_read_only=payload.get("is_read_only") if payload.get("is_read_only") is not None else None,
+                target_profile=str(payload.get("target_profile") or runner_profile or "default"),
+                execution_path=str(payload.get("execution_path") or "runner"),
+                policy_action=payload.get("policy_action"),
+                policy_enforced=bool(payload.get("policy_enforced", False)),
+                stop_triggered=bool(payload.get("stop_triggered", False)),
+                rollback_executed=bool(payload.get("rollback_executed", False)),
+                ts_ms=int(payload.get("ts_ms") or ts_ms),
+            )
+        except Exception:
+            logging.exception("failed to apply runner evidence report")
+
+    def _apply_bridge_outcome_report(self, payload: dict, *, ts_ms: int) -> None:
+        sig = str(payload.get("intent_signature", "")).strip()
+        if not sig:
+            return
+        try:
+            row_keys = payload.get("row_keys_sample")
+            self._daemon._policy_engine.record_bridge_outcome(
+                sig,
+                success=bool(payload.get("success", False)),
+                reason=str(payload.get("reason", "") or ""),
+                exception_class=str(payload.get("exception_class", "") or ""),
+                demotion_reason=str(payload.get("demotion_reason", "bridge_broken") or "bridge_broken"),
+                non_empty=payload.get("non_empty"),
+                ts_ms=int(payload.get("ts_ms") or ts_ms),
+                row_keys_sample=frozenset(row_keys) if isinstance(row_keys, list) else None,
+            )
+        except Exception:
+            logging.exception("failed to apply runner bridge outcome report")
+
+    def _process_runner_suggestion(self, payload: dict, *, runner_profile: str) -> None:
+        suggestion = dict(payload.get("payload") or {}) if isinstance(payload.get("payload"), dict) else dict(payload)
+        suggestion.setdefault("runner_profile", runner_profile or payload.get("runner_profile", ""))
+        suggestion.setdefault("machine_id", payload.get("machine_id", ""))
+        if payload.get("kind") and "kind" not in suggestion:
+            suggestion["kind"] = payload.get("kind")
+        try:
+            self._suggestion_aggregator.on_suggestion(suggestion)
+        except Exception:
+            logging.exception("failed to aggregate runner suggestion")
 
     def _on_popup_result(self, payload: dict) -> None:
         popup_id = str(payload.get("popup_id", "")).strip()

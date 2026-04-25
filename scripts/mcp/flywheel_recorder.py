@@ -342,9 +342,11 @@ class FlywheelRecorder:
         # Hand one evidence event to PolicyEngine (outside the candidates.json lock
         # is fine — PolicyEngine has its own registry lock).
         if sampled_in_policy or is_error:
+            evidence_unit_id = f"{session_id}:exec:{event['ts_ms']}:{intent_signature}"
             self._policy.apply_evidence(
                 intent_signature,
                 success=not is_error,
+                evidence_unit_id=evidence_unit_id,
                 verify_observed=True,
                 verify_passed=trusted_verify_passed,
                 description=description,
@@ -498,9 +500,11 @@ class FlywheelRecorder:
                 else "stop" if stop_triggered
                 else "none"
             )
+            evidence_unit_id = f"{session_id}:pipeline:{event['ts_ms']}:{key}"
             self._policy.apply_evidence(
                 key,
                 success=not is_error,
+                evidence_unit_id=evidence_unit_id,
                 verify_observed=True,
                 verify_passed=verify_passed,
                 is_degraded=is_degraded,
