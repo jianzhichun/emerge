@@ -31,6 +31,7 @@ class SpanHandlers:
         run_pipeline: Callable,     # (mode, args) → (result_dict, exec_path_str)
         record_pipeline_event: Callable,  # FlywheelRecorder.record_pipeline_event
         record_bridge_outcome: Callable | None = None,  # PolicyEngine.record_bridge_outcome
+        emit_cockpit_action: Callable | None = None,  # (action_dict) → None
         tool_error: Callable[[str], dict],
         tool_ok_json: Callable[[Any], dict],
     ) -> None:
@@ -43,6 +44,7 @@ class SpanHandlers:
         self._run_pipeline = run_pipeline
         self._record_pipeline_event = record_pipeline_event
         self._record_bridge_outcome = record_bridge_outcome
+        self._emit_cockpit_action = emit_cockpit_action
         self._tool_error = tool_error
         self._tool_ok_json = tool_ok_json
 
@@ -241,6 +243,32 @@ class SpanHandlers:
                     f"Review and complete {skeleton_path}, "
                     "then call icc_span_approve to activate the bridge."
                 )
+
+        # For multi-tool spans at synthesis_ready, emit crystallize.to-yaml cockpit action
+        if (
+            synthesis_ready
+            and len(closed.actions) > 1
+            and self._emit_cockpit_action is not None
+        ):
+            try:
+                self._emit_cockpit_action({
+                    "type": "crystallize.to-yaml",
+                    "payload": {
+                        "intent_signature": closed.intent_signature,
+                        "span_id": closed.span_id,
+                        "actions": [
+                            {
+                                "tool_name": a.tool_name,
+                                "args_snapshot": a.args_snapshot,
+                                "result_summary": a.result_summary,
+                            }
+                            for a in closed.actions
+                        ],
+                    },
+                })
+            except Exception:
+                pass  # never crash span_close on crystallization side-effect
+
         return self._tool_ok_json(response)
 
     def _auto_activate_pipeline(self, intent_signature: str) -> str | None:

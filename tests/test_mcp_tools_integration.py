@@ -4365,3 +4365,56 @@ def test_icc_compose_stage_flows_through_policy_engine(tmp_path):
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
         os.environ.pop("EMERGE_SESSION_ID", None)
+
+
+def test_span_close_multi_tool_emits_crystallize_action(tmp_path):
+    """icc_span_close with >1 span action and synthesis_ready emits crystallize.to-yaml event."""
+    import json
+
+    # The autouse _mock_connector_root fixture already sets:
+    #   EMERGE_STATE_ROOT  → tmp_path/state
+    #   EMERGE_HOOK_STATE_ROOT → tmp_path/hook-state
+    # Use those paths directly.
+    state_root = tmp_path / "state"
+    hook_state = tmp_path / "hook-state"
+    os.environ["EMERGE_SESSION_ID"] = "test-crystallize-emit"
+    events_path = state_root / "events" / "events.jsonl"
+
+    try:
+        daemon = EmergeDaemon(root=ROOT)
+
+        # Advance the intent to the canary→stable boundary (14 successes)
+        for _ in range(14):
+            r = daemon.call_tool("icc_span_open", {"intent_signature": "mock.write.multi-op"})
+            span_id = json.loads(r["content"][0]["text"]).get("span_id", "")
+            daemon.call_tool("icc_span_close", {"span_id": span_id, "outcome": "success"})
+
+        # Open the 15th span, then write 2 actions to the hook-state buffer
+        # (icc_span_open clears the buffer, so we write after open).
+        r = daemon.call_tool("icc_span_open", {"intent_signature": "mock.write.multi-op"})
+        span_id = json.loads(r["content"][0]["text"]).get("span_id", "")
+        buf = hook_state / "active-span-actions.jsonl"
+        buf.write_text(
+            json.dumps({"tool_name": "mcp__plugin_emerge__icc_exec", "args_hash": "a",
+                        "has_side_effects": False, "ts_ms": 1,
+                        "args_snapshot": {"intent_signature": "mock.read.layers"}}) + "\n" +
+            json.dumps({"tool_name": "mcp__plugin_emerge__icc_exec", "args_hash": "b",
+                        "has_side_effects": True, "ts_ms": 2,
+                        "args_snapshot": {"intent_signature": "mock.write.add-wall"}}) + "\n"
+        )
+        daemon.call_tool("icc_span_close", {"span_id": span_id, "outcome": "success"})
+
+        # events.jsonl must contain a crystallize.to-yaml cockpit_action event
+        assert events_path.exists(), "events file not created"
+        lines = [json.loads(l) for l in events_path.read_text().splitlines() if l.strip()]
+        crystallize = [
+            e for e in lines
+            if e.get("type") == "cockpit_action"
+            and e.get("action", {}).get("type") == "crystallize.to-yaml"
+        ]
+        assert crystallize, f"No crystallize.to-yaml event. Events: {[e.get('type') for e in lines]}"
+        payload = crystallize[-1]["action"]["payload"]
+        assert payload["intent_signature"] == "mock.write.multi-op"
+        assert len(payload["actions"]) == 2
+    finally:
+        os.environ.pop("EMERGE_SESSION_ID", None)
