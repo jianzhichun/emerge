@@ -15,18 +15,11 @@ class SuggestionAggregator:
         *,
         state_root: Path,
         emit_cockpit_action: Callable[[dict[str, Any]], None],
-        min_runners: int = 2,
-        min_occurrences_single_runner: int = 3,
-        retrigger_min_new_evidence: int = 3,
     ) -> None:
         self._state_root = state_root
         self._emit_cockpit_action = emit_cockpit_action
-        self._min_runners = max(1, int(min_runners))
-        self._min_single = max(1, int(min_occurrences_single_runner))
-        self._retrigger_min_new_evidence = max(1, int(retrigger_min_new_evidence))
         self._seen: set[tuple[str, str, str]] = set()
         self._by_intent: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        self._last_trigger_count: dict[tuple[str, str], int] = {}
         self._lock = threading.Lock()
         self._replay_persisted()
 
@@ -54,41 +47,21 @@ class SuggestionAggregator:
             normalized.setdefault("ts_ms", int(time.time() * 1000))
             self._by_intent[intent].append(normalized)
             self._persist(normalized)
+            fact = self._aggregate_fact(intent)
+            self._persist_aggregate(fact)
 
-            decision = self._maybe_trigger(intent)
-        if decision:
-            self._emit_cockpit_action(decision)
-            return {"status": "triggered", "intent_signature_hint": intent}
+        self._emit_cockpit_action(fact)
         return {"status": "stored", "intent_signature_hint": intent}
 
-    def _maybe_trigger(self, intent: str) -> dict[str, Any] | None:
+    def _aggregate_fact(self, intent: str) -> dict[str, Any]:
         suggestions = self._by_intent[intent]
         runners = sorted({str(s.get("runner_profile", "unknown")) for s in suggestions})
-        trigger_reason = ""
-        if len(runners) >= self._min_runners:
-            trigger_reason = "multi_runner"
-        else:
-            counts: dict[str, int] = defaultdict(int)
-            for s in suggestions:
-                counts[str(s.get("runner_profile", "unknown"))] += 1
-            if any(count >= self._min_single for count in counts.values()):
-                trigger_reason = "single_runner_occurrences"
-        if not trigger_reason:
-            return None
-        trigger_key = (intent, trigger_reason)
-        current_count = len(suggestions)
-        last_count = self._last_trigger_count.get(trigger_key, -1)
-        if last_count >= 0 and current_count - last_count < self._retrigger_min_new_evidence:
-            return None
-        self._last_trigger_count[trigger_key] = current_count
-        self._persist_trigger(intent, trigger_reason, current_count)
-
         return {
-            "type": "crystallize.from-suggestions",
+            "type": "pattern_aggregated",
             "payload": {
                 "intent_signature_hint": intent,
-                "trigger_reason": trigger_reason,
                 "runner_profiles": runners,
+                "suggestion_count": len(suggestions),
                 "suggestions": suggestions,
                 "parameter_ranges": _parameter_ranges(suggestions),
                 "context_hints": [
@@ -105,17 +78,11 @@ class SuggestionAggregator:
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(suggestion, ensure_ascii=False) + "\n")
 
-    def _persist_trigger(self, intent: str, trigger_reason: str, suggestion_count: int) -> None:
-        path = self._state_root / "suggestions" / "triggered.jsonl"
+    def _persist_aggregate(self, fact: dict[str, Any]) -> None:
+        path = self._state_root / "suggestions" / "aggregated.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
-        event = {
-            "ts_ms": int(time.time() * 1000),
-            "intent_signature_hint": intent,
-            "trigger_reason": trigger_reason,
-            "suggestion_count": int(suggestion_count),
-        }
         with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+            f.write(json.dumps(fact, ensure_ascii=False) + "\n")
 
     def _replay_persisted(self) -> None:
         suggestions_path = self._state_root / "suggestions" / "suggestions.jsonl"
@@ -141,29 +108,6 @@ class SuggestionAggregator:
             except OSError:
                 pass
 
-        triggers_path = self._state_root / "suggestions" / "triggered.jsonl"
-        if not triggers_path.exists():
-            return
-        try:
-            for line in triggers_path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(event, dict):
-                    continue
-                intent = str(event.get("intent_signature_hint") or "").strip()
-                reason = str(event.get("trigger_reason") or "").strip()
-                if not intent or not reason:
-                    continue
-                count = int(event.get("suggestion_count", 0) or 0)
-                key = (intent, reason)
-                self._last_trigger_count[key] = max(count, self._last_trigger_count.get(key, 0))
-        except OSError:
-            pass
 
 
 def _raw_actions_hash(raw_actions: Any) -> str:

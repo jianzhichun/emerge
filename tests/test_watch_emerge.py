@@ -51,7 +51,7 @@ def test_watch_emerge_runner_mode_tails_profile_file(tmp_path):
     time.sleep(0.3)
 
     _write_event(events_file, {
-        "type": "pattern_alert",
+        "type": "pattern_observed",
         "ts_ms": 1000,
         "runner_profile": "mycader-1",
         "stage": "canary",
@@ -119,7 +119,7 @@ def test_watch_patterns_shim_delegates_to_watch_emerge(tmp_path):
     )
     time.sleep(0.3)
     _write_event(events_file, {
-        "type": "pattern_alert",
+        "type": "local_pattern_observed",
         "ts_ms": 1000,
         "stage": "canary",
         "intent_signature": "hypermesh.mesh.batch",
@@ -129,6 +129,36 @@ def test_watch_patterns_shim_delegates_to_watch_emerge(tmp_path):
     proc.terminate()
     out = proc.stdout.read().decode()
     assert "canary" in out or "hypermesh" in out
+
+
+def test_watch_emerge_formats_pattern_aggregated_fact(tmp_path):
+    events_root = tmp_path / "events"
+    events_root.mkdir(parents=True, exist_ok=True)
+    events_file = events_root / "events.jsonl"
+
+    proc = subprocess.Popen(
+        [sys.executable, str(ROOT / "scripts" / "watch_emerge.py"),
+         "--state-root", str(tmp_path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    time.sleep(0.3)
+
+    _write_event(events_file, {
+        "type": "pattern_aggregated",
+        "payload": {
+            "intent_signature_hint": "mock.write.automate",
+            "runner_profiles": ["runner-a", "runner-b"],
+            "suggestion_count": 2,
+            "parameter_ranges": {"level": ["coarse", "fine"]},
+            "context_hints": ["repeated operation"],
+        },
+    })
+    time.sleep(0.6)
+    proc.terminate()
+    out = proc.stdout.read().decode()
+    assert "PatternAggregated" in out
+    assert "mock.write.automate" in out
+    assert "runner-a, runner-b" in out
 
 
 def test_watch_emerge_operator_message_with_attachments(tmp_path):

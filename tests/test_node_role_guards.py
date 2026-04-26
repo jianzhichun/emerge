@@ -45,7 +45,6 @@ def test_runner_role_blocks_orchestrator_only_tools(monkeypatch):
         },
     )
     approve = daemon.call_tool("icc_span_approve", {"intent_signature": "mock.write.add-wall"})
-    submit = daemon.call_tool("icc_synthesis_submit", {"job": {}, "result": {}})
 
     assert crystallize["isError"] is True
     assert "orchestrator-only" in crystallize["content"][0]["text"]
@@ -55,8 +54,6 @@ def test_runner_role_blocks_orchestrator_only_tools(monkeypatch):
     assert "orchestrator-only" in reconcile["content"][0]["text"]
     assert approve["isError"] is True
     assert "orchestrator-only" in approve["content"][0]["text"]
-    assert submit["isError"] is True
-    assert "orchestrator-only" in submit["content"][0]["text"]
 
 
 def test_runner_span_close_does_not_generate_or_emit_synthesis(monkeypatch):

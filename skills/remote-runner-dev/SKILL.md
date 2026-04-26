@@ -110,7 +110,7 @@ pathlib.Path('<plugin_root>/.watchdog-restart').touch()
 
 ### Windows — interactive session required for GUI/COM
 
-COM objects (ZWCAD, AutoCAD, Excel, etc.) and GUI automation are **session-scoped**. A process can only access COM objects created in its own Windows session.
+COM objects (DesktopDraftingApp, DesktopDraftingApp, SpreadsheetApp, etc.) and GUI automation are **session-scoped**. A process can only access COM objects created in its own Windows session.
 
 **The session trap**: several approaches silently land the runner in **Session 0** (background service context) where COM/GUI calls fail:
 
@@ -252,7 +252,7 @@ Request body (JSON):
   "machine_id": "workstation-01",
   "session_role": "operator",
   "event_type": "entity_added",
-  "app": "zwcad",
+  "app": "desktop_drafting_app",
   "payload": {"layer": "annotation", "content": "master_bedroom"}
 }
 ```

@@ -40,4 +40,4 @@ def test_auto_crystallize_enqueues_forward_synthesis_and_does_not_write_pipeline
         "crystallizer_deprecated",
         "forward_synthesis_pending",
     ]
-    assert events[-1]["job"]["skill_name"] == "emerge-forward-synthesis"
+    assert events[-1]["job"]["skill_name"] == "crystallize-from-wal"

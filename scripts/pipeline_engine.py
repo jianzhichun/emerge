@@ -28,6 +28,13 @@ _USER_CONNECTOR_ROOT = Path("~/.emerge/connectors").expanduser()
 
 
 class PipelineEngine:
+    """Load and execute deterministic connector pipelines.
+
+    The engine searches connector roots, validates pipeline metadata, runs
+    Python or YAML pipelines, and normalizes read/write results for bridge and
+    MCP callers. It does not perform policy decisions or LLM synthesis.
+    """
+
     def __init__(self, root: Path | None = None) -> None:
         self.root = root or Path(__file__).resolve().parents[1]
         # Search order: env override (prepended) → user connector root → plugin connector root
@@ -58,6 +65,7 @@ class PipelineEngine:
             )
 
     def run_read(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Execute a read pipeline and return rows plus verification metadata."""
         connector = args.get("connector", "").strip()
         pipeline = args.get("pipeline", "").strip()
         if not connector or not pipeline:
@@ -95,6 +103,7 @@ class PipelineEngine:
         )
 
     def run_write(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Execute a write pipeline and enforce stop/rollback verification policy."""
         connector = args.get("connector", "").strip()
         pipeline = args.get("pipeline", "").strip()
         if not connector or not pipeline:
@@ -177,6 +186,7 @@ class PipelineEngine:
         )
 
     def run_workflow(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Execute a workflow YAML pipeline and return its action/verification result."""
         connector = args.get("connector", "").strip()
         pipeline = args.get("pipeline", "").strip()
         if not connector or not pipeline:

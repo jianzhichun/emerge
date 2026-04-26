@@ -1,16 +1,17 @@
-# tests/test_pattern_detector.py
 from __future__ import annotations
+
 import sys
+import time
 from pathlib import Path
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import time
 from scripts.pattern_detector import PatternDetector, PatternSummary
 
 
-def _event(app: str, event_type: str, layer: str = "标注", content: str = "room", ts_delta_ms: int = 0):
+def _event(app: str, event_type: str, layer: str = "annotation", content: str = "room", ts_delta_ms: int = 0):
     return {
         "ts_ms": int(time.time() * 1000) + ts_delta_ms,
         "machine_id": "test-machine",
@@ -23,141 +24,64 @@ def _event(app: str, event_type: str, layer: str = "标注", content: str = "roo
     }
 
 
-def test_frequency_detector_fires_at_threshold():
+def test_frequency_facts_include_counts_without_threshold_decision():
     detector = PatternDetector()
-    events = [_event("zwcad", "entity_added", ts_delta_ms=i * 60_000) for i in range(3)]
-    summaries = detector.ingest(events)
-    assert len(summaries) == 1
-    s = summaries[0]
-    assert s.occurrences == 3
-    assert s.detector_signals == ["frequency"]
-    assert "zwcad" in s.intent_signature
+    facts = detector.ingest([_event("mock", "entity_added") for _ in range(2)])
+
+    frequency_facts = [fact for fact in facts if "frequency_metric" in fact.detector_signals]
+    assert len(frequency_facts) == 1
+    fact = frequency_facts[0]
+    assert isinstance(fact, PatternSummary)
+    assert fact.occurrences == 2
+    assert fact.detector_signals == ["frequency_metric"]
+    assert fact.intent_signature == "mock.entity_added.annotation"
+    assert fact.context_hint["threshold_met"] is False
 
 
-def test_frequency_detector_does_not_fire_below_threshold():
-    detector = PatternDetector()
-    events = [_event("zwcad", "entity_added", ts_delta_ms=i * 60_000) for i in range(2)]
-    summaries = detector.ingest(events)
-    assert summaries == []
-
-
-def test_monitor_sub_events_are_filtered():
+def test_monitor_sub_events_are_filtered_from_facts():
     detector = PatternDetector()
     events = []
-    for i in range(5):
-        e = _event("zwcad", "entity_added", ts_delta_ms=i * 60_000)
-        e["session_role"] = "monitor_sub"
-        events.append(e)
-    summaries = detector.ingest(events)
-    assert summaries == []
+    for _ in range(5):
+        event = _event("mock", "entity_added")
+        event["session_role"] = "monitor_sub"
+        events.append(event)
+
+    assert detector.ingest(events) == []
 
 
-def test_cross_machine_detector_fires():
+def test_error_rate_fact_reports_ratio_without_triggering_alert():
+    detector = PatternDetector()
+    events = [_event("mock", "entity_added", ts_delta_ms=i * 10_000) for i in range(5)]
+    events += [_event("mock", "undo", ts_delta_ms=(5 + i) * 10_000) for i in range(3)]
+
+    facts = detector.ingest(events)
+    error_facts = [fact for fact in facts if "error_rate_metric" in fact.detector_signals]
+
+    assert error_facts
+    assert error_facts[0].context_hint["undo_ratio"] == 0.6
+    assert error_facts[0].context_hint["threshold_met"] is True
+
+
+def test_cross_machine_fact_reports_machine_distribution():
     detector = PatternDetector()
     events = []
     for machine in ("m1", "m2"):
-        for i in range(2):
-            e = _event("zwcad", "entity_added", ts_delta_ms=i * 60_000)
-            e["machine_id"] = machine
-            events.append(e)
-    summaries = detector.ingest(events)
-    assert any("cross_machine" in s.detector_signals for s in summaries)
+        for _ in range(2):
+            event = _event("mock", "entity_added")
+            event["machine_id"] = machine
+            events.append(event)
+
+    facts = detector.ingest(events)
+    cross = [fact for fact in facts if "cross_machine_metric" in fact.detector_signals]
+
+    assert cross
+    assert cross[0].context_hint["machine_counts"] == {"m1": 2, "m2": 2}
+    assert cross[0].context_hint["threshold_met"] is True
 
 
-def test_pattern_summary_fields():
+def test_detector_ignores_old_events_for_windowed_metrics():
     detector = PatternDetector()
-    events = [_event("zwcad", "entity_added", ts_delta_ms=i * 60_000) for i in range(3)]
-    summaries = detector.ingest(events)
-    s = summaries[0]
-    assert isinstance(s, PatternSummary)
-    assert s.machine_ids == ["test-machine"]
-    assert isinstance(s.intent_signature, str)
-    assert s.occurrences >= 3
-    assert isinstance(s.window_minutes, float)
-    assert isinstance(s.context_hint, dict)
-    assert s.policy_stage == "explore"
+    old = -PatternDetector.FREQ_WINDOW_MS - 60_000
+    events = [_event("mock", "entity_added", ts_delta_ms=old - i * 1000) for i in range(3)]
 
-
-def test_error_rate_detector_fires_on_high_undo():
-    detector = PatternDetector()
-    events = []
-    # 5 ops, 3 undos → ratio 0.6 > threshold 0.4
-    for i in range(5):
-        events.append(_event("zwcad", "entity_added", ts_delta_ms=i * 10_000))
-    for i in range(3):
-        events.append(_event("zwcad", "undo", ts_delta_ms=(5 + i) * 10_000))
-    summaries = detector.ingest(events)
-    assert any("error_rate" in s.detector_signals for s in summaries)
-
-
-def test_frequency_detector_ignores_old_events():
-    detector = PatternDetector()
-    # 3 events 25 minutes in the past — outside the 20-minute window
-    events = [_event("zwcad", "entity_added", ts_delta_ms=-(25 * 60_000 + i * 1000)) for i in range(3)]
-    summaries = detector.ingest(events)
-    assert summaries == []
-
-
-def test_frequency_check_no_signature_collision_across_event_types():
-    """Different event_types on the same layer must produce distinct intent_signatures."""
-    import time
-    now_ms = int(time.time() * 1000)
-    detector = PatternDetector()
-
-    def make_events(event_type: str) -> list[dict]:
-        return [
-            {
-                "ts_ms": now_ms - i * 60_000,
-                "machine_id": "m1",
-                "session_role": "operator",
-                "event_type": event_type,
-                "app": "zwcad",
-                "payload": {"layer": "标注", "content": f"x_{i}"},
-            }
-            for i in range(3)
-        ]
-
-    summaries = detector.ingest(make_events("entity_added") + make_events("entity_modified"))
-    sigs = [s.intent_signature for s in summaries if "frequency" in s.detector_signals]
-    assert len(set(sigs)) == len(sigs), f"Duplicate signatures found: {sigs}"
-    assert any("entity_added" in s for s in sigs)
-    assert any("entity_modified" in s for s in sigs)
-
-
-def test_error_rate_check_ignores_old_undos():
-    """Undo events outside FREQ_WINDOW_MS must not count toward error rate."""
-    import time
-    now_ms = int(time.time() * 1000)
-    old_ms = now_ms - PatternDetector.FREQ_WINDOW_MS - 60_000
-    detector = PatternDetector()
-
-    events = [
-        {"ts_ms": old_ms - i * 1000, "machine_id": "m1", "session_role": "operator",
-         "event_type": "undo", "app": "zwcad", "session_id": "s1", "payload": {}}
-        for i in range(5)
-    ] + [
-        {"ts_ms": now_ms, "machine_id": "m1", "session_role": "operator",
-         "event_type": "entity_added", "app": "zwcad", "session_id": "s1", "payload": {}}
-    ]
-    summaries = detector.ingest(events)
-    assert not any("error_rate" in s.detector_signals for s in summaries)
-
-
-def test_cross_machine_check_ignores_old_events():
-    """Events outside FREQ_WINDOW_MS must not trigger cross-machine detection."""
-    import time
-    now_ms = int(time.time() * 1000)
-    old_ms = now_ms - PatternDetector.FREQ_WINDOW_MS - 60_000
-    detector = PatternDetector()
-
-    events = [
-        {"ts_ms": old_ms - i * 1000, "machine_id": "mA", "session_role": "operator",
-         "event_type": "entity_added", "app": "zwcad", "session_id": "s1", "payload": {}}
-        for i in range(2)
-    ] + [
-        {"ts_ms": old_ms - i * 1000, "machine_id": "mB", "session_role": "operator",
-         "event_type": "entity_added", "app": "zwcad", "session_id": "s2", "payload": {}}
-        for i in range(2)
-    ]
-    summaries = detector.ingest(events)
-    assert not any("cross_machine" in s.detector_signals for s in summaries)
+    assert detector.ingest(events) == []

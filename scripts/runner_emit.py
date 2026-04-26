@@ -9,6 +9,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from scripts.runner_http import no_proxy_urlopen
+
 
 def _load_runner_config(config_path: Path | None = None) -> dict[str, Any]:
     path = config_path or Path.home() / ".emerge" / "runner-config.json"
@@ -83,7 +85,7 @@ def emit_event_raw(
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout_s):
+        with no_proxy_urlopen(req, timeout=timeout_s):
             return True
     except (urllib.error.URLError, OSError, TimeoutError):
         return False

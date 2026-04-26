@@ -178,7 +178,6 @@ class DaemonHTTPServer:
             state_root=self._state_root,
             emit_cockpit_action=self._emit_cockpit_action,
         )
-        self._synthesis_agent = self._make_synthesis_agent()
         # Cockpit UI + /api/* when served on the same port as MCP (see InProcessCockpitBridge)
         self._cockpit_sse_clients: list[Any] = []
         self._cockpit_sse_lock = threading.Lock()
@@ -189,18 +188,6 @@ class DaemonHTTPServer:
         self._runner_sse_hub = SSEHub(queue_size=64)
         self._request_count = 0
         self._request_error_count = 0
-
-    def _make_synthesis_agent(self):
-        if not hasattr(self._daemon, "call_tool"):
-            return None
-        try:
-            from scripts.synthesis_agent import SynthesisAgent
-            return SynthesisAgent(
-                state_root=self._state_root,
-                exec_tool=lambda args: self._daemon.call_tool("icc_exec", args),
-            )
-        except Exception:
-            return None
 
     def _emit_cockpit_action(self, action: dict) -> None:
         try:
@@ -440,7 +427,7 @@ class DaemonHTTPServer:
                     stage = summary.policy_stage  # fallback: "explore"
 
                 alert = {
-                    "type": "pattern_alert",
+                    "type": "pattern_observed",
                     "ts_ms": ts_ms,
                     "runner_profile": runner_profile,
                     "stage": stage,
@@ -455,18 +442,6 @@ class DaemonHTTPServer:
                 self._append_event(
                     events_root(self._state_root) / f"events-{runner_profile}.jsonl", alert
                 )
-                event_path = events_root(self._state_root) / f"events-{runner_profile}.jsonl"
-                agent = getattr(self, "_synthesis_agent", None)
-                if agent is not None:
-                    try:
-                        agent.process_pattern(
-                            summary=summary,
-                            runner_profile=runner_profile,
-                            events=snapshot,
-                            event_path=event_path,
-                        )
-                    except Exception:
-                        pass
                 self._runner_state.set_alert(
                     runner_profile,
                     {

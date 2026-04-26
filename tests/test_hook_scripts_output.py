@@ -689,16 +689,18 @@ def test_process_once_skips_stale_timestamp(tmp_path: Path):
     assert pending.exists()
 
 
-def test_format_pattern_alert_includes_key_fields():
-    from scripts.pending_actions import format_pattern_alert
+def test_format_pattern_fact_includes_key_fields():
+    from scripts.pending_actions import format_pattern_fact
     data = {
+        "type": "pattern_observed",
         "stage": "canary",
         "intent_signature": "hm.node_create",
         "message": "Repeated pattern detected",
         "meta": {"occurrences": 5, "window_minutes": 10, "machine_ids": ["local"]},
     }
-    result = format_pattern_alert(data)
+    result = format_pattern_fact(data)
     assert "[OperatorMonitor]" in result
+    assert "Pattern observed" in result
     assert "canary" in result
     assert "hm.node_create" in result
     assert "occurrences=5" in result

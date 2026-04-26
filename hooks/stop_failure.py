@@ -14,14 +14,11 @@ if str(ROOT) not in sys.path:
 
 from scripts.policy_config import default_hook_state_root  # noqa: E402
 from scripts.state_tracker import load_tracker, with_locked_tracker  # noqa: E402
+from hooks.hook_io import read_json_payload  # noqa: E402
 
 
 def main() -> None:
-    payload_text = sys.stdin.read().strip()
-    try:
-        payload = json.loads(payload_text) if payload_text else {}
-    except Exception:
-        payload = {}
+    payload = read_json_payload()
 
     error_type = str(payload.get("error", "unknown"))
 

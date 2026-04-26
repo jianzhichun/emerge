@@ -19,7 +19,6 @@ class OperatorMonitor:
         poll_interval_s: float = 5.0,
         event_root: Path | None = None,
         state_root: Path | None = None,
-        synthesis_agent: Any | None = None,
     ) -> None:
         self._machines = machines
         self._poll_interval_s = poll_interval_s
@@ -28,7 +27,6 @@ class OperatorMonitor:
         self._detector = PatternDetector()
         self._last_poll_ms: dict[str, int] = {}
         self._event_buffers: dict[str, deque] = {}
-        self._synthesis_agent = synthesis_agent
         self._started = False
 
     def stop(self) -> None:
@@ -90,7 +88,7 @@ class OperatorMonitor:
             except Exception:
                 stage = summary.policy_stage
             alert = {
-                "type": "local_pattern_alert",
+                "type": "local_pattern_observed",
                 "ts_ms": ts_ms,
                 "stage": stage,
                 "intent_signature": summary.intent_signature,
@@ -104,13 +102,3 @@ class OperatorMonitor:
             }
             with events_local.open("a", encoding="utf-8") as f:
                 f.write(_json.dumps(alert, ensure_ascii=False) + "\n")
-            if self._synthesis_agent is not None:
-                try:
-                    self._synthesis_agent.process_pattern(
-                        summary=summary,
-                        runner_profile="local",
-                        events=list(buf),
-                        event_path=events_local,
-                    )
-                except Exception:
-                    pass

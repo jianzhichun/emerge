@@ -32,6 +32,8 @@ if str(ROOT) not in sys.path:
 
 from scripts.pending_actions import (  # noqa: E402
     format_pattern_alert,
+    format_pattern_aggregated,
+    format_pattern_fact,
     format_runner_discovered,
     format_runner_online,
     format_runner_event,
@@ -84,8 +86,12 @@ def _format_event(event: dict) -> str | None:
         return format_runner_event(event)
     if etype in ("runner_subagent_message", "pattern_suggestion"):
         return format_runner_subagent_message(event)
+    if etype in ("pattern_observed", "local_pattern_observed"):
+        return format_pattern_fact(event)
     if etype in ("pattern_alert", "local_pattern_alert"):
         return format_pattern_alert(event)
+    if etype == "pattern_aggregated":
+        return format_pattern_aggregated(event)
     if etype == "synthesis_job_ready":
         return format_synthesis_job_ready(event)
     if etype == "forward_synthesis_pending":

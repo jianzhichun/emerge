@@ -9,7 +9,7 @@ Python owns stable, testable mechanisms:
 - `scripts/emerge_daemon.py` and `scripts/daemon_http.py`: MCP/HTTP control plane, runner SSE hub, and tool dispatch.
 - `scripts/policy_engine.py` and `scripts/intent_registry.py`: the only lifecycle mutation path for intent `stage` and registry writes.
 - `scripts/pipeline_engine.py` and `scripts/exec_session.py`: zero-inference pipeline execution and WAL/session persistence.
-- `scripts/synthesis_agent.py` and `scripts/synthesis_coordinator.py`: job packaging, validation, smoke checks, and artifact materialization.
+- `scripts/synthesis_events.py`: fact-only packaging for forward and reverse synthesis work consumed by Claude Code skills.
 - `scripts/admin/*`, `scripts/operator_popup.py`, and hooks: HTTP, CLI, state, popup, and hook transport primitives.
 
 Mechanism code should reject malformed input, preserve path containment, and keep API shape stable.
@@ -43,4 +43,4 @@ Runners execute local primitives and forward events. They do not own promotion:
 
 - Popups render locally through `scripts/operator_popup.py`; policy for when to interrupt lives in `skills/runner-elicitation-policy`.
 - Runner deploy/install/status code remains in Python; rollout workflow lives in `skills/admin-runner-operations` and commands.
-- Synthesis results return to the orchestrator via `icc_synthesis_submit`; runners never directly materialize product pipelines.
+- Runners and monitors emit observation facts; Claude Code skills inspect those facts and use ordinary pipeline/artifact mechanisms. Runners never directly materialize product pipelines.

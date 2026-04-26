@@ -19,8 +19,8 @@ def test_emit_event_persists_failed_delivery_to_outbox(tmp_path, monkeypatch):
     monkeypatch.setenv("EMERGE_TEAM_LEAD_URL", "http://127.0.0.1:9")
     monkeypatch.setenv("EMERGE_RUNNER_PROFILE", "runner-a")
     monkeypatch.setattr(
-        runner_emit.urllib.request,
-        "urlopen",
+        runner_emit,
+        "no_proxy_urlopen",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(urllib.error.URLError("down")),
     )
 

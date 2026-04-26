@@ -62,19 +62,19 @@ If `summaries` is empty but events exist: thresholds not met yet.
 Set `EMERGE_MONITOR_POLL_S=5` to ensure polling is active.
 Check `EMERGE_MONITOR_MACHINES` matches the profile names configured in the runner map.
 
-### 6. Is the pattern alert reaching CC?
+### 6. Is the pattern observation reaching CC?
 
-Pattern alerts are delivered via `watch_emerge.py --runner-profile <profile>` (Monitor
+Pattern observations are delivered via `watch_emerge.py --runner-profile <profile>` (Monitor
 tool, persistent). When a pattern fires, `DaemonHTTPServer._on_runner_event` writes a
-`pattern_alert` entry directly to `events-{profile}.jsonl`. The Monitor script tails
-this file and prints formatted alerts to stdout; CC streams stdout into the conversation.
+`pattern_observed` entry directly to `events-{profile}.jsonl`. The Monitor script tails
+this file and prints formatted observations to stdout; CC streams stdout into the conversation.
 
 Check:
 1. Is `watch_emerge.py --runner-profile <profile>` running as a persistent Monitor?
    (launched by `/emerge:cockpit` step 4 via `watch_emerge.py --runner-profile`)
-2. Does `~/.emerge/state/events/events-{profile}.jsonl` contain recent `pattern_alert` entries?
+2. Does `~/.emerge/state/events/events-{profile}.jsonl` contain recent `pattern_observed` entries?
    ```bash
-   grep '"type": "pattern_alert"' ~/.emerge/state/events/events-<profile>.jsonl | tail -5
+   grep '"type": "pattern_observed"' ~/.emerge/state/events/events-<profile>.jsonl | tail -5
    ```
 3. If entries exist but CC didn't see them: the Monitor may have stopped — restart it.
 
@@ -85,5 +85,5 @@ Check:
 | EventBus empty | Verify event producer path (`/operator-event`, pipeline `start()`, or `icc_exec`) and OS accessibility permissions |
 | PatternDetector never fires | Lower `FREQ_THRESHOLD` or check event `session_role` field |
 | Elicitation never appears | Verify daemon has elicitation capability in MCP handshake; check thread is non-main |
-| Pattern alert not delivered | Verify `watch_emerge.py --runner-profile <p>` Monitor is running; check `events-{profile}.jsonl` for `pattern_alert` entries |
+| Pattern observation not delivered | Verify `watch_emerge.py --runner-profile <p>` Monitor is running; check `events-{profile}.jsonl` for `pattern_observed` entries |
 | OperatorMonitor not starting | Confirm runner is configured (`runner-status --pretty`) OR `EMERGE_OPERATOR_MONITOR=1` in daemon env |

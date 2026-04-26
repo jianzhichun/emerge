@@ -17,8 +17,7 @@ class PatternSummary:
 
 
 class PatternDetector:
-    """Applies pluggable detector strategies to batches of operator events.
-    Returns a list of PatternSummary objects when thresholds are crossed."""
+    """Compute windowed operator-pattern facts without deciding what to do."""
 
     FREQ_THRESHOLD = 3
     FREQ_WINDOW_MS = 20 * 60 * 1000  # 20 minutes
@@ -54,8 +53,6 @@ class PatternDetector:
 
         summaries = []
         for (app, event_type, layer), grp in groups.items():
-            if len(grp) < self.FREQ_THRESHOLD:
-                continue
             ts_values = [e["ts_ms"] for e in grp if "ts_ms" in e]
             window_min = (max(ts_values) - min(ts_values)) / 60_000 if len(ts_values) >= 2 else 0.0
             machines = list({e.get("machine_id", "unknown") for e in grp})
@@ -70,12 +67,14 @@ class PatternDetector:
                 intent_signature=sig,
                 occurrences=len(grp),
                 window_minutes=window_min,
-                detector_signals=["frequency"],
+                detector_signals=["frequency_metric"],
                 context_hint={
                     "app": app,
                     "event_type": event_type,
                     "layer": layer,
                     "samples": samples,
+                    "threshold": self.FREQ_THRESHOLD,
+                    "threshold_met": len(grp) >= self.FREQ_THRESHOLD,
                 },
             ))
         return summaries
@@ -95,8 +94,6 @@ class PatternDetector:
             if total_ops == 0:
                 continue
             ratio = undos / total_ops
-            if ratio < self.ERROR_RATE_THRESHOLD:
-                continue
             machines = list({e.get("machine_id", "unknown") for e in grp})
             app = grp[0].get("app", "unknown") if grp else "unknown"
             summaries.append(PatternSummary(
@@ -104,8 +101,16 @@ class PatternDetector:
                 intent_signature=f"{app}.high_error_rate",
                 occurrences=len(grp),
                 window_minutes=self.FREQ_WINDOW_MS / 60_000,
-                detector_signals=["error_rate"],
-                context_hint={"app": app, "undo_ratio": ratio, "session_id": sid},
+                detector_signals=["error_rate_metric"],
+                context_hint={
+                    "app": app,
+                    "undo_ratio": round(ratio, 3),
+                    "session_id": sid,
+                    "threshold": self.ERROR_RATE_THRESHOLD,
+                    "threshold_met": ratio >= self.ERROR_RATE_THRESHOLD,
+                    "total_ops": total_ops,
+                    "undos": undos,
+                },
             ))
         return summaries
 
@@ -120,21 +125,30 @@ class PatternDetector:
 
         summaries = []
         for (app, event_type), by_machine in by_app_event.items():
-            qualifying = {
-                m: evts
-                for m, evts in by_machine.items()
-                if len(evts) >= self.CROSS_MACHINE_MIN_PER_MACHINE
-            }
-            if len(qualifying) < self.CROSS_MACHINE_MIN_MACHINES:
-                continue
-            all_events = [e for evts in qualifying.values() for e in evts]
-            machines = list(qualifying.keys())
+            machine_counts = {machine: len(evts) for machine, evts in by_machine.items()}
+            all_events = [e for evts in by_machine.values() for e in evts]
+            machines = sorted(machine_counts.keys())
             summaries.append(PatternSummary(
                 machine_ids=machines,
                 intent_signature=f"{app}.{event_type}.cross_machine",
                 occurrences=len(all_events),
                 window_minutes=self.FREQ_WINDOW_MS / 60_000,
-                detector_signals=["cross_machine"],
-                context_hint={"app": app, "event_type": event_type, "machines": machines},
+                detector_signals=["cross_machine_metric"],
+                context_hint={
+                    "app": app,
+                    "event_type": event_type,
+                    "machine_counts": machine_counts,
+                    "threshold": {
+                        "machines": self.CROSS_MACHINE_MIN_MACHINES,
+                        "per_machine": self.CROSS_MACHINE_MIN_PER_MACHINE,
+                    },
+                    "threshold_met": (
+                        len(machine_counts) >= self.CROSS_MACHINE_MIN_MACHINES
+                        and all(
+                            count >= self.CROSS_MACHINE_MIN_PER_MACHINE
+                            for count in machine_counts.values()
+                        )
+                    ),
+                },
             ))
         return summaries

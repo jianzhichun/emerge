@@ -2074,7 +2074,7 @@ def test_auto_crystallize_enqueues_forward_synthesis_at_synthesis_ready(tmp_path
     events_path = tmp_path / "state" / "events" / "events.jsonl"
     events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert any(e.get("type") == "forward_synthesis_pending" for e in events)
-    assert events[-1]["job"]["skill_name"] == "emerge-forward-synthesis"
+    assert events[-1]["job"]["skill_name"] == "crystallize-from-wal"
 
 
 def test_auto_crystallize_does_not_overwrite_existing(tmp_path, monkeypatch):
@@ -4102,7 +4102,7 @@ def test_watch_patterns_profile_arg_selects_correct_file(tmp_path):
     events_file.parent.mkdir(parents=True, exist_ok=True)
     with events_file.open("a", encoding="utf-8") as f:
         f.write(_j.dumps({
-            "type": "pattern_alert",
+            "type": "pattern_observed",
             "ts_ms": int(_time.time() * 1000),
             "stage": "canary",
             "intent_signature": "hypermesh.mesh.batch",

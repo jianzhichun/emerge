@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import sys
 import threading
 from pathlib import Path
@@ -11,82 +12,61 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def test_suggestion_aggregator_dedupes_and_emits_cross_runner_action(tmp_path):
+def test_suggestion_aggregator_dedupes_persists_and_emits_fact(tmp_path):
     from scripts.orchestrator.suggestion_aggregator import SuggestionAggregator
 
     emitted: list[dict] = []
     aggregator = SuggestionAggregator(
         state_root=tmp_path / "state",
         emit_cockpit_action=emitted.append,
-        min_runners=2,
-        min_occurrences_single_runner=3,
     )
 
     base = {
-        "intent_signature_hint": "hypermesh.write.automesh",
-        "raw_actions": ["*automesh density=coarse"],
-        "context_hint": "automesh repeated",
-        "preferred_params": {"density": "coarse"},
+        "intent_signature_hint": "mock.write.automate",
+        "raw_actions": ["do thing"],
+        "context_hint": "repeated operation",
+        "preferred_params": {"level": "coarse"},
     }
 
     assert aggregator.on_suggestion({**base, "runner_profile": "runner-a"})["status"] == "stored"
     assert aggregator.on_suggestion({**base, "runner_profile": "runner-a"})["status"] == "duplicate"
-    result = aggregator.on_suggestion(
+    assert aggregator.on_suggestion(
         {
             **base,
             "runner_profile": "runner-b",
-            "preferred_params": {"density": "fine"},
-            "raw_actions": ["*automesh density=fine"],
+            "preferred_params": {"level": "fine"},
+            "raw_actions": ["do thing differently"],
         }
-    )
+    )["status"] == "stored"
 
-    assert result["status"] == "triggered"
-    assert len(emitted) == 1
-    action = emitted[0]
-    assert action["type"] == "crystallize.from-suggestions"
-    assert action["payload"]["intent_signature_hint"] == "hypermesh.write.automesh"
-    assert action["payload"]["parameter_ranges"]["density"] == ["coarse", "fine"]
+    assert [event["type"] for event in emitted] == ["pattern_aggregated", "pattern_aggregated"]
+    assert emitted[-1]["payload"]["intent_signature_hint"] == "mock.write.automate"
+    assert emitted[-1]["payload"]["runner_profiles"] == ["runner-a", "runner-b"]
+    assert emitted[-1]["payload"]["suggestion_count"] == 2
+    assert emitted[-1]["payload"]["parameter_ranges"]["level"] == ["coarse", "fine"]
 
     suggestions_path = tmp_path / "state" / "suggestions" / "suggestions.jsonl"
     persisted = [json.loads(line) for line in suggestions_path.read_text().splitlines()]
     assert len(persisted) == 2
+    facts_path = tmp_path / "state" / "suggestions" / "aggregated.jsonl"
+    facts = [json.loads(line) for line in facts_path.read_text().splitlines()]
+    assert [fact["type"] for fact in facts] == ["pattern_aggregated", "pattern_aggregated"]
 
 
-def test_suggestion_aggregator_triggers_on_single_runner_occurrences(tmp_path):
+def test_suggestion_aggregator_constructor_exposes_only_mechanism_dependencies():
     from scripts.orchestrator.suggestion_aggregator import SuggestionAggregator
 
-    emitted: list[dict] = []
-    aggregator = SuggestionAggregator(
-        state_root=tmp_path / "state",
-        emit_cockpit_action=emitted.append,
-        min_runners=3,
-        min_occurrences_single_runner=2,
-    )
-
-    first = {
-        "runner_profile": "runner-a",
-        "intent_signature_hint": "zwcad.write.rooms",
-        "raw_actions": ["draw room 1"],
-    }
-    second = {
-        "runner_profile": "runner-a",
-        "intent_signature_hint": "zwcad.write.rooms",
-        "raw_actions": ["draw room 2"],
-    }
-
-    assert aggregator.on_suggestion(first)["status"] == "stored"
-    assert aggregator.on_suggestion(second)["status"] == "triggered"
-    assert emitted[0]["payload"]["trigger_reason"] == "single_runner_occurrences"
+    params = inspect.signature(SuggestionAggregator).parameters
+    assert list(params) == ["state_root", "emit_cockpit_action"]
 
 
-def test_suggestion_aggregator_replays_persisted_suggestions(tmp_path):
+def test_suggestion_aggregator_replays_persisted_suggestions_without_triggering(tmp_path):
     from scripts.orchestrator.suggestion_aggregator import SuggestionAggregator
 
     state_root = tmp_path / "state"
     first = SuggestionAggregator(
         state_root=state_root,
         emit_cockpit_action=lambda _action: None,
-        min_runners=3,
     )
     first.on_suggestion({"runner_profile": "a", "intent_signature_hint": "foo.write.bar", "raw_actions": ["a"]})
     first.on_suggestion({"runner_profile": "b", "intent_signature_hint": "foo.write.bar", "raw_actions": ["b"]})
@@ -95,42 +75,15 @@ def test_suggestion_aggregator_replays_persisted_suggestions(tmp_path):
     second = SuggestionAggregator(
         state_root=state_root,
         emit_cockpit_action=emitted.append,
-        min_runners=3,
     )
     result = second.on_suggestion(
         {"runner_profile": "c", "intent_signature_hint": "foo.write.bar", "raw_actions": ["c"]}
     )
 
-    assert result["status"] == "triggered"
+    assert result["status"] == "stored"
     assert len(emitted) == 1
+    assert emitted[0]["type"] == "pattern_aggregated"
     assert emitted[0]["payload"]["runner_profiles"] == ["a", "b", "c"]
-
-
-def test_suggestion_aggregator_retriggers_after_new_evidence_threshold(tmp_path):
-    from scripts.orchestrator.suggestion_aggregator import SuggestionAggregator
-
-    emitted: list[dict] = []
-    aggregator = SuggestionAggregator(
-        state_root=tmp_path / "state",
-        emit_cockpit_action=emitted.append,
-        min_runners=1,
-        min_occurrences_single_runner=1,
-        retrigger_min_new_evidence=3,
-    )
-
-    assert aggregator.on_suggestion(
-        {"runner_profile": "a", "intent_signature_hint": "foo.write.bar", "raw_actions": ["1"]}
-    )["status"] == "triggered"
-    assert aggregator.on_suggestion(
-        {"runner_profile": "a", "intent_signature_hint": "foo.write.bar", "raw_actions": ["2"]}
-    )["status"] == "stored"
-    assert aggregator.on_suggestion(
-        {"runner_profile": "a", "intent_signature_hint": "foo.write.bar", "raw_actions": ["3"]}
-    )["status"] == "stored"
-    assert aggregator.on_suggestion(
-        {"runner_profile": "a", "intent_signature_hint": "foo.write.bar", "raw_actions": ["4"]}
-    )["status"] == "triggered"
-    assert len(emitted) == 2
 
 
 def test_suggestion_aggregator_concurrent_duplicate_is_stored_once(tmp_path):
@@ -139,7 +92,6 @@ def test_suggestion_aggregator_concurrent_duplicate_is_stored_once(tmp_path):
     aggregator = SuggestionAggregator(
         state_root=tmp_path / "state",
         emit_cockpit_action=lambda _action: None,
-        min_runners=2,
     )
     suggestion = {
         "runner_profile": "runner-a",

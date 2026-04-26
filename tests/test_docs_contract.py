@@ -4,17 +4,6 @@ import json
 from pathlib import Path
 
 from scripts.mcp.schemas import get_tool_schemas
-from scripts.policy_config import (
-    PROMOTE_MAX_HUMAN_FIX_RATE,
-    PROMOTE_MIN_ATTEMPTS,
-    PROMOTE_MIN_SUCCESS_RATE,
-    PROMOTE_MIN_VERIFY_RATE,
-    STABLE_MIN_ATTEMPTS,
-    STABLE_MIN_SUCCESS_RATE,
-    STABLE_MIN_VERIFY_RATE,
-)
-
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -66,18 +55,36 @@ def test_readme_hooks_match_hooks_json_events():
     assert readme_hooks == set(hooks.keys())
 
 
-def test_distilling_skill_threshold_tokens_match_policy_constants():
+def test_distilling_skill_keeps_policy_thresholds_out_of_generic_workflow():
     skill = (ROOT / "skills" / "distilling-operator-flows" / "SKILL.md").read_text(
         encoding="utf-8"
     )
-    expected_tokens = [
-        f"attempts >= {PROMOTE_MIN_ATTEMPTS}",
-        f"success_rate >= {PROMOTE_MIN_SUCCESS_RATE}",
-        f"verify_rate >= {PROMOTE_MIN_VERIFY_RATE}",
-        f"human_fix_rate <= {PROMOTE_MAX_HUMAN_FIX_RATE}",
-        f"attempts >= {STABLE_MIN_ATTEMPTS}",
-        f"success_rate >= {STABLE_MIN_SUCCESS_RATE}",
-        f"verify_rate >= {STABLE_MIN_VERIFY_RATE}",
+    forbidden_tokens = ["attempts >=", "success_rate >=", "verify_rate >=", "human_fix_rate <="]
+    for token in forbidden_tokens:
+        assert token not in skill
+
+
+def test_contract_docs_do_not_reference_deleted_synthesis_runtime():
+    active_docs = [
+        ROOT / "README.md",
+        ROOT / "CLAUDE.md",
+        ROOT / "docs" / "architecture.md",
     ]
-    for token in expected_tokens:
-        assert token in skill
+    forbidden_tokens = [
+        "SynthesisAgent",
+        "scripts/synthesis_agent.py",
+        "scripts/synthesis_coordinator.py",
+        "icc_synthesis_submit",
+    ]
+    for path in active_docs:
+        text = path.read_text(encoding="utf-8")
+        for token in forbidden_tokens:
+            assert token not in text, f"{path.relative_to(ROOT)} still references {token}"
+
+
+def test_readme_lifecycle_diagram_matches_policy_thresholds():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "attempts >= 5, success >= 90, verify >= 98" in readme
+    assert "attempts >= 15, success >= 95, verify >= 99" in readme
+    assert "attempts >= 20, success >= 95" not in readme
+    assert "attempts >= 40, success >= 97" not in readme

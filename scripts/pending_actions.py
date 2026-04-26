@@ -46,16 +46,19 @@ def format_pending_actions(actions: list) -> str:
     return "\n".join(lines)
 
 
-def format_pattern_alert(data: dict) -> str:
-    """Format a pattern-alerts.json payload into a human-readable Monitor line.
+def format_pattern_fact(data: dict) -> str:
+    """Format pattern observation facts into a human-readable Monitor line.
 
-    Used by watch_emerge.py (operator-monitor alert path).
+    Used by watch_emerge.py for runner/local pattern facts. These facts are
+    observations, not Python-side synthesis decisions.
     """
+    etype = data.get("type", "pattern_observed")
     stage = data.get("stage", "?")
     sig = data.get("intent_signature", "?")
     message = data.get("message", "")
     meta = data.get("meta", {})
-    lines = [f"[OperatorMonitor] Pattern alert (stage={stage}, intent={sig}):"]
+    label = "Pattern observed" if etype in ("pattern_observed", "local_pattern_observed") else "Pattern alert"
+    lines = [f"[OperatorMonitor] {label} (stage={stage}, intent={sig}):"]
     if message:
         lines.append(message)
     if meta:
@@ -64,6 +67,31 @@ def format_pattern_alert(data: dict) -> str:
             f"window={meta.get('window_minutes', '?')}min "
             f"machines={meta.get('machine_ids', [])}"
         )
+    return "\n".join(lines)
+
+
+def format_pattern_alert(data: dict) -> str:
+    """Backward-compatible alias for legacy pattern_alert events."""
+    return format_pattern_fact(data)
+
+
+def format_pattern_aggregated(data: dict) -> str:
+    """Format aggregated runner suggestions as a fact for operator-Claude."""
+    payload = data.get("payload", {}) if isinstance(data.get("payload"), dict) else {}
+    intent = payload.get("intent_signature_hint") or payload.get("intent_signature") or "?"
+    runners = payload.get("runner_profiles", [])
+    if isinstance(runners, list):
+        runners_text = ", ".join(str(runner) for runner in runners)
+    else:
+        runners_text = str(runners)
+    count = payload.get("suggestion_count", "?")
+    lines = [f"[PatternAggregated] intent={intent} suggestions={count} runners={runners_text}".rstrip()]
+    params = payload.get("parameter_ranges")
+    if isinstance(params, dict) and params:
+        lines.append(f"  parameter_ranges={params}")
+    hints = payload.get("context_hints")
+    if isinstance(hints, list) and hints:
+        lines.append("  context=" + " | ".join(str(hint) for hint in hints if str(hint).strip()))
     return "\n".join(lines)
 
 

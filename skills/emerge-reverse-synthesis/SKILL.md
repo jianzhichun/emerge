@@ -25,15 +25,15 @@ Use the `synthesis_job_ready` job payload:
 4. Assign `__result` for read mode or `__action` for write mode.
 5. Remove debug code and narration from final code.
 6. Include a clear `rationale` describing event evidence and parameter choices.
-7. Submit via `icc_synthesis_submit`; never write pipeline files directly.
+7. Validate the candidate through `icc_exec` with `no_replay=true`; write only a pending artifact unless the operator explicitly approves activation.
 
 ## Output JSON
 
-Pass this as `result` to `icc_synthesis_submit`:
+Use this shape in your working notes and pending artifact rationale:
 
 ```json
 {
-  "connector": "zwcad",
+  "connector": "desktop_drafting_app",
   "mode": "write",
   "pipeline_name": "create_room_labels",
   "code": "__action = {'ok': True, 'created': []}",

@@ -302,6 +302,48 @@ class SpanTracker:
         """
         return self.get_policy_status(intent_signature) == "stable"
 
+    def _format_safety_signal_parts(self, candidates: dict, max_items: int = 3) -> list[str]:
+        """Return reflection lines that must survive deep-cache shortcuts."""
+        demotions: list[tuple[int, str, str, str, str]] = []  # (ts_ms, sig, to_stage, reason, fingerprint)
+        synthesis_skipped: list[tuple[str, str]] = []  # (sig, reason)
+        for sig, entry in candidates.items():
+            if sig.startswith("emerge.") or not isinstance(entry, dict):
+                continue
+            demo = entry.get("last_demotion")
+            if isinstance(demo, dict):
+                demotions.append((
+                    int(demo.get("ts_ms", 0) or 0),
+                    sig,
+                    str(demo.get("to_stage", "") or ""),
+                    str(demo.get("reason", "") or ""),
+                    str(demo.get("bridge_failure_exception", "") or ""),
+                ))
+            skipped = str(entry.get("synthesis_skipped_reason", "") or "")
+            if skipped:
+                synthesis_skipped.append((sig, skipped))
+
+        parts: list[str] = []
+        if demotions:
+            # Newest demotions first — next session should see the freshest failure reasons.
+            demotions.sort(key=lambda x: x[0], reverse=True)
+            demo_rows: list[str] = []
+            for _ts, sig, to_stage, reason, fingerprint in demotions[:max_items]:
+                tag = to_stage or "demoted"
+                detail = reason
+                if fingerprint:
+                    detail = f"{reason}:{fingerprint}" if reason else fingerprint
+                if detail:
+                    demo_rows.append(f"{sig}→{tag} ({detail})")
+                else:
+                    demo_rows.append(f"{sig}→{tag}")
+            parts.append("Demoted: " + "; ".join(demo_rows))
+        if synthesis_skipped:
+            # Surface so next session knows WHY crystallization refused — otherwise
+            # the intent stays stuck as canary with no pipeline forever.
+            skipped_rows = [f"{sig} ({reason})" for sig, reason in sorted(synthesis_skipped)[:max_items]]
+            parts.append("Synthesis blocked: " + "; ".join(skipped_rows))
+        return parts
+
     def mark_skeleton_generated(self, intent_signature: str) -> None:
         """Record that a skeleton has been generated for this intent."""
         policy_lock = getattr(self._get_policy_engine(), "_lock", self._own_lock)
@@ -357,8 +399,6 @@ class SpanTracker:
 
         stable: list[str] = []
         canary: list[str] = []
-        demotions: list[tuple[int, str, str, str, str]] = []  # (ts_ms, sig, to_stage, reason, fingerprint)
-        synthesis_skipped: list[tuple[str, str]] = []  # (sig, reason)
         for sig, entry in candidates.items():
             # emerge.* intents are internal development spans — never bridgeable,
             # never repeatable by operator-Claude. Excluding them from reflection
@@ -370,19 +410,6 @@ class SpanTracker:
                 stable.append(sig)
             elif status == "canary":
                 canary.append(sig)
-            if isinstance(entry, dict):
-                demo = entry.get("last_demotion")
-                if isinstance(demo, dict):
-                    demotions.append((
-                        int(demo.get("ts_ms", 0) or 0),
-                        sig,
-                        str(demo.get("to_stage", "") or ""),
-                        str(demo.get("reason", "") or ""),
-                        str(demo.get("bridge_failure_exception", "") or ""),
-                    ))
-                skipped = str(entry.get("synthesis_skipped_reason", "") or "")
-                if skipped:
-                    synthesis_skipped.append((sig, skipped))
 
         recent: dict[str, dict[str, int]] = {}
         wal = self._wal_path()
@@ -421,25 +448,7 @@ class SpanTracker:
                 _rec = recent[sig]
                 recent_rows.append(f"{sig} {_rec['ok']}ok/{_rec['fail']}fail")
             parts.append("Recent: " + ", ".join(recent_rows))
-        if demotions:
-            # Newest demotions first — next session should see the freshest failure reasons.
-            demotions.sort(key=lambda x: x[0], reverse=True)
-            demo_rows: list[str] = []
-            for _ts, sig, to_stage, reason, fingerprint in demotions[:3]:
-                tag = to_stage or "demoted"
-                detail = reason
-                if fingerprint:
-                    detail = f"{reason}:{fingerprint}" if reason else fingerprint
-                if detail:
-                    demo_rows.append(f"{sig}→{tag} ({detail})")
-                else:
-                    demo_rows.append(f"{sig}→{tag}")
-            parts.append("Demoted: " + "; ".join(demo_rows))
-        if synthesis_skipped:
-            # Surface so next session knows WHY crystallization refused — otherwise
-            # the intent stays stuck as canary with no pipeline forever.
-            skipped_rows = [f"{sig} ({reason})" for sig, reason in sorted(synthesis_skipped)[:3]]
-            parts.append("Synthesis blocked: " + "; ".join(skipped_rows))
+        parts.extend(self._format_safety_signal_parts(candidates))
         if not parts:
             return ""
         return self._cap_reflection_text("Muscle memory\n" + "\n".join(parts))
@@ -484,5 +493,11 @@ class SpanTracker:
         """Prefer fresh deep cache; fallback to local lightweight reflection."""
         cached = self.load_reflection_cache(ttl_ms=cache_ttl_ms)
         if cached:
-            return cached
+            safety_parts = self._format_safety_signal_parts(
+                self._load_candidates().get("intents", {})
+            )
+            if not safety_parts:
+                return cached
+            cached_head = self._cap_reflection_text(cached, max_chars=500)
+            return cached_head + "\n" + "\n".join(safety_parts)
         return self.format_reflection(max_intents=max_intents)

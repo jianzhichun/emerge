@@ -11,10 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-# Opener that bypasses system proxy (runner endpoints are always direct/LAN)
-_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-
 from scripts.policy_config import default_emerge_home
+from scripts.runner_http import no_proxy_urlopen
 
 
 @dataclass
@@ -78,7 +76,7 @@ class RunnerClient:
             method="POST",
         )
         try:
-            with _NO_PROXY_OPENER.open(req, timeout=self.timeout_s) as resp:
+            with no_proxy_urlopen(req, timeout=self.timeout_s) as resp:
                 raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -113,7 +111,7 @@ class RunnerClient:
             method="POST",
         )
         try:
-            with _NO_PROXY_OPENER.open(req, timeout=http_timeout) as resp:
+            with no_proxy_urlopen(req, timeout=http_timeout) as resp:
                 raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -135,7 +133,7 @@ class RunnerClient:
             method="GET",
         )
         try:
-            with _NO_PROXY_OPENER.open(req, timeout=self.timeout_s) as resp:
+            with no_proxy_urlopen(req, timeout=self.timeout_s) as resp:
                 raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")

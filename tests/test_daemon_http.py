@@ -240,8 +240,8 @@ def _make_server_with_daemon(tmp_path, daemon=None):
     return srv
 
 
-def test_runner_push_pattern_alert_written_to_events_jsonl(tmp_path):
-    """Pushing >=3 matching events → pattern_alert in events-{profile}.jsonl."""
+def test_runner_push_pattern_observed_written_to_events_jsonl(tmp_path):
+    """Pushing >=3 matching events → pattern_observed in events-{profile}.jsonl."""
     srv = _make_server_with_daemon(tmp_path)
 
     # Register runner
@@ -272,10 +272,10 @@ def test_runner_push_pattern_alert_written_to_events_jsonl(tmp_path):
     alerts = [
         json.loads(l)
         for l in events_file.read_text().splitlines()
-        if l.strip() and json.loads(l).get("type") == "pattern_alert"
+        if l.strip() and json.loads(l).get("type") == "pattern_observed"
     ]
-    assert len(alerts) >= 1, "at least one pattern_alert expected"
-    alert = alerts[0]
+    assert len(alerts) >= 1, "at least one pattern_observed expected"
+    alert = max(alerts, key=lambda item: item["meta"]["occurrences"])
     assert alert["stage"] == "explore"
     assert "intent_signature" in alert
     assert alert["meta"]["occurrences"] >= 3
@@ -283,26 +283,8 @@ def test_runner_push_pattern_alert_written_to_events_jsonl(tmp_path):
 
 
 def test_runner_push_pattern_enqueues_synthesis(tmp_path):
-    """Pattern detection should emit pending synthesis and call the synthesis agent."""
+    """Pattern detection emits facts without directly enqueueing synthesis."""
     srv = _make_server_with_daemon(tmp_path)
-
-    calls = []
-
-    class _Agent:
-        def process_pattern(self, *, summary, runner_profile, events, event_path):
-            calls.append(
-                {
-                    "intent_signature": summary.intent_signature,
-                    "runner_profile": runner_profile,
-                    "events": list(events),
-                    "event_path": event_path,
-                }
-            )
-            with event_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps({"type": "pattern_pending_synthesis", "job_id": "job-test"}) + "\n")
-            return {"status": "queued", "job_id": "job-test"}
-
-    srv._synthesis_agent = _Agent()
 
     body = json.dumps({"runner_profile": "p1", "machine_id": "m1"}).encode()
     r = urllib.request.Request(f"http://localhost:{srv.port}/runner/online",
@@ -327,11 +309,12 @@ def test_runner_push_pattern_enqueues_synthesis(tmp_path):
 
     events_file = tmp_path / "repl" / "events" / "events-p1.jsonl"
     lines = [json.loads(l) for l in events_file.read_text().splitlines() if l.strip()]
-    assert any(e.get("type") == "pattern_pending_synthesis" for e in lines)
-    assert calls, "synthesis agent should receive the detected pattern"
-    assert calls[0]["runner_profile"] == "p1"
-    assert len(calls[0]["events"]) >= 3
-    assert calls[0]["event_path"] == events_file
+    observed = [e for e in lines if e.get("type") == "pattern_observed"]
+    assert observed
+    assert observed[0]["runner_profile"] == "p1"
+    assert observed[0]["meta"]["occurrences"] >= 1
+    assert not any(e.get("type") == "pattern_pending_synthesis" for e in lines)
+    assert not any(e.get("type") == "synthesis_job_ready" for e in lines)
     srv.stop()
 
 

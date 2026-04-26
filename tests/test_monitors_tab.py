@@ -35,12 +35,12 @@ def test_runner_events_returns_newest_first(tmp_path, monkeypatch):
     now = int(time.time() * 1000)
     path.write_text(
         json.dumps({"type": "runner_event", "ts_ms": now - 60000}) + "\n" +
-        json.dumps({"type": "pattern_alert", "ts_ms": now - 1000}) + "\n",
+        json.dumps({"type": "pattern_observed", "ts_ms": now - 1000}) + "\n",
         encoding="utf-8",
     )
     result = cmd_control_plane_runner_events(profile="myrunner", limit=20)
     assert result["ok"] is True
-    assert result["events"][0]["type"] == "pattern_alert"  # newest first
+    assert result["events"][0]["type"] == "pattern_observed"  # newest first
     assert result["today_alerts"] == 1
     assert result["today_events"] == 2
 

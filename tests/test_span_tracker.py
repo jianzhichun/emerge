@@ -341,6 +341,40 @@ def test_format_reflection_with_cache_prefers_cached(tracker):
     assert "cached.intent" in result
 
 
+def test_format_reflection_with_cache_preserves_live_safety_signals(tracker):
+    from scripts.intent_registry import registry_path
+
+    key = "lark.read.list-docs"
+    reg = registry_path(tracker._state_root)
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    reg.write_text(json.dumps({
+        "intents": {
+            key: {
+                "intent_signature": key,
+                "stage": "canary",
+                "attempts": 8,
+                "successes": 7,
+                "last_demotion": {
+                    "to_stage": "canary",
+                    "reason": "bridge_broken",
+                    "bridge_failure_exception": "NameError",
+                    "ts_ms": 1234,
+                },
+                "synthesis_skipped_reason": "missing___result_assignment",
+            }
+        }
+    }), encoding="utf-8")
+    tracker.write_reflection_cache("Muscle memory (deep)\nHigh-confidence intents: cached.intent")
+
+    result = tracker.format_reflection_with_cache()
+
+    assert "cached.intent" in result
+    assert "Demoted:" in result
+    assert "NameError" in result
+    assert "Synthesis blocked:" in result
+    assert "missing___result_assignment" in result
+
+
 def test_reflection_cache_text_is_capped(tracker):
     very_long = "Muscle memory (deep)\n" + ("x" * 2000)
     tracker.write_reflection_cache(very_long)

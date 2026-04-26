@@ -39,7 +39,7 @@
 
   function eventToView(event: RunnerEvent, nowMs: number): EventRowView {
     const type = toText(event.type) || 'event';
-    if (type === 'pattern_alert') {
+    if (type === 'pattern_observed' || type === 'local_pattern_observed' || type === 'pattern_alert') {
       const intent = toText(event.intent_signature);
       const stage = toText(event.stage);
       return {
@@ -47,7 +47,7 @@
         badgeLabel: 'pattern',
         badgeClass: 'badge--pattern',
         contentClass: 'content--pattern',
-        contentText: [intent, stage].filter(Boolean).join(' · ') || 'pattern alert'
+        contentText: [intent, stage].filter(Boolean).join(' · ') || 'pattern observed'
       };
     }
     if (type === 'operator_message') {

@@ -24,11 +24,11 @@ Use the job payload from `forward_synthesis_pending`:
 4. Do not introduce new dependencies unless connector notes already require them.
 5. For read mode, assign `__result`. For write mode, assign `__action`.
 6. Generate a stronger verify strategy. Prefer `required_fields`, type checks, and row-shape checks over `bool(rows)`.
-7. Submit the final JSON using `icc_synthesis_submit`; do not write pipeline files directly.
+7. Validate the candidate through `icc_exec` with `no_replay=true`, then write the pending artifact yourself using the normal file-editing tools.
 
 ## Output JSON
 
-Return this object as the `result` passed to `icc_synthesis_submit`:
+Use this shape in your working notes and pending artifact rationale:
 
 ```json
 {

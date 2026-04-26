@@ -535,7 +535,7 @@ def cmd_control_plane_runner_events(profile: str, limit: int = 20) -> dict:
         ts = ev.get("ts_ms", 0)
         if ts >= today_start_ms:
             today_events += 1
-            if ev.get("type") == "pattern_alert":
+            if ev.get("type") in ("pattern_observed", "local_pattern_observed", "pattern_alert"):
                 today_alerts += 1
         # Activity buckets
         if ts >= window_start_ms:

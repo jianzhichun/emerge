@@ -1,168 +1,202 @@
-# Code Shrink + Skills Migration Audit
+# Emerge v3 Audit
+
+> Historical Step 0 audit. The v3 implementation has since deleted the Python synthesis provider/coordinator path, added fact-only synthesis events, and moved pattern/suggestion output to observations. Use `summary.md` and current tests as the post-implementation baseline; this document remains as the rationale for the original approval decisions.
 
 ## Status
 
-This is a Step 1 audit report only. It does not approve or perform code deletion, markdown migration, or refactoring. Every `delete`, `behavior-down-to-skill`, or `refactor-shrink` recommendation below requires author approval before implementation.
+This is the Step 0 audit for the v3 architecture direction. It is intentionally audit-only: no delete, rewrite, or framework reshaping is approved by this document.
 
-Baseline: current worktree `/Users/apple/Documents/workspace/emerge/.worktrees/unify-llm-distillation`.
+Baseline: current `main` at `4b69cb3` after the previous skills migration. This differs from the v3 brief baseline (`059fb50`), so all counts below use the current checkout.
+
+## Architecture Decision Under Audit
+
+Emerge code should narrow to two mechanism frameworks:
+
+- Pipeline framework: deterministic loading, execution, WAL/checkpoint, bridge, and registry persistence.
+- Runner framework: observation transport, local execution, outbox, lifecycle, and daemon communication.
+
+All intelligent behavior should move to generic Claude Code skills, agents, and commands. Product assets must not hard-code verticals such as HM, ZWCAD, SolidWorks, CATIA, or FOCUS; vertical knowledge belongs in connector-local config such as `NOTES.md` and `watcher_profile.yaml`.
 
 ## Counting Method
 
-Counts are physical line counts from the current worktree filesystem. This intentionally includes current worktree changes and may not match the historical `059fb50` count quoted in the brief.
+Counts are physical line counts from `/Users/apple/Documents/workspace/emerge` on current `main`.
 
+| Area | Files | Lines |
+| --- | ---: | ---: |
+| `scripts/**/*.py` | 67 | 19,105 |
+| `hooks/*.py` | 23 | 1,973 |
+| `skills/**/*.md` | 11 | 1,261 |
+| `agents/*.md` | 4 | 101 |
+| `commands/*.md` | 9 | 344 |
 
-| Area                     | Files | Lines  |
-| ------------------------ | ----- | ------ |
-| `scripts/**/*.py`        | 68    | 19,168 |
-| `hooks/*.py`             | 23    | 1,953  |
-| `skills/**/*.md`         | 6     | 1,051  |
-| `.cursor/skills/**/*.md` | 2     | 117    |
-| `agents/*.md`            | 2     | 67     |
-| `commands/*.md`          | 7     | 311    |
+The v3 prompt quotes `scripts/` as 11,642 lines. Current recursive `scripts/**/*.py` count is 19,105 because the baseline now includes the prior LLM-distillation and skills migration work. Future summary must state both the chosen baseline and the counting command.
 
+## Deletion / Simplification Candidates
 
-Key candidate line counts:
+| File | Lines | Current callers / tests | Audit conclusion | Replacement path |
+| --- | ---: | --- | --- | --- |
+| `scripts/synthesis_agent.py` | 378 | `scripts/daemon_http.py`, `scripts/operator_monitor.py`, tests for synthesis agent, reverse e2e, daemon HTTP, operator monitor | Delete after replacing reverse synthesis orchestration. It still packages jobs, exposes provider compatibility, and contains environment variables `EMERGE_SYNTHESIS_*`; these are intelligent-path glue under v3. | Emit raw `pattern_pending_synthesis` / `synthesis_job_ready` facts only. Generic `skills/distill-from-pattern` guides Claude to inspect events and use MCP primitives. |
+| `scripts/synthesis_coordinator.py` | 378 | `scripts/emerge_daemon.py`, `scripts/crystallizer.py`, MCP schema/tests for `icc_synthesis_submit`, forward synthesis and smoke tests | Delete or shrink to a minimal pipeline-write primitive only after deciding the replacement MCP surface. Current smoke/materialization logic is a Python distillation coordinator. | Replace with explicit mechanism tools such as “write pending pipeline artifact” and “record synthesis blocked”; decision/smoke strategy belongs in generic skills. |
+| `scripts/crystallizer.py` | 569 | `scripts/emerge_daemon.py`, `scripts/mcp/span_handler.py`, `hooks/post_tool_use.py`, `scripts/sync/asset_ops.py`, crystallize tests, sync tests, hook tests | High-risk delete. It owns YAML dumping helpers, span skeleton generation, `_code_assigns_name`, and legacy crystallization. Some helpers are mechanism or reused by sync/span paths. | Split first: move YAML/schema/code-assignment primitives to small mechanism modules; move WAL-to-pipeline reasoning to `skills/crystallize-from-wal`. Remove `icc_crystallize` only after replacement tests pass. |
+| `scripts/pattern_detector.py` | 140 | `scripts/daemon_http.py`, `scripts/operator_monitor.py`, `tests/test_pattern_detector.py`, synthesis tests | Simplify, not blind delete. Current thresholds (`FREQ_THRESHOLD`, `ERROR_RATE_THRESHOLD`, cross-machine criteria) are policy decisions in code. Grouping/window metrics are useful mechanism facts. | Keep pure event grouping/stat functions and emit `pattern_metrics` facts. Generic `skills/aggregate-suggestions` or `skills/distill-from-pattern` decides whether a pattern matters. |
+| `scripts/operator_monitor.py` | 116 | `scripts/emerge_daemon.py`, `tests/test_operator_monitor.py`, MCP integration tests | Simplify or merge into event routing. It reads event files, buffers windows, invokes detector, writes `local_pattern_alert`, and optionally calls synthesis agent. | Keep file watching / forwarding mechanism; remove direct synthesis-agent invocation and alert judgment. Emit local event batches/metrics for Claude. |
+| `scripts/orchestrator/suggestion_aggregator.py` | 188 | `scripts/daemon_http.py`, `tests/test_suggestion_aggregator.py` | Simplify. It mixes dedupe/persistence with trigger decisions (`min_runners`, `min_occurrences_single_runner`, retrigger threshold). | Keep dedupe, persistence, and parameter-range facts; replace `_maybe_trigger` with `pattern_aggregated` events judged by `skills/aggregate-suggestions`. |
+| `scripts/admin/cockpit.py` | 934 | Cockpit/server/SSE/static/CORS/API tests, daemon HTTP tests | Refactor-shrink, not wholesale delete. HTTP/static/SSE/CORS/body-limit code is mechanism. Large route dispatch and some view shaping can shrink. | Keep HTTP transport and stable API shape. Move admin workflows to commands; keep summarization only as deterministic projections. |
 
+## Pipeline Framework Audit
 
-| File                             | Lines |
-| -------------------------------- | ----- |
-| `scripts/distiller.py`           | 73    |
-| `scripts/admin/cockpit.py`       | 928   |
-| `scripts/admin/control_plane.py` | 686   |
-| `scripts/admin/runner.py`        | 705   |
-| `scripts/operator_popup.py`      | 763   |
-| `scripts/repl_admin.py`          | 223   |
-| `scripts/operator_monitor.py`    | 116   |
-| `scripts/pattern_detector.py`    | 140   |
+Mechanism files:
 
+| File | Lines | Role |
+| --- | ---: | --- |
+| `scripts/pipeline_engine.py` | 548 | Load and run Python/YAML pipelines, lifecycle hooks, bridge execution. |
+| `scripts/pipeline_yaml_engine.py` | 441 | Execute YAML scenarios and rollback steps. |
+| `scripts/exec_session.py` | 537 | Persistent Python session, WAL, replay, checkpoint, stdout/stderr caps. |
+| `scripts/intent_registry.py` | 113 | Atomic registry persistence API. |
+| `scripts/policy_config.py` | 345 | Shared constants, paths, settings, atomic JSON helpers. |
+| `scripts/mcp/bridge.py` | 316 | Stable intent bridge and bridge failure classification. |
 
-## Protected Mechanism Files
+Subtotal: about 2,300 lines.
 
-These files are stable mechanism-layer assets and should be treated as no-touch in this refactor unless the author explicitly approves a separate change.
+Conservative improvement opportunities for later phases:
 
+- Extract duplicate metadata/schema parsing into `scripts/pipeline_metadata.py`.
+- Extract execution/verification helpers only if tests prove behavior-preserving.
+- Standardize exception hierarchy around `PipelineMissingError` / YAML errors.
+- Add direct unit tests for bridge classification if gaps remain beyond `tests/test_bridge_classifier.py`.
+- Write `docs/pipeline-framework.md` covering load order, pipeline file layout, WAL, verify, and bridge failure semantics.
 
-| File                                            | Lines | Audit classification |
-| ----------------------------------------------- | ----- | -------------------- |
-| `scripts/policy_engine.py`                      | 761   | `mechanism`          |
-| `scripts/exec_session.py`                       | 537   | `mechanism`          |
-| `scripts/pipeline_engine.py`                    | 548   | `mechanism`          |
-| `scripts/pipeline_yaml_engine.py`               | 441   | `mechanism`          |
-| `scripts/mcp/bridge.py`                         | 316   | `mechanism`          |
-| `scripts/state_tracker.py`                      | 547   | `mechanism`          |
-| `scripts/synthesis_agent.py`                    | 360   | `mechanism`          |
-| `scripts/runner_policy.py`                      | 139   | `mechanism`          |
-| `scripts/node_role.py`                          | 22    | `mechanism`          |
-| `scripts/orchestrator/suggestion_aggregator.py` | 188   | `mechanism`          |
-| `scripts/runner_emit.py`                        | 174   | `mechanism`          |
-| `scripts/intent_registry.py`                    | 113   | `mechanism`          |
+Do not change WAL replay order, bridge failure classification, or tested YAML engine semantics during deletion phases.
 
+## Runner Framework Audit
 
-## High-Suspicion Candidates
+Mechanism files:
 
+| File | Lines | Role |
+| --- | ---: | --- |
+| `scripts/remote_runner.py` | 756 | Runner HTTP server, executor, SSE client, popup dispatch. |
+| `scripts/runner_client.py` | 328 | Daemon-side runner client/router. |
+| `scripts/runner_emit.py` | 174 | Runner event emission and outbox. |
+| `scripts/runner_watchdog.py` | 168 | Runner process supervision. |
+| `scripts/runner_state_service.py` | 113 | Connected runner state snapshots. |
+| `scripts/runner_sync.py` | 139 | Runner script/version sync. |
+| `scripts/node_role.py` | 22 | Orchestrator vs runner role detection. |
+| `scripts/runner_policy.py` | 139 | Runner-side evidence forwarding boundary. |
 
-| File                             | Lines | Proposed classification                      | Reason                                                                                                                                                                                                                                                                                              | Estimated post-change lines | Tests / references                                                                                                                                     |
-| -------------------------------- | ----- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `scripts/distiller.py`           | 73    | `delete`                                     | It contains `_normalise` plus optional `intent_confirmed` event writing. Current direct production use is the normalization call from `SynthesisAgent`; `intent_confirmed` appears orphaned. Move normalization into `SynthesisAgent` only after confirming no external plugin imports `Distiller`. | 0-10                        | `tests/test_distiller.py`, `scripts/synthesis_agent.py`                                                                                                |
-| `scripts/admin/cockpit.py`       | 928   | `refactor-shrink`                            | Mixed HTTP/static/SSE transport plus route dispatch. Transport is mechanism; route switches and small rendering helpers can shrink via a route table and shared helpers. Do not move HTTP body limits, CORS, static path safety, or `InProcessCockpitBridge` out of Python.                         | 600-750                     | `tests/test_cockpit_server.py`, `tests/test_cockpit_sse.py`, `tests/test_cockpit_static.py`, `tests/test_cockpit_cors.py`, `tests/test_daemon_http.py` |
-| `scripts/admin/control_plane.py` | 686   | `refactor-shrink`                            | Mostly read-heavy control-plane commands and JSONL/session projections. Mechanism remains Python, but repeated tail/filter/session shaping can be consolidated. Some operator-facing analysis/triage guidance belongs in commands/skills, not here.                                                 | 500-600                     | `tests/test_cockpit_api.py`, `tests/test_cockpit_monitors.py`, `tests/test_repl_admin.py`, `tests/test_policy_traceability.py`                         |
-| `scripts/admin/runner.py`        | 705   | `behavior-down-to-skill` + `refactor-shrink` | Runner map persistence, install URL generation, health/deploy primitives are mechanism. Higher-level procedures such as deploy sequencing, status triage, and recovery workflows should become commands/skills.                                                                                     | 400-500                     | `tests/test_runner_self_install.py`, `tests/test_repl_admin.py`, runner/admin tests                                                                    |
-| `scripts/operator_popup.py`      | 763   | `refactor-shrink`                            | Tkinter render primitives and thread dispatch must stay Python. Popup policy, copy, and when-to-ask rules should move to a `runner-elicitation-policy` skill/agent prompt. Avoid trying to put tkinter implementation into markdown.                                                                | 600-700                     | `tests/test_operator_popup.py`, `tests/test_operator_popup_upload.py`, `tests/test_remote_runner_events.py`                                            |
-| `scripts/repl_admin.py`          | 223   | `refactor-shrink`                            | Mostly CLI dispatch/re-export glue. Keep as thin compatibility surface, but audit commands that duplicate markdown command workflows or are historical author-only helpers.                                                                                                                         | 150-200                     | `tests/test_repl_admin.py`, `commands/cockpit.md`, `commands/runner-status.md`                                                                         |
+Subtotal: about 1,839 lines.
 
+Conservative improvement opportunities for later phases:
 
-## Medium-Suspicion Candidates
+- Split `remote_runner.py` by transport, executor, and SSE client while preserving imports.
+- Unify no-proxy HTTP JSON helpers across runner client, runner emit, and remote runner forwarding.
+- Document runner lifecycle and deployment in `docs/runner-deployment.md`.
+- Add targeted tests for `runner_state_service.py`, `runner_sync.py`, and `runner_policy.py` if coverage is only indirect.
+- Preserve runner rule: runners forward facts and execute local mechanisms; they do not decide pattern significance, promotion, or crystallization.
 
+## Hooks Audit
 
-| File / group                  | Lines | Proposed classification                       | Reason                                                                                                                                                                                                                                                                                                  | Estimated post-change lines | Tests / references                                                                       |
-| ----------------------------- | ----- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------- |
-| `hooks/*.py`                  | 1,953 | mixed: `mechanism` + `behavior-down-to-skill` | Guard hooks (`pre_tool_use`, `stop`, `stop_failure`, `post_tool_use`) are mechanism. Prompt injection and explanatory text in `session_start.py`, `user_prompt_submit.py`, and some permission/elicitation copy can be pulled from markdown assets while hooks keep only JSON contract and state reads. | 1,500-1,700                 | `tests/test_hook_scripts_output.py`, hook-specific tests, `hooks/hooks.json`             |
-| `scripts/operator_monitor.py` | 116   | `mechanism`                                   | It is already thin: reads local event files, calls `PatternDetector`, writes `local_pattern_alert`, optionally enqueues synthesis. Keep unless duplicate logic with `daemon_http` is consolidated later.                                                                                                | 100-116                     | `tests/test_operator_monitor.py`, `tests/test_mcp_tools_integration.py`                  |
-| `scripts/pattern_detector.py` | 140   | `mechanism`                                   | Repetition thresholds/windowing are deterministic detection mechanism. Tuning constants could later move to config, but not to free-form skill logic.                                                                                                                                                   | 120-140                     | `tests/test_pattern_detector.py`, `tests/test_daemon_http.py`                            |
-| `scripts/admin/api.py`        | 259   | `refactor-shrink`                             | Shared data commands and formatting helpers. Settings validation and action enrichment stay Python; pretty rendering and UI copy are candidates for cockpit rendering markdown.                                                                                                                         | 200-230                     | `tests/test_cockpit_api.py`, `tests/test_action_registry.py`, `tests/test_repl_admin.py` |
+Current hook subset sampled:
 
+| File | Lines | Classification |
+| --- | ---: | --- |
+| `hooks/session_start.py` | 150 | Mechanism + markdown-loaded prompt copy. |
+| `hooks/user_prompt_submit.py` | 88 | Mechanism + markdown-loaded reminder copy. |
+| `hooks/pre_tool_use.py` | 313 | Mechanism guard. |
+| `hooks/post_tool_use.py` | 287 | Mechanism recorder / active-span buffer. |
+| `hooks/stop.py` | 42 | Mechanism guard. |
+| `hooks/stop_failure.py` | 69 | Mechanism cleanup. |
 
-## Markdown / Agent Targets
+The prior migration already moved some span copy to `docs/hooks/`. Future hook shrink should merge repeated span-open cleanup/guard logic carefully, but guard hooks are not “intelligence” and should remain deterministic Python.
 
-Existing markdown assets:
+## Generic Markdown / Agent / Command Audit
 
+Current product assets:
 
-| Area              | Files | Lines | Notes                                                                                                                                  |
-| ----------------- | ----- | ----- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `skills/`         | 6     | 1,051 | Good examples: `distilling-operator-flows`, `remote-runner-dev`, `operator-monitor-debug`.                                             |
-| `.cursor/skills/` | 2     | 117   | Current synthesis skills use clean YAML frontmatter and explicit tool contract.                                                        |
-| `agents/`         | 2     | 67    | Only generic `operator-watcher.md` exists; brief asks for at least five connector watchers plus one distiller in later implementation. |
-| `commands/`       | 7     | 311   | Good home for admin workflows and diagnostics invoked by the author.                                                                   |
+| Area | Files | Notes |
+| --- | ---: | --- |
+| `skills/` | 11 | Includes synthesis/admin/runner/cockpit skills plus older operator-flow skills. |
+| `agents/` | 4 | Generic watcher template, operator watcher, forward distiller, README. |
+| `commands/` | 9 | Admin, cockpit, monitor, import/export, hub commands. |
 
+Vertical-token scan found residual examples:
 
-Recommended markdown targets for later implementation:
+- `skills/distilling-operator-flows/SKILL.md`: mentions `zwcad` and `SolidWorks`.
+- `skills/emerge-reverse-synthesis/SKILL.md`: mentions `zwcad`.
+- `skills/initializing-vertical-flywheel/SKILL.md`: mentions `zwcad`.
+- `skills/remote-runner-dev/SKILL.md`: mentions `hm` and `zwcad`.
+- `agents/README.md`: uses `hypermesh` in example `watcher_profile.yaml`.
+- `skills/cockpit-rendering/SKILL.md` and `skills/policy-optimization/SKILL.md` contain the word `focus`; this may be ordinary English, not necessarily FOCUS6, but should be reviewed.
 
+Audit conclusion: v3’s generic-only rule requires replacing vertical examples with `mock`, `cad_generic`, or abstract connector placeholders in product assets. Real connector examples should move under `connectors/<name>/NOTES.md`, `connectors/<name>/watcher_profile.yaml`, or test fixtures.
 
-| Proposed asset                                                                                                                           | Type    | Could absorb                                                                     |
-| ---------------------------------------------------------------------------------------------------------------------------------------- | ------- | -------------------------------------------------------------------------------- |
-| `skills/cockpit-rendering/SKILL.md`                                                                                                      | skill   | Cockpit view rendering conventions, event summarization, admin-facing copy.      |
-| `skills/runner-elicitation-policy/SKILL.md`                                                                                              | skill   | When to ask operator, popup copy policy, timeout/fallback rules.                 |
-| `skills/admin-runner-operations/SKILL.md`                                                                                                | skill   | Runner deploy/status/recovery decision workflow over existing Python primitives. |
-| `commands/admin-batch-update-runners.md`                                                                                                 | command | Batch runner update and verification workflow.                                   |
-| `commands/diagnose-stuck-flywheel.md`                                                                                                    | command | Replacement for REPL-style ad hoc diagnostics.                                   |
-| `agents/forward-distiller.md`                                                                                                            | agent   | Claude Code teammate for background forward synthesis.                           |
-| `agents/hm-watcher.md`, `agents/zwcad-watcher.md`, `agents/solidworks-watcher.md`, `agents/catia-watcher.md`, `agents/focus6-watcher.md` | agents  | Connector-specific watcher definitions or thin wrappers around watcher profiles. |
+Required generic assets for v3 approval:
 
+| Proposed asset | Purpose |
+| --- | --- |
+| `skills/distill-from-pattern/SKILL.md` | Replace reverse synthesis code path; guide Claude from raw event facts to verified intent execution. |
+| `skills/crystallize-from-wal/SKILL.md` | Replace WAL-to-pipeline crystallizer reasoning. |
+| `skills/judge-promote-flywheel/SKILL.md` | Move promotion judgment out of policy thresholds if approved. |
+| `skills/aggregate-suggestions/SKILL.md` | Move suggestion-trigger judgment out of Python. |
+| `skills/pipeline-framework/SKILL.md` or `docs/pipeline-framework.md` | Teach contributors and Claude the deterministic pipeline framework. |
+| `docs/runner-deployment.md` | Runner install/lifecycle/outbox deployment guide. |
+| `agents/connector-watcher-template.md` | Generic watcher template only; no product-shipped vertical watcher files. |
 
-## Suggested Approval Decisions
+## Approval Decisions Required
 
-The author should explicitly approve or reject these before implementation:
+1. **Line-count baseline**: approve current `main` (`4b69cb3`, 19,105 recursive script lines) as the v3 baseline, or require a historical comparison to `059fb50`.
+2. **Synthesis removal scope**: approve deleting both `synthesis_agent.py` and `synthesis_coordinator.py`, or keep a minimal artifact-writing primitive extracted from `synthesis_coordinator.py`.
+3. **Crystallizer split**: approve splitting `crystallizer.py` into mechanism primitives before deletion. Direct deletion would break daemon/span/sync callers.
+4. **Policy judgment migration**: approve whether `PolicyEngine._derive_transition` is actually in scope. The v3 prompt both says “move judgment to skill” and later says “do not touch `_derive_transition`”; this conflict needs author decision before code changes.
+5. **Pattern detector behavior**: approve replacing threshold alerts with fact emission only.
+6. **Generic-only markdown**: approve removing all vertical examples from product `skills/`, `agents/`, and `commands`, using only placeholders or mock examples.
+7. **Cockpit shrink level**: approve a conservative route/helper shrink first, not a full backend rewrite.
 
-1. Delete `scripts/distiller.py` after moving `_normalise` into protected `scripts/synthesis_agent.py`. This conflicts with the no-touch status of `synthesis_agent.py`, so it needs explicit approval.
-2. Treat `scripts/admin/cockpit.py` as `refactor-shrink`, not `behavior-down-to-skill`; HTTP/static/SSE remains mechanism.
-3. Treat `scripts/operator_popup.py` as `refactor-shrink`; only policy/copy moves to markdown, tkinter stays Python.
-4. Create connector-specific watcher agent files even though current `agents/README.md` says connector-specific behavior belongs in `watcher_profile.yaml`. This is a product-direction decision.
-5. Add a `CHANGELOG.md` if deleted modules need user-facing migration notes; none exists today.
+## Implementation Guardrails After Approval
 
-## Implementation Guardrails for Later Phases
+- One delete/split per commit.
+- Test-first for every deleted intelligent component: update or replace tests before removing imports.
+- No new Python LLM providers, null providers, or compatibility provider abstractions.
+- No product-level vertical skills/agents/commands.
+- Preserve `stage` writes and registry mutation contracts unless a specific approved phase changes them.
+- Keep runner role boundaries: runner forwards evidence; orchestrator/main Claude judges.
 
-- Do not modify protected mechanism files unless an approved item specifically names the file.
-- For each delete candidate, run import/name/event reference searches and update or remove tests in the same change.
-- For every markdown downshift, create the markdown asset first, then replace Python behavior with a minimal mechanism hook.
-- Keep commits small: one downshift/delete/shrink per commit.
-- Re-run targeted tests for the touched subsystem before moving to the next file.
-
-## Verification Commands for Later Phases
-
-Use these after implementation begins, not for this audit-only step:
+## Verification Commands For Later Phases
 
 ```bash
-python -m pytest tests/ -q --ignore=tests/test_operator_popup.py --ignore=tests/test_remote_runner_install.py
-python -m pytest tests/test_policy_traceability.py tests/test_exec_flywheel.py tests/test_pipeline_engine.py tests/test_pipeline_yaml_engine.py tests/test_daemon_http.py tests/test_synthesis_agent.py tests/test_node_role_guards.py tests/test_runner_evidence_forwarding.py -q --tb=line
+python -m pytest tests/ -q --ignore=tests/test_runner_sse_benchmark.py --ignore=tests/test_metrics.py --ignore=tests/test_operator_popup.py --ignore=tests/test_remote_runner_install.py -k "not concurrent_tool_calls"
+python -m pytest tests/test_pipeline_engine.py tests/test_pipeline_yaml_engine.py tests/test_exec_kernel.py tests/test_remote_runner.py tests/test_runner_outbox.py tests/test_runner_retry.py tests/test_bridge_classifier.py -q
 ```
 
 Contract checks:
 
 ```bash
-rg '\\[\"stage\"\\]\\s*=' scripts/
-rg 'IntentRegistry\\.save' scripts/
+rg '\["stage"\]\s*=' scripts/
+rg 'IntentRegistry\.save' scripts/
 ```
 
-Line count checks:
+Markdown generic-only checks:
 
 ```bash
 python - <<'PY'
 from pathlib import Path
 root = Path.cwd()
-for name, files in {
-    "scripts_py": list((root / "scripts").rglob("*.py")),
-    "hooks_py": list((root / "hooks").glob("*.py")),
-    "skills_md": list((root / "skills").rglob("*.md")),
-    "cursor_skills_md": list((root / ".cursor" / "skills").rglob("*.md")) if (root / ".cursor" / "skills").exists() else [],
-    "agents_md": list((root / "agents").glob("*.md")) if (root / "agents").exists() else [],
-    "commands_md": list((root / "commands").glob("*.md")),
-}.items():
-    print(name, len(files), sum(len(p.read_text(encoding="utf-8").splitlines()) for p in files))
+tokens = {"hm", "zwcad", "solidworks", "catia", "focus6", "hypermesh"}
+for base in ("skills", "agents", "commands"):
+    for path in (root / base).rglob("*.md"):
+        text = path.read_text(encoding="utf-8", errors="ignore").lower()
+        found = sorted(t for t in tokens if t in text)
+        if found:
+            print(path, found)
 PY
 ```
 
-## Open Questions
+## Recommended Next Step
 
-- Should current worktree line counts (including the unified synthesis refactor) become the official shrink baseline, or should the final summary also compare against `059fb50`?
-- Should root `skills/` and `.cursor/skills/` be normalized to the same frontmatter convention?
-- Should connector-specific watcher agents be separate files, or should the existing generic `operator-watcher.md` plus `watcher_profile.yaml` remain the preferred model?
+Stop here for author approval. If approved, begin with the safest sequence:
 
+1. Generic-only markdown cleanup and tests.
+2. Extract crystallizer mechanism primitives.
+3. Delete reverse synthesis provider path.
+4. Delete or shrink forward synthesis coordinator.
+5. Simplify pattern/suggestion decision logic to fact emission.
+6. Decorate Pipeline and Runner frameworks with docs, smaller modules, and targeted tests.

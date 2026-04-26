@@ -7,7 +7,7 @@ Watcher agents are runner-side sensors. They observe local operator activity, re
 Profile contract:
 
 ```yaml
-connector: hypermesh
+connector: desktop_analysis_app
 sources:
   - type: file
     path: ~/HW_TEMP/command.tcl
@@ -17,7 +17,7 @@ parser:
 intent_hints:
   - when:
       command: automesh
-    intent: hypermesh.write.automesh
+    intent: desktop_analysis_app.write.automesh
 preference_hints:
   - name: density
     source: density

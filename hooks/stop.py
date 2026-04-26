@@ -9,14 +9,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.span_service import SpanService  # noqa: E402
+from hooks.hook_io import read_json_payload  # noqa: E402
 
 
 def main() -> None:
-    payload_text = sys.stdin.read().strip()
-    try:
-        payload = json.loads(payload_text) if payload_text else {}
-    except Exception:
-        payload = {}
+    read_json_payload()
 
     active_span_id, active_span_intent = SpanService().get_active()
 

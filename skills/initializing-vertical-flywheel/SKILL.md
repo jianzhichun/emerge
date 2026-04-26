@@ -13,7 +13,7 @@ Core principle: do not claim initialization complete until new read/write pipeli
 
 ## When to Use
 
-- User asks for one-sentence bootstrap, such as "initialize zwcad vertical flywheel".
+- User asks for one-sentence bootstrap, such as "initialize desktop_drafting_app vertical flywheel".
 - User context is natural language, not strict parameters.
 - Environment assumptions are uncertain (host/tooling/executor not guaranteed).
 
@@ -75,7 +75,7 @@ This plugin is a **generic RWB flywheel engine**. Vertical-specific connectors m
 
 ## Assets To Create (Minimum)
 
-For vertical `<vertical>` (for example `zwcad`), create in **user-space**:
+For vertical `<vertical>` (for example `desktop_drafting_app`), create in **user-space**:
 
 - `~/.emerge/connectors/<vertical>/pipelines/read/state.yaml`
 - `~/.emerge/connectors/<vertical>/pipelines/read/state.py`
@@ -201,5 +201,5 @@ This connects the forward flywheel (AI learns to DO tasks) to the reverse
 flywheel (AI learns to RECOGNIZE when humans are doing those tasks repeatedly).
 The vertical adapter shares the same `intent_signature` namespace and feeds the
 same policy registry — a repeated operator pattern becomes
-`pattern_pending_synthesis`, `SynthesisAgent` calls the configured provider, and
-successful code enters the flywheel via `icc_exec` WAL at explore stage.
+`pattern_pending_synthesis`, Claude Code skills inspect the facts, and verified
+code enters the flywheel via `icc_exec` WAL at explore stage.
