@@ -91,9 +91,11 @@ def test_synthesis_job_ready_formats_for_watch_emerge():
             "runner_profile": "p1",
             "job_id": "job-1",
             "intent_signature": "foo.write.bar",
+            "skill_name": "emerge-reverse-synthesis",
         }
     )
 
     assert rendered is not None
     assert "SynthesisJobReady" in rendered
     assert "job-1" in rendered
+    assert "emerge-reverse-synthesis" in rendered

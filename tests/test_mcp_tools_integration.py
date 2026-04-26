@@ -2059,7 +2059,7 @@ def _confirm_operator(daemon, intent_sig: str) -> None:
     )
 
 
-def test_auto_crystallize_creates_pipeline_at_synthesis_ready(tmp_path, monkeypatch):
+def test_auto_crystallize_enqueues_forward_synthesis_at_synthesis_ready(tmp_path, monkeypatch):
     import json
     from scripts.emerge_daemon import EmergeDaemon
     monkeypatch.setenv("EMERGE_STATE_ROOT", str(tmp_path / "state"))
@@ -2069,8 +2069,12 @@ def test_auto_crystallize_creates_pipeline_at_synthesis_ready(tmp_path, monkeypa
     _drive_exec_to_synthesis_ready(daemon, "mock.read.auto-crystallize-test")
     py_path = connector_root / "mock" / "pipelines" / "read" / "auto-crystallize-test.py"
     yaml_path = connector_root / "mock" / "pipelines" / "read" / "auto-crystallize-test.yaml"
-    assert py_path.exists(), "auto-crystallize should have created .py"
-    assert yaml_path.exists(), "auto-crystallize should have created .yaml"
+    assert not py_path.exists(), "deprecated auto-crystallize should not write .py directly"
+    assert not yaml_path.exists(), "deprecated auto-crystallize should not write .yaml directly"
+    events_path = tmp_path / "state" / "events" / "events.jsonl"
+    events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert any(e.get("type") == "forward_synthesis_pending" for e in events)
+    assert events[-1]["job"]["skill_name"] == "emerge-forward-synthesis"
 
 
 def test_auto_crystallize_does_not_overwrite_existing(tmp_path, monkeypatch):

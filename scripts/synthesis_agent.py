@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -12,7 +13,6 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from scripts.crystallizer import _code_assigns_name
-from scripts.distiller import Distiller
 from scripts.node_role import is_runner_role
 from scripts.policy_config import PIPELINE_KEY_RE, events_root, resolve_connector_root
 
@@ -38,6 +38,8 @@ class SynthesisJob:
     connector_notes: str = ""
     synthesis_hints: dict[str, Any] = field(default_factory=dict)
     event_fingerprint: str = ""
+    source: str = "reverse"
+    skill_name: str = "emerge-reverse-synthesis"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -134,7 +136,7 @@ class SynthesisAgent:
         self._state_root = state_root
         self._connector_root = connector_root or resolve_connector_root()
         env_mode = os.environ.get("EMERGE_SYNTHESIS_MODE", "").strip()
-        self._mode = mode or env_mode or ("provider_exec" if provider is not None else "enqueue_only")
+        self._mode = mode or env_mode or "enqueue_only"
         if is_runner_role():
             self._mode = "enqueue_only"
         self._provider = provider or CommandSynthesisProvider.from_env()
@@ -150,16 +152,34 @@ class SynthesisAgent:
         events: list[dict[str, Any]],
         event_path: Path | None = None,
     ) -> dict[str, Any]:
-        normalized = Distiller._normalise(str(summary.intent_signature))
+        job, stream_path = self._build_reverse_job(
+            summary=summary,
+            runner_profile=runner_profile,
+            events=events,
+            event_path=event_path,
+        )
+        return self.enqueue_or_execute_job(job, stream_path=stream_path)
+
+    def _build_reverse_job(
+        self,
+        *,
+        summary,
+        runner_profile: str,
+        events: list[dict[str, Any]],
+        event_path: Path | None = None,
+    ) -> tuple[SynthesisJob, Path]:
+        normalized = _normalize_intent_signature(str(summary.intent_signature))
         fingerprint = self._fingerprint(runner_profile, normalized, events)
         connector = self._infer_connector(normalized, summary.context_hint)
         job_id = "syn-" + hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:16]
         stream_path = event_path or events_root(self._state_root) / f"events-{runner_profile}.jsonl"
-        job = SynthesisJob(
+        return SynthesisJob(
             job_id=job_id,
             normalized_intent=normalized,
             connector=connector,
             runner_profile=runner_profile,
+            source="reverse",
+            skill_name="emerge-reverse-synthesis",
             machine_ids=list(summary.machine_ids),
             detector_signals=list(summary.detector_signals),
             context_hint=dict(summary.context_hint),
@@ -167,8 +187,13 @@ class SynthesisAgent:
             connector_notes=self._load_notes(connector),
             synthesis_hints=self._load_hints(connector),
             event_fingerprint=fingerprint,
-        )
+        ), stream_path
 
+    def enqueue_or_execute_job(self, job: SynthesisJob, *, stream_path: Path) -> dict[str, Any]:
+        fingerprint = job.event_fingerprint
+        job_id = job.job_id
+        runner_profile = job.runner_profile
+        normalized = job.normalized_intent
         with self._lock:
             if fingerprint in self._seen:
                 return {"status": "duplicate", "job_id": job_id, "event_fingerprint": fingerprint}
@@ -183,10 +208,11 @@ class SynthesisAgent:
                 "job_id": job_id,
                 "intent_signature": normalized,
                 "event_fingerprint": fingerprint,
+                "skill_name": job.skill_name,
                 "meta": {
                     "machine_ids": job.machine_ids,
                     "detector_signals": job.detector_signals,
-                    "occurrences": int(summary.occurrences),
+                    "occurrences": len(job.events),
                 },
             },
         )
@@ -201,6 +227,7 @@ class SynthesisAgent:
                     "job_id": job_id,
                     "intent_signature": normalized,
                     "event_fingerprint": fingerprint,
+                    "skill_name": job.skill_name,
                     "job": job.to_dict(),
                 },
             )
@@ -324,6 +351,24 @@ class SynthesisAgent:
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _normalize_intent_signature(raw: str) -> str:
+    """Normalize observed intent text into a safe connector.mode.name-style signature."""
+    segments = raw.split(".")
+    clean: list[str] = []
+    for seg in segments:
+        original = seg.strip()
+        seg = re.sub(r"[\s\-]+", "_", seg)
+        ascii_seg = seg.encode("ascii", errors="replace").decode("ascii")
+        ascii_seg = re.sub(r"[^\w]", "_", ascii_seg)
+        ascii_seg = re.sub(r"_+", "_", ascii_seg).strip("_").lower()
+        if not ascii_seg and original:
+            ascii_seg = "x"
+        if ascii_seg:
+            clean.append(ascii_seg)
+    result = ".".join(clean) if clean else "unknown.pattern"
+    return result[:200]
 
 
 def _as_float(value: Any, default: float) -> float:

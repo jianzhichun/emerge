@@ -727,6 +727,16 @@ def test_session_start_includes_span_protocol(tmp_path, monkeypatch):
     assert "icc_span_close" in ctx
 
 
+def test_hook_span_copy_lives_in_markdown_assets():
+    span_protocol = (ROOT / "docs" / "hooks" / "span_protocol.md").read_text(encoding="utf-8").strip()
+    span_reminder = (ROOT / "docs" / "hooks" / "span_reminder.md").read_text(encoding="utf-8").strip()
+
+    assert "Span Protocol" in span_protocol
+    assert "icc_span_open" in span_protocol
+    assert "[Span] No active span" in span_reminder
+    assert "icc_span_open" in span_reminder
+
+
 def test_recovery_token_includes_active_span_fields():
     from scripts.state_tracker import StateTracker
     tracker = StateTracker()

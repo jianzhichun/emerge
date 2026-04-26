@@ -327,8 +327,8 @@ def show_notify(ui_spec: dict) -> dict[str, Any]:
     Returns:
       {"action": "selected"|"confirmed"|"dismissed"|"skip", "value": str}
     """
-    ui_type = ui_spec.get("type", "")
-    if ui_type not in ("choice", "input", "confirm", "info", "toast"):
+    ui_type = str(ui_spec.get("type", "") or "")
+    if ui_type not in {"choice", "input", "confirm", "info", "toast"}:
         return {"action": "skip", "value": ""}
     try:
         title = str(ui_spec.get("title", "emerge"))
@@ -339,19 +339,20 @@ def show_notify(ui_spec: dict) -> dict[str, Any]:
             if not options:
                 return {"action": "skip", "value": ""}
             return _render_choice(body=body, options=options, title=title, timeout_s=timeout_s)
-        if ui_type == "input":
-            prefill = str(ui_spec.get("prefill", ""))
-            upload_url = str(ui_spec.get("upload_url", ""))
-            return _render_input(body=body, prefill=prefill, title=title, upload_url=upload_url)
-        if ui_type == "confirm":
-            return _render_confirm(body=body, title=title)
-        if ui_type == "toast":
-            return _render_toast(body=body, timeout_s=max(1, timeout_s or 5))
-        # info
-        return _render_info(body=body, title=title)
+        renderers = {
+            "input": lambda: _render_input(
+                body=body,
+                prefill=str(ui_spec.get("prefill", "")),
+                title=title,
+                upload_url=str(ui_spec.get("upload_url", "")),
+            ),
+            "confirm": lambda: _render_confirm(body=body, title=title),
+            "toast": lambda: _render_toast(body=body, timeout_s=max(1, timeout_s or 5)),
+            "info": lambda: _render_info(body=body, title=title),
+        }
+        return renderers[ui_type]()
     except Exception as exc:
         return {"action": "skip", "value": "", "error": str(exc)}
-
 
 def _set_window_icon(root: Any) -> None:
     """Set emerge icon on a tkinter Tk/Toplevel window. Silently no-ops on any error."""

@@ -12,6 +12,15 @@ from scripts.policy_config import default_hook_state_root  # noqa: E402
 from scripts.state_tracker import with_locked_tracker  # noqa: E402
 
 
+def _hook_copy(name: str, fallback: str) -> str:
+    path = ROOT / "docs" / "hooks" / name
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return fallback
+    return text or fallback
+
+
 def _compact_connector_index(max_chars: int = 200) -> str:
     """Return a compact one-line connector index for startup context."""
     connectors_root = Path.home() / ".emerge" / "connectors"
@@ -77,14 +86,15 @@ def main() -> None:
     # Stale the deep reflection cache so changes to filters/thresholds take
     # effect on turn 1 rather than waiting for the 15-minute TTL to expire.
     (state_root / "reflection-cache" / "global.json").unlink(missing_ok=True)
-    _SPAN_PROTOCOL = (
+    _SPAN_PROTOCOL = _hook_copy(
+        "span_protocol.md",
         "Span Protocol\n"
         "At the start of each user task that involves tool use, open a span: "
-        'icc_span_open(intent_signature="connector.mode.name") '
-        "→ execute all steps → icc_span_close(outcome=success|failure|aborted). "
+        'icc_span_open(intent_signature=\"connector.mode.name\") '
+        "-> execute all steps -> icc_span_close(outcome=success|failure|aborted). "
         "Skip only for trivial one-off lookups (Read/Glob/Grep). "
-        "Do NOT open sub-spans inside an active span — one span per top-level task. "
-        "Repeated patterns auto-promote to zero-LLM pipelines."
+        "Do NOT open sub-spans inside an active span - one span per top-level task. "
+        "Repeated patterns auto-promote to zero-LLM pipelines.",
     )
     context_text = _SPAN_PROTOCOL + "\n\n" + context_text
 

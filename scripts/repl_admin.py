@@ -84,28 +84,50 @@ from scripts.admin.runner import (  # noqa: E402
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+_COMMANDS = (
+    "status",
+    "clear",
+    "policy-status",
+    "runner-status",
+    "runner-config-status",
+    "runner-config-set",
+    "runner-config-unset",
+    "runner-install-url",
+    "runner-deploy",
+    "intent-delete",
+    "intent-set",
+    "connector-export",
+    "connector-import",
+    "serve",
+    "serve-stop",
+)
+
+
+def _parse_set_fields(pairs: list[str] | None) -> dict:
+    fields: dict = {}
+    for pair in pairs or []:
+        k, _, v = pair.partition("=")
+        k = k.strip()
+        for cast in (int, float):
+            try:
+                fields[k] = cast(v)
+                break
+            except ValueError:
+                pass
+        else:
+            fields[k] = v
+    return fields
+
+
+def _print_runner_install_pretty(out: dict) -> None:
+    print(f"Team lead (generated): {out.get('team_lead_url', '')}")
+    print(f"Linux/macOS:\n  {out.get('bash', '')}\n")
+    print(f"Windows PowerShell:\n  {out.get('powershell', '')}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Local REPL state admin utility")
-    parser.add_argument(
-        "command",
-        choices=[
-            "status",
-            "clear",
-            "policy-status",
-            "runner-status",
-            "runner-config-status",
-            "runner-config-set",
-            "runner-config-unset",
-            "runner-install-url",
-            "runner-deploy",
-            "intent-delete",
-            "intent-set",
-            "connector-export",
-            "connector-import",
-            "serve",
-            "serve-stop",
-        ],
-    )
+    parser.add_argument("command", choices=_COMMANDS)
     parser.add_argument("--pretty", action="store_true", help="Render human-readable output")
     parser.add_argument("--runner-key", default="", help="Runner key (usually target_profile)")
     parser.add_argument("--runner-url", default="", help="Runner URL")
@@ -130,65 +152,14 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=0, help="Port for cockpit serve (0 = auto-assign free port)")
     args = parser.parse_args()
 
-    if args.command == "status":
-        out = cmd_status()
-    elif args.command == "policy-status":
-        out = cmd_policy_status()
-    elif args.command == "runner-status":
-        out = cmd_runner_status()
-    elif args.command == "runner-config-status":
-        out = cmd_runner_config_status()
-    elif args.command == "runner-config-set":
-        out = cmd_runner_config_set(
-            runner_key=str(args.runner_key),
-            runner_url=str(args.runner_url),
-            as_default=bool(args.as_default),
-        )
-    elif args.command == "runner-config-unset":
-        out = cmd_runner_config_unset(
-            runner_key=str(args.runner_key),
-            clear_default=bool(args.clear_default),
-        )
-    elif args.command == "runner-install-url":
+    if args.command == "runner-install-url":
         out = cmd_runner_install_url(
             runner_port=int(args.runner_port),
             daemon_port=int(args.daemon_port),
         )
         if args.pretty and out.get("ok"):
-            print(f"Team lead (generated): {out.get('team_lead_url', '')}")
-            print(f"Linux/macOS:\n  {out.get('bash', '')}\n")
-            print(f"Windows PowerShell:\n  {out.get('powershell', '')}")
+            _print_runner_install_pretty(out)
             return
-    elif args.command == "runner-deploy":
-        out = cmd_runner_deploy(
-            runner_url=str(args.runner_url),
-            target_profile=str(args.target_profile) or "default",
-        )
-    elif args.command == "intent-delete":
-        out = cmd_intent_delete(key=str(args.intent_key))
-    elif args.command == "intent-set":
-        fields: dict = {}
-        for pair in (args.set_fields or []):
-            k, _, v = pair.partition("=")
-            k = k.strip()
-            try:
-                fields[k] = int(v)
-            except ValueError:
-                try:
-                    fields[k] = float(v)
-                except ValueError:
-                    fields[k] = v
-        out = cmd_intent_set(key=str(args.intent_key), fields=fields)
-    elif args.command == "connector-export":
-        out = cmd_connector_export(
-            connector=str(args.connector),
-            out=str(args.out) if args.out else f"{args.connector}-emerge-pkg.zip",
-        )
-    elif args.command == "connector-import":
-        out = cmd_connector_import(
-            pkg=str(args.pkg),
-            overwrite=bool(args.overwrite),
-        )
     elif args.command == "serve":
         port = getattr(args, "port", 0) or 0
         open_b = getattr(args, "open", False)
@@ -209,7 +180,40 @@ def main() -> None:
         print(json.dumps(out))
         sys.exit(0)
     else:
-        out = cmd_clear()
+        handlers = {
+            "status": lambda: cmd_status(),
+            "clear": lambda: cmd_clear(),
+            "policy-status": lambda: cmd_policy_status(),
+            "runner-status": lambda: cmd_runner_status(),
+            "runner-config-status": lambda: cmd_runner_config_status(),
+            "runner-config-set": lambda: cmd_runner_config_set(
+                runner_key=str(args.runner_key),
+                runner_url=str(args.runner_url),
+                as_default=bool(args.as_default),
+            ),
+            "runner-config-unset": lambda: cmd_runner_config_unset(
+                runner_key=str(args.runner_key),
+                clear_default=bool(args.clear_default),
+            ),
+            "runner-deploy": lambda: cmd_runner_deploy(
+                runner_url=str(args.runner_url),
+                target_profile=str(args.target_profile) or "default",
+            ),
+            "intent-delete": lambda: cmd_intent_delete(key=str(args.intent_key)),
+            "intent-set": lambda: cmd_intent_set(
+                key=str(args.intent_key),
+                fields=_parse_set_fields(args.set_fields),
+            ),
+            "connector-export": lambda: cmd_connector_export(
+                connector=str(args.connector),
+                out=str(args.out) if args.out else f"{args.connector}-emerge-pkg.zip",
+            ),
+            "connector-import": lambda: cmd_connector_import(
+                pkg=str(args.pkg),
+                overwrite=bool(args.overwrite),
+            ),
+        }
+        out = handlers[args.command]()
 
     if args.pretty and args.command == "policy-status":
         print(render_policy_status_pretty(out), end="")

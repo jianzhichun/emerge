@@ -112,4 +112,13 @@ def format_synthesis_job_ready(data: dict) -> str:
         or job.get("intent_signature_hint")
         or "?"
     )
-    return f"[SynthesisJobReady] runner={profile} job={job_id} intent={intent}"
+    skill = data.get("skill_name") or job.get("skill_name") or "emerge-reverse-synthesis"
+    return f"[SynthesisJobReady] runner={profile} job={job_id} intent={intent} skill={skill}"
+
+
+def format_forward_synthesis_pending(data: dict) -> str:
+    job = data.get("job", {}) if isinstance(data.get("job"), dict) else {}
+    job_id = data.get("job_id") or job.get("job_id") or "?"
+    intent = data.get("intent_signature") or job.get("normalized_intent") or "?"
+    skill = data.get("skill_name") or job.get("skill_name") or "emerge-forward-synthesis"
+    return f"[ForwardSynthesisPending] job={job_id} intent={intent} skill={skill}"

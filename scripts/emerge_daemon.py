@@ -20,6 +20,7 @@ from scripts.policy_config import (  # noqa: E402
     default_state_root,
     default_hook_state_root,
     load_json_object,
+    resolve_connector_root,
     session_idle_ttl_s,
 )
 from scripts.crystallizer import PipelineCrystallizer  # noqa: E402
@@ -176,6 +177,13 @@ class EmergeDaemon:
         # Route icc_exec bridge through daemon so _try_flywheel_bridge remains
         # the canonical entry point (monkey-patches in tests propagate here).
         self._tool_handlers._try_bridge_fn = lambda args: self._try_flywheel_bridge(args)
+        from scripts.synthesis_coordinator import SynthesisCoordinator
+        self._synthesis_coordinator = SynthesisCoordinator(
+            state_root=self._state_root,
+            connector_root=resolve_connector_root(),
+            exec_tool=lambda args: self.call_tool("icc_exec", args),
+            mark_blocked=lambda intent, reason: self._policy_engine.mark_synthesis_blocked(intent, reason=reason),
+        )
 
     def _cockpit_broadcast(self, event: dict) -> None:
         """Forward event to cockpit SSE clients (no-op if not in HTTP mode)."""
@@ -448,12 +456,14 @@ class EmergeDaemon:
         "icc_compose":      "_handle_icc_compose",
         "icc_reconcile":    "_handle_icc_reconcile",
         "icc_hub":          "_handle_icc_hub",
+        "icc_synthesis_submit": "_handle_icc_synthesis_submit",
         "runner_notify":    "_handle_runner_notify",
     }
 
     _WRITE_TOOLS = frozenset({
         "icc_exec", "icc_span_open", "icc_span_close", "icc_span_approve",
         "icc_crystallize", "icc_compose", "icc_reconcile", "icc_hub",
+        "icc_synthesis_submit",
     })
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -495,6 +505,23 @@ class EmergeDaemon:
 
     def _handle_icc_hub(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return self._tool_handlers.handle_icc_hub(arguments)
+
+    def _handle_icc_synthesis_submit(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if self._is_runner_role:
+            return self._tool_error("icc_synthesis_submit is orchestrator-only. Runners must forward evidence upstream.")
+        job = arguments.get("job")
+        result = arguments.get("result")
+        if not isinstance(job, dict) or not isinstance(result, dict):
+            return self._tool_error("icc_synthesis_submit: job and result objects are required")
+        event_path = self._state_root / "events" / "events.jsonl"
+        payload = self._synthesis_coordinator.submit_synthesis_result(
+            job=job,
+            result=result,
+            event_path=event_path,
+        )
+        if payload.get("status") in {"failed", "smoke_failed"}:
+            return self._tool_error(json.dumps(payload, ensure_ascii=False))
+        return self._tool_ok_json(payload)
 
     # ------------------------------------------------------------------
     # JSON-RPC dispatch

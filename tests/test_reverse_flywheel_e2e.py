@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def test_runner_pattern_synthesizes_wal_and_crystallized_pipeline(tmp_path, monkeypatch):
+def test_runner_pattern_synthesizes_wal_without_direct_pipeline_write(tmp_path, monkeypatch):
     from scripts.daemon_http import DaemonHTTPServer
     from scripts.emerge_daemon import EmergeDaemon
     from scripts.policy_config import PROMOTE_MIN_ATTEMPTS, sessions_root
@@ -46,6 +46,7 @@ def test_runner_pattern_synthesizes_wal_and_crystallized_pipeline(tmp_path, monk
         connector_root=connector_root,
         provider=_Provider(),
         exec_tool=lambda args: daemon.call_tool("icc_exec", args),
+        mode="provider_exec",
     )
     srv.start()
     try:
@@ -95,7 +96,7 @@ def test_runner_pattern_synthesizes_wal_and_crystallized_pipeline(tmp_path, monk
 
         py_path = connector_root / "zwcad" / "pipelines" / "read" / "rooms.py"
         yaml_path = connector_root / "zwcad" / "pipelines" / "read" / "rooms.yaml"
-        assert py_path.exists()
-        assert yaml_path.exists()
+        assert not py_path.exists()
+        assert not yaml_path.exists()
     finally:
         srv.stop()

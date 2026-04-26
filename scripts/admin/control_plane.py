@@ -233,6 +233,38 @@ def cmd_control_plane_session(session_id: str | None = None) -> dict:
     }
 
 
+def _load_jsonl_filtered(
+    path: Path,
+    *,
+    limit: int,
+    since_ms: int = 0,
+    intent: str = "",
+    intent_prefix: str = "",
+    intent_field: str = "intent_signature",
+    ts_field: str = "ts_ms",
+) -> list[dict]:
+    rows: list[dict] = []
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if since_ms and int(row.get("ts_ms", 0)) < since_ms:
+                continue
+            sig = str(row.get(intent_field, "") or "")
+            if intent and sig != intent:
+                continue
+            if intent_prefix and not sig.startswith(intent_prefix):
+                continue
+            rows.append(row)
+    rows.sort(key=lambda item: int(item.get(ts_field, 0) or 0), reverse=True)
+    return rows[:limit]
+
+
 def cmd_control_plane_hook_state() -> dict:
     """Hook state: fields tracked by hooks in state.json + context injection preview."""
     hook_state_root = Path(default_hook_state_root())
@@ -301,27 +333,13 @@ def cmd_control_plane_exec_events(
 ) -> dict:
     """Paginated exec events from session."""
     session_dir, _, _ = _session_paths(session_id=session_id)
-    events_path = session_dir / "exec-events.jsonl"
-    events: list[dict] = []
-    if events_path.exists():
-        for line in events_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                ev = json.loads(line)
-            except Exception:
-                continue
-            if since_ms and int(ev.get("ts_ms", 0)) < since_ms:
-                continue
-            sig = str(ev.get("intent_signature", "") or "")
-            if intent and sig != intent:
-                continue
-            if intent_prefix and not sig.startswith(intent_prefix):
-                continue
-            events.append(ev)
-    events.sort(key=lambda e: int(e.get("ts_ms", 0)), reverse=True)
-    return {"ok": True, "events": events[:limit]}
+    return {"ok": True, "events": _load_jsonl_filtered(
+        session_dir / "exec-events.jsonl",
+        limit=limit,
+        since_ms=since_ms,
+        intent=intent,
+        intent_prefix=intent_prefix,
+    )}
 
 
 def cmd_control_plane_tool_events(
@@ -331,22 +349,11 @@ def cmd_control_plane_tool_events(
 ) -> dict:
     """Paginated general CC tool-call events from session (Bash, Read, Grep, etc.)."""
     session_dir, _, _ = _session_paths(session_id=session_id)
-    events_path = session_dir / "tool-events.jsonl"
-    events: list[dict] = []
-    if events_path.exists():
-        for line in events_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                ev = json.loads(line)
-            except Exception:
-                continue
-            if since_ms and int(ev.get("ts_ms", 0)) < since_ms:
-                continue
-            events.append(ev)
-    events.sort(key=lambda e: int(e.get("ts_ms", 0)), reverse=True)
-    return {"ok": True, "events": events[:limit]}
+    return {"ok": True, "events": _load_jsonl_filtered(
+        session_dir / "tool-events.jsonl",
+        limit=limit,
+        since_ms=since_ms,
+    )}
 
 
 def cmd_control_plane_pipeline_events(
@@ -358,51 +365,25 @@ def cmd_control_plane_pipeline_events(
 ) -> dict:
     """Paginated pipeline events from session."""
     session_dir, _, _ = _session_paths(session_id=session_id)
-    events_path = session_dir / "pipeline-events.jsonl"
-    events: list[dict] = []
-    if events_path.exists():
-        for line in events_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                ev = json.loads(line)
-            except Exception:
-                continue
-            if since_ms and int(ev.get("ts_ms", 0)) < since_ms:
-                continue
-            sig = str(ev.get("intent_signature", "") or "")
-            if intent and sig != intent:
-                continue
-            if intent_prefix and not sig.startswith(intent_prefix):
-                continue
-            events.append(ev)
-    events.sort(key=lambda e: int(e.get("ts_ms", 0)), reverse=True)
-    return {"ok": True, "events": events[:limit]}
+    return {"ok": True, "events": _load_jsonl_filtered(
+        session_dir / "pipeline-events.jsonl",
+        limit=limit,
+        since_ms=since_ms,
+        intent=intent,
+        intent_prefix=intent_prefix,
+    )}
 
 
 def cmd_control_plane_spans(limit: int = 50, intent: str = "", intent_prefix: str = "") -> dict:
     """Recent span WAL entries."""
     state_root = _resolve_state_root()
-    wal_path = state_root / "span-wal" / "spans.jsonl"
-    spans: list[dict] = []
-    if wal_path.exists():
-        for line in wal_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                sp = json.loads(line)
-            except Exception:
-                continue
-            sig = str(sp.get("intent_signature", "") or "")
-            if intent and sig != intent:
-                continue
-            if intent_prefix and not sig.startswith(intent_prefix):
-                continue
-            spans.append(sp)
-    spans.sort(key=lambda s: int(s.get("closed_at_ms", 0) or 0), reverse=True)
-    return {"ok": True, "spans": spans[:limit]}
+    return {"ok": True, "spans": _load_jsonl_filtered(
+        state_root / "span-wal" / "spans.jsonl",
+        limit=limit,
+        intent=intent,
+        intent_prefix=intent_prefix,
+        ts_field="closed_at_ms",
+    )}
 
 
 def cmd_control_plane_span_candidates() -> dict:

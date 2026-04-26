@@ -1,0 +1,18 @@
+# auto-generated YAML skeleton from span: mock.write.multi-op
+# Review each step's intent_signature and remove _annotation fields
+# before calling icc_span_approve.
+intent_signature: mock.write.multi-op
+rollback_or_stop_policy: stop
+steps:
+  - type: connector_call
+    intent: mock.read.layers
+    _annotation: seq=0 tool=mcp__plugin_emerge__icc_exec side_effects=False
+  - type: connector_call
+    intent: mock.write.add-wall
+    _annotation: seq=1 tool=mcp__plugin_emerge__icc_exec side_effects=True
+verify:
+  - type: derive
+    from: steps
+rollback:
+  - type: derive
+    from: steps

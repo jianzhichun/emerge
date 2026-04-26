@@ -243,6 +243,12 @@ class ExecSession:
             if is_error:
                 text_parts.append(f"error:\n{error_message}".rstrip())
 
+            if not is_error and result_var and result_var in self._globals:
+                encoded_for_wal = self._serialize_value(self._globals.get(result_var))
+                if encoded_for_wal is not None:
+                    meta["result_var_name"] = result_var
+                    meta["result_var_value"] = encoded_for_wal
+
             wal_entry_common = {
                 "started_at_ms": start_ts_ms,
                 "finished_at_ms": finished_ts_ms,

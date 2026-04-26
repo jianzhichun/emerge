@@ -257,20 +257,42 @@ class PipelineCrystallizer:
         target_profile: str = "default",
         persistent: bool = False,
     ) -> None:
-        """Best-effort crystallize — skips silently if pipeline already exists."""
-        from scripts.policy_config import resolve_connector_root
+        """Best-effort enqueue for Claude Code lead-agent synthesis.
+
+        The old auto path wrote verbatim WAL code with textwrap.indent. New
+        artifacts must be distilled by the lead agent and submitted back for
+        smoke testing, so this method only emits a pending job.
+        """
+        from scripts.policy_config import events_root, resolve_connector_root
+        from scripts.synthesis_coordinator import SynthesisCoordinator
         try:
             target_root = resolve_connector_root()
             py_path = target_root / connector / "pipelines" / mode / f"{pipeline_name}.py"
             if py_path.exists():
                 return
-            self.crystallize(
+            event_path = events_root(self._state_root) / "events.jsonl"
+            self._append_event(
+                event_path,
+                {
+                    "type": "crystallizer_deprecated",
+                    "intent_signature": intent_signature,
+                    "connector": connector,
+                    "mode": mode,
+                    "pipeline_name": pipeline_name,
+                    "message": "auto_crystallize no longer writes verbatim pipelines; forwarding to Claude Code synthesis",
+                },
+            )
+            SynthesisCoordinator(
+                state_root=self._state_root,
+                connector_root=target_root,
+                exec_tool=lambda _args: {"isError": True, "error": "auto_crystallize enqueue only"},
+            ).enqueue_forward_synthesis(
                 intent_signature=intent_signature,
                 connector=connector,
                 pipeline_name=pipeline_name,
                 mode=mode,
                 target_profile=target_profile,
-                persistent=persistent,
+                event_path=event_path,
             )
         except Exception:
             pass
@@ -460,6 +482,12 @@ class PipelineCrystallizer:
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
+
+    @staticmethod
+    def _append_event(path: Path, event: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
     @staticmethod
     def _build_pipeline_sources(

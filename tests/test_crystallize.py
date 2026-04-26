@@ -124,12 +124,8 @@ def test_crystallizer_refuses_wal_missing_return_var(tmp_path):
         os.environ.pop("EMERGE_CONNECTOR_ROOT", None)
 
 
-def test_auto_crystallize_clears_synthesis_ready_after_policy_save(tmp_path, monkeypatch):
-    """Auto-crystallize must run after PolicyEngine saves the canary row.
-
-    Otherwise the crystallizer reads stale registry state and the outer policy
-    save can re-persist synthesis_ready even after files were written.
-    """
+def test_auto_crystallize_enqueues_forward_synthesis_after_policy_save(tmp_path, monkeypatch):
+    """Auto-crystallize now emits a lead-agent job instead of verbatim files."""
     from scripts.emerge_daemon import EmergeDaemon
     from scripts.intent_registry import IntentRegistry
     from scripts.policy_config import PROMOTE_MIN_ATTEMPTS
@@ -151,10 +147,13 @@ def test_auto_crystallize_clears_synthesis_ready_after_policy_save(tmp_path, mon
         )
 
     py_path = connector_root / "mock" / "pipelines" / "read" / "auto-clear.py"
-    assert py_path.exists()
+    assert not py_path.exists()
     entry = IntentRegistry.get(tmp_path / "state", "mock.read.auto-clear")
     assert entry.get("stage") == "canary"
-    assert "synthesis_ready" not in entry
+    assert entry.get("synthesis_ready") is True
+    events_path = tmp_path / "state" / "events" / "events.jsonl"
+    events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert any(event.get("type") == "forward_synthesis_pending" for event in events)
 
 
 def test_icc_crystallize_write_pipeline(tmp_path):

@@ -206,6 +206,26 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self.headers.get("Host", ""),
         )
 
+    @staticmethod
+    def _query_int(qs: dict, names: tuple[str, ...], default: int, *, max_value: int | None = None) -> int:
+        for name in names:
+            values = qs.get(name)
+            if not values:
+                continue
+            try:
+                value = int(values[0])
+            except (TypeError, ValueError):
+                return default
+            return min(value, max_value) if max_value is not None else value
+        return default
+
+    def _session_id_from_query(self, qs: dict) -> str | None:
+        session_id = (qs.get("session_id", [""])[0] or "").strip() or None
+        if session_id and not _SESSION_ID_PARAM_RE.fullmatch(session_id):
+            self._json({"ok": False, "error": "invalid session_id"}, status=400)
+            return "__invalid__"
+        return session_id
+
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", self._cors_origin())
@@ -217,9 +237,9 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         qs_all = urllib.parse.parse_qs(parsed_url.query)
-        session_id_q = (qs_all.get("session_id", [""])[0] or "").strip() or None
-        if session_id_q and not _SESSION_ID_PARAM_RE.fullmatch(session_id_q):
-            return self._json({"ok": False, "error": "invalid session_id"}, status=400)
+        session_id_q = self._session_id_from_query(qs_all)
+        if session_id_q == "__invalid__":
+            return
         if path in ("/", "/index.html"):
             self._serve_shell()
         elif path.startswith("/assets/"):
@@ -274,10 +294,7 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self._json(cmd_control_plane_intents())
         elif path == "/api/control-plane/intent-history":
             key = (qs_all.get("intent") or qs_all.get("key") or [""])[0]
-            try:
-                limit = int((qs_all.get("limit") or ["0"])[0])
-            except ValueError:
-                limit = 0
+            limit = self._query_int(qs_all, ("limit",), 0)
             self._json(cmd_control_plane_intent_history(
                 intent_signature=key,
                 limit=limit if limit > 0 else None,
@@ -289,8 +306,8 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/api/control-plane/exec-events"):
             qs = qs_all
             self._json(cmd_control_plane_exec_events(
-                limit=int(qs.get("limit", ["100"])[0]),
-                since_ms=int(qs.get("since_ms", ["0"])[0]),
+                limit=self._query_int(qs, ("limit",), 100),
+                since_ms=self._query_int(qs, ("since_ms",), 0),
                 intent=qs.get("intent", [""])[0],
                 intent_prefix=qs.get("intent_prefix", [""])[0],
                 session_id=session_id_q,
@@ -298,8 +315,8 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/api/control-plane/pipeline-events"):
             qs = qs_all
             self._json(cmd_control_plane_pipeline_events(
-                limit=int(qs.get("limit", ["100"])[0]),
-                since_ms=int(qs.get("since_ms", ["0"])[0]),
+                limit=self._query_int(qs, ("limit",), 100),
+                since_ms=self._query_int(qs, ("since_ms",), 0),
                 intent=qs.get("intent", [""])[0],
                 intent_prefix=qs.get("intent_prefix", [""])[0],
                 session_id=session_id_q,
@@ -307,8 +324,8 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/api/control-plane/tool-events"):
             qs = qs_all
             self._json(cmd_control_plane_tool_events(
-                limit=int(qs.get("limit", ["200"])[0]),
-                since_ms=int(qs.get("since_ms", ["0"])[0]),
+                limit=self._query_int(qs, ("limit",), 200),
+                since_ms=self._query_int(qs, ("since_ms",), 0),
                 session_id=session_id_q,
             ))
         elif path == "/api/control-plane/monitors":
@@ -320,23 +337,15 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             state_root = _resolve_state_root()
             self._json(cmd_control_plane_watchers(state_root=state_root))
         elif path == "/api/control-plane/runner-events":
-            qs_re = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            profile = (qs_re.get("profile") or [""])[0]
-            try:
-                limit = min(int((qs_re.get("limit") or ["20"])[0]), 100)
-            except ValueError:
-                limit = 20
+            profile = (qs_all.get("profile") or [""])[0]
+            limit = self._query_int(qs_all, ("limit",), 20, max_value=100)
             self._json(cmd_control_plane_runner_events(profile=profile, limit=limit))
         elif path == "/api/control-plane/runner-profiles":
             monitor_data = self._cockpit.get_monitor_data() if self._cockpit is not None else cmd_control_plane_monitors()
             known = [r["runner_profile"] for r in monitor_data.get("runners", []) if r.get("runner_profile")]
             self._json({"profiles": known})
         elif path == "/api/control-plane/runner-install-url":
-            qs_riu = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            try:
-                runner_port = int((qs_riu.get("runner_port") or qs_riu.get("port") or ["8787"])[0])
-            except ValueError:
-                runner_port = 8787
+            runner_port = self._query_int(qs_all, ("runner_port", "port"), 8787)
             daemon_port = 8789
             if self._cockpit is not None:
                 hsrv = getattr(self._cockpit._daemon, "_http_server", None)
@@ -360,15 +369,12 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
             self._json(cmd_control_plane_span_candidates())
         elif path == "/api/control-plane/reflection-cache":
             qs = qs_all
-            try:
-                ttl_ms = int(qs.get("ttl_ms", ["900000"])[0])
-            except Exception:
-                ttl_ms = 900000
+            ttl_ms = self._query_int(qs, ("ttl_ms",), 900000)
             self._json(cmd_control_plane_reflection_cache(ttl_ms=ttl_ms))
         elif path.startswith("/api/control-plane/spans"):
             qs = qs_all
             self._json(cmd_control_plane_spans(
-                limit=int(qs.get("limit", ["50"])[0]),
+                limit=self._query_int(qs, ("limit",), 50),
                 intent=qs.get("intent", [""])[0],
                 intent_prefix=qs.get("intent_prefix", [""])[0],
             ))
@@ -413,9 +419,9 @@ class _CockpitHandler(http.server.BaseHTTPRequestHandler):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         qs_all = urllib.parse.parse_qs(parsed_url.query)
-        session_id_q = (qs_all.get("session_id", [""])[0] or "").strip() or None
-        if session_id_q and not _SESSION_ID_PARAM_RE.fullmatch(session_id_q):
-            return self._json({"ok": False, "error": "invalid session_id"}, status=400)
+        session_id_q = self._session_id_from_query(qs_all)
+        if session_id_q == "__invalid__":
+            return
         try:
             raw_body = read_limited_body(self)
             body: dict = json.loads(raw_body) if raw_body else {}

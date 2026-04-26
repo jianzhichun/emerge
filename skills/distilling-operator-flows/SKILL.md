@@ -85,11 +85,11 @@ Do **not** use when:
 
 Tune these per-vertical by overriding the class; do **not** edit the base constants — tests lock them.
 
-### Distiller.distill contract (from `scripts/distiller.py`)
+### SynthesisAgent normalization contract
 
-- `distill(summary, confirmed=False)` → returns **normalized** `intent_signature` (lowercase, `_` separators, dots preserved, ≤200 chars)
-- `confirmed=True` additionally writes `intent_confirmed` event with `session_role="monitor_sub"` into `operator-events/<machine_id>/events.jsonl`
-- Input `machine_id` is path-traversal validated; reject `..`, `/`, leading/trailing whitespace
+- Reverse synthesis normalizes observed `PatternSummary.intent_signature` inside `scripts/synthesis_agent.py`.
+- Normalization lowercases, uses `_` separators, preserves dots, strips unsafe characters, and caps output at 200 chars.
+- There is no separate distiller module and no `intent_confirmed` event writer. Repeated operator evidence should flow through pattern events and synthesis jobs.
 
 ## Step-by-Step: Add a New Vertical Distillation Loop
 
@@ -297,7 +297,7 @@ When in doubt: profile B is the safest default — works for any vertical with a
 ## Files Touched
 
 - `scripts/pattern_detector.py` — detector thresholds + `PatternSummary` dataclass
-- `scripts/distiller.py` — `Distiller.distill()` + normalization rules
+- `scripts/synthesis_agent.py` — reverse synthesis job packaging and normalization rules
 - `scripts/event_bus.py` — `emit_event()` pipeline hook helper
 - `scripts/remote_runner.py` — `RunnerExecutor._start_tray()` + `_post_operator_message`
 - `scripts/mcp/flywheel_recorder.py` — `record_exec_event` / `record_pipeline_event` → `PolicyEngine.apply_evidence`

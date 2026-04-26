@@ -17,6 +17,15 @@ _REFLECTION_TURN_THRESHOLD = 1
 _SPAN_REMINDER_INTERVAL = 5
 
 
+def _hook_copy(name: str, fallback: str) -> str:
+    path = ROOT / "docs" / "hooks" / name
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return fallback
+    return text or fallback
+
+
 def main() -> None:
     payload_text = sys.stdin.read().strip()
     try:
@@ -57,11 +66,12 @@ def main() -> None:
             except Exception:
                 pass
         if not _skip_reminder:
-            reminder = (
+            reminder = _hook_copy(
+                "span_reminder.md",
                 "[Span] No active span. "
                 "If this turn involves repeatable tool use, open one first: "
                 "icc_span_open(intent_signature='<connector>.(read|write).<name>') "
-                "e.g. 'lark.read.get-doc'."
+                "e.g. 'lark.read.get-doc'.",
             )
             context_text = reminder + "\n\n" + context_text
 

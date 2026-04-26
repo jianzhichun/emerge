@@ -40,7 +40,69 @@ def _read_events(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def test_synthesis_agent_executes_provider_result_through_exec_tool(tmp_path, monkeypatch):
+def test_normalize_intent_signature_preserves_clean_signature():
+    from scripts.synthesis_agent import _normalize_intent_signature
+
+    assert _normalize_intent_signature("zwcad.annotate.room_labels") == "zwcad.annotate.room_labels"
+
+
+def test_normalize_intent_signature_replaces_non_ascii_segments():
+    from scripts.synthesis_agent import _normalize_intent_signature
+
+    sig = _normalize_intent_signature("zwcad.标注层")
+
+    assert sig.startswith("zwcad.")
+    assert all(c.isascii() or c in (".", "_") for c in sig)
+
+
+def test_normalize_intent_signature_caps_length():
+    from scripts.synthesis_agent import _normalize_intent_signature
+
+    long_sig = "a" * 100 + "." + "b" * 100 + "." + "c" * 100
+
+    assert len(_normalize_intent_signature(long_sig)) <= 200
+
+
+def test_synthesis_agent_enqueues_job_for_lead_agent_even_with_provider(tmp_path, monkeypatch):
+    from scripts.synthesis_agent import SynthesisAgent, SynthesisResult
+
+    connector_root = tmp_path / "connectors"
+    (connector_root / "zwcad").mkdir(parents=True)
+    (connector_root / "zwcad" / "NOTES.md").write_text("Use zwcad COM API.", encoding="utf-8")
+    monkeypatch.setenv("EMERGE_CONNECTOR_ROOT", str(connector_root))
+
+    calls: list[dict] = []
+
+    class _Provider:
+        def synthesize(self, job):
+            raise AssertionError("provider must not run on the default lead-agent path")
+
+    agent = SynthesisAgent(
+        state_root=tmp_path / "state",
+        connector_root=connector_root,
+        provider=_Provider(),
+        exec_tool=lambda args: calls.append(args) or {"isError": False},
+    )
+
+    result = agent.process_pattern(
+        summary=_summary(),
+        runner_profile="p1",
+        events=_events(),
+        event_path=tmp_path / "state" / "events" / "events-p1.jsonl",
+    )
+
+    assert result["status"] == "enqueued"
+    assert calls == []
+    events = _read_events(tmp_path / "state" / "events" / "events-p1.jsonl")
+    assert [e["type"] for e in events] == [
+        "pattern_pending_synthesis",
+        "synthesis_job_ready",
+    ]
+    assert events[-1]["job"]["skill_name"] == "emerge-reverse-synthesis"
+    assert events[-1]["job"]["connector_notes"] == "Use zwcad COM API."
+
+
+def test_synthesis_agent_provider_exec_mode_remains_compatibility_path(tmp_path, monkeypatch):
     from scripts.synthesis_agent import SynthesisAgent, SynthesisResult
 
     connector_root = tmp_path / "connectors"
@@ -73,6 +135,7 @@ def test_synthesis_agent_executes_provider_result_through_exec_tool(tmp_path, mo
         connector_root=connector_root,
         provider=_Provider(),
         exec_tool=_exec_tool,
+        mode="provider_exec",
     )
 
     result = agent.process_pattern(
@@ -121,6 +184,7 @@ def test_synthesis_agent_dedupes_same_event_fingerprint(tmp_path):
         connector_root=tmp_path / "connectors",
         provider=_Provider(),
         exec_tool=lambda args: {"isError": False},
+        mode="provider_exec",
     )
 
     first = agent.process_pattern(
@@ -149,6 +213,7 @@ def test_null_provider_records_unconfigured_failure(tmp_path):
         connector_root=tmp_path / "connectors",
         provider=NullSynthesisProvider(),
         exec_tool=lambda args: {"isError": False},
+        mode="provider_exec",
     )
 
     result = agent.process_pattern(
@@ -186,6 +251,7 @@ def test_synthesis_agent_default_mode_enqueues_for_main_brain(tmp_path):
     events = _read_events(tmp_path / "state" / "events" / "events-p1.jsonl")
     assert [e["type"] for e in events] == ["pattern_pending_synthesis", "synthesis_job_ready"]
     assert events[-1]["job"]["normalized_intent"] == "zwcad.entity_added.rooms"
+    assert events[-1]["job"]["skill_name"] == "emerge-reverse-synthesis"
 
 
 def test_command_synthesis_provider_uses_json_stdin_stdout(tmp_path):

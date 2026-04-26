@@ -243,6 +243,27 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "icc_synthesis_submit",
+            "title": "Submit Synthesized Pipeline",
+            "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+            "description": (
+                "Submit a Claude Code lead-agent synthesis result for validation, smoke testing, "
+                "and pipeline materialization. The Python daemon does not perform LLM distillation; "
+                "it only validates structured output from the emerge synthesis skills."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "job": {"type": "object", "description": "synthesis_job_ready or forward_synthesis_pending job payload"},
+                    "result": {
+                        "type": "object",
+                        "description": "Structured result from emerge-forward-synthesis or emerge-reverse-synthesis skill",
+                    },
+                },
+                "required": ["job", "result"],
+            },
+        },
+        {
             "name": "icc_compose",
             "title": "Compose Intents",
             "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},

@@ -36,6 +36,7 @@ from scripts.pending_actions import (  # noqa: E402
     format_runner_online,
     format_runner_event,
     format_runner_subagent_message,
+    format_forward_synthesis_pending,
     format_synthesis_job_ready,
 )
 from scripts.policy_config import default_state_root, events_root  # noqa: E402
@@ -87,6 +88,8 @@ def _format_event(event: dict) -> str | None:
         return format_pattern_alert(event)
     if etype == "synthesis_job_ready":
         return format_synthesis_job_ready(event)
+    if etype == "forward_synthesis_pending":
+        return format_forward_synthesis_pending(event)
     if etype == "operator_message":
         text = event.get("text", "")
         profile = event.get("runner_profile", event.get("profile", "?"))

@@ -376,6 +376,34 @@ class PolicyEngine:
         self._notify_resources_changed()
         return dict(entry)
 
+    def mark_synthesis_blocked(self, intent_signature: str, *, reason: str) -> dict[str, Any]:
+        """Record a non-stage diagnostic that forward synthesis needs human review."""
+        if not intent_signature or not _INTENT_KEY_RE.match(intent_signature):
+            return {}
+        state_root = self._get_state_root()
+        ts_ms = int(time.time() * 1000)
+        with self._lock:
+            registry = IntentRegistry.load(state_root)
+            intents = registry["intents"]
+            entry = intents.get(intent_signature) or {
+                **default_intent_entry(),
+                "intent_signature": intent_signature,
+            }
+            entry["synthesis_blocked"] = True
+            entry["synthesis_blocked_reason"] = str(reason)
+            entry["synthesis_blocked_at_ms"] = ts_ms
+            entry["updated_at_ms"] = ts_ms
+            intents[intent_signature] = entry
+            IntentRegistry.save(state_root, registry)
+        self._emit_sink("policy.synthesis_blocked", {
+            "candidate_key": intent_signature,
+            "intent_signature": intent_signature,
+            "reason": reason,
+            "ts_ms": ts_ms,
+        })
+        self._notify_resources_changed()
+        return dict(entry)
+
     def record_bridge_outcome(
         self,
         intent_signature: str,

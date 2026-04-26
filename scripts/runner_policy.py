@@ -125,3 +125,15 @@ class EvidenceForwardingPolicy:
 
     def increment_human_fix(self, intent_signature: str) -> dict[str, Any]:
         return self.apply_evidence(intent_signature, success=False, human_fix=True)
+
+    def mark_synthesis_blocked(self, intent_signature: str, *, reason: str) -> dict[str, Any]:
+        runner_emit.emit_event(
+            {
+                "type": "forbidden_policy_write",
+                "message_id": _stable_id("forbidden", {"intent_signature": intent_signature, "op": "mark_synthesis_blocked"}),
+                "operation": "mark_synthesis_blocked",
+                "intent_signature": intent_signature,
+                "reason": reason,
+            }
+        )
+        return {}

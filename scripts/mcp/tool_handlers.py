@@ -100,6 +100,8 @@ class ToolHandlers:
                     "script_ref": arguments.get("script_ref", ""),
                     "no_replay": bool(arguments.get("no_replay", False)),
                 }
+                if isinstance(arguments.get("script_args"), dict):
+                    metadata["script_args"] = dict(arguments.get("script_args") or {})
                 for key in ("source", "synthesis_job_id", "source_intent_signature"):
                     value = arguments.get(key)
                     if value:

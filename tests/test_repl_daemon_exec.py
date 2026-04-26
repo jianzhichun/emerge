@@ -51,7 +51,7 @@ def test_default_session_id_is_project_scoped_not_literal_default(tmp_path: Path
         dirs = [p.name for p in (tmp_path / "sessions").iterdir() if p.is_dir()]
         assert dirs
         assert "default" not in dirs
-        assert any(name.startswith("emerge-") for name in dirs)
+        assert any(name.startswith(f"{ROOT.name}-") for name in dirs)
     finally:
         os.environ.pop("EMERGE_STATE_ROOT", None)
 
