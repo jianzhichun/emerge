@@ -1,6 +1,6 @@
 # Emerge
 
-![Version](https://img.shields.io/badge/version-v0.3.131-blue)
+![Version](https://img.shields.io/badge/version-v0.3.132-blue)
 Python
 License
 Tests

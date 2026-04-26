@@ -69,8 +69,8 @@ def _extract_hooks_json_events(text: str) -> set[str]:
     return set(hooks.keys())
 
 
-def _skill_has_expected_thresholds(text: str) -> tuple[bool, list[str]]:
-    expected = [
+def _skill_keeps_policy_thresholds_out(text: str) -> tuple[bool, list[str]]:
+    forbidden = [
         f"attempts >= {PROMOTE_MIN_ATTEMPTS}",
         f"success_rate >= {PROMOTE_MIN_SUCCESS_RATE}",
         f"verify_rate >= {PROMOTE_MIN_VERIFY_RATE}",
@@ -79,8 +79,8 @@ def _skill_has_expected_thresholds(text: str) -> tuple[bool, list[str]]:
         f"success_rate >= {STABLE_MIN_SUCCESS_RATE}",
         f"verify_rate >= {STABLE_MIN_VERIFY_RATE}",
     ]
-    missing = [token for token in expected if token not in text]
-    return len(missing) == 0, missing
+    found = [token for token in forbidden if token in text]
+    return len(found) == 0, found
 
 
 def main() -> int:
@@ -114,9 +114,9 @@ def main() -> int:
             f"  only_in_hooks_json={only_json_hooks}"
         )
 
-    ok_skill, missing_tokens = _skill_has_expected_thresholds(skill_text)
+    ok_skill, found_tokens = _skill_keeps_policy_thresholds_out(skill_text)
     if not ok_skill:
-        failures.append(f"Skill thresholds out of sync; missing tokens: {missing_tokens}")
+        failures.append(f"Skill must stay generic; remove policy threshold tokens: {found_tokens}")
 
     if failures:
         print("Documentation consistency check failed:")
